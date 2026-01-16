@@ -1,0 +1,6 @@
+# Slippage configuration
+model: atr_volume
+k: 0.15
+min_bps: 0.5
+max_bps: 30.0
+use_atr_if_available: true

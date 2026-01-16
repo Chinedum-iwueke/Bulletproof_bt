@@ -1,0 +1,15 @@
+# Engine configuration
+intrabar_mode: worst_case
+signal_delay_bars: 1
+initial_cash: 10000.0
+max_positions: 3
+risk_per_trade_pct: 0.01
+maker_fee_bps: 2.0
+taker_fee_bps: 6.0
+
+# Optional controls
+max_leverage: 2.0
+max_notional_per_symbol: 0.25  # fraction of equity
+seed: 42
+run_id: null
+data_timezone: UTC

@@ -1,0 +1,6 @@
+# Fee configuration
+maker_fee_bps: 2.0
+taker_fee_bps: 6.0
+fee_model: bps
+apply_funding: false
+funding_bps_per_8h: 0.0
