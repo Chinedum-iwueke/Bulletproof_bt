@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any, Mapping
 
 import pandas as pd
 
@@ -15,6 +16,7 @@ class Strategy(ABC):
         ts: pd.Timestamp,
         bars_by_symbol: dict[str, Bar],
         tradeable: set[str],
+        ctx: Mapping[str, Any],
     ) -> list[Signal]:
         """
         Called once per timestamp.

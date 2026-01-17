@@ -29,7 +29,7 @@ def test_coinflip_emits_for_all_symbols_when_always_trade() -> None:
     tradeable = {"A", "B"}
     strat = CoinFlipStrategy(seed=123, p_trade=1.0, cooldown_bars=0)
 
-    signals = strat.on_bars(ts, bars_by_symbol, tradeable)
+    signals = strat.on_bars(ts, bars_by_symbol, tradeable, {})
 
     assert len(signals) == 2
     assert {signal.symbol for signal in signals} == {"A", "B"}
@@ -49,7 +49,7 @@ def test_coinflip_emits_none_when_never_trade() -> None:
     tradeable = {"A", "B"}
     strat = CoinFlipStrategy(seed=123, p_trade=0.0, cooldown_bars=0)
 
-    signals = strat.on_bars(ts, bars_by_symbol, tradeable)
+    signals = strat.on_bars(ts, bars_by_symbol, tradeable, {})
 
     assert len(signals) == 0
 
@@ -64,9 +64,9 @@ def test_coinflip_cooldown_enforces_spacing() -> None:
     tradeable = {"A"}
     strat = CoinFlipStrategy(seed=123, p_trade=1.0, cooldown_bars=2)
 
-    signals_0 = strat.on_bars(ts0, bars_by_symbol_0, tradeable)
-    signals_1 = strat.on_bars(ts1, bars_by_symbol_1, tradeable)
-    signals_2 = strat.on_bars(ts2, bars_by_symbol_2, tradeable)
+    signals_0 = strat.on_bars(ts0, bars_by_symbol_0, tradeable, {})
+    signals_1 = strat.on_bars(ts1, bars_by_symbol_1, tradeable, {})
+    signals_2 = strat.on_bars(ts2, bars_by_symbol_2, tradeable, {})
 
     assert len(signals_0) == 1
     assert len(signals_1) == 0

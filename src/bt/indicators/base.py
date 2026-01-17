@@ -1,12 +1,30 @@
-"""Indicator base class."""
+"""Indicator interfaces."""
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Optional, Protocol
+
+import pandas as pd
 
 from bt.core.types import Bar
 
 
-class Indicator(ABC):
-    @abstractmethod
-    def update(self, bar: Bar) -> float:
-        """Update indicator with a new bar."""
+class Indicator(Protocol):
+    name: str
+
+    def update(self, bar: Bar) -> None:
+        ...
+
+    @property
+    def is_ready(self) -> bool:
+        ...
+
+    @property
+    def value(self) -> float | None:
+        ...
+
+
+@dataclass
+class IndicatorState:
+    value: float | None
+    is_ready: bool
