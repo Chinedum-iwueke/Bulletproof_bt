@@ -124,6 +124,8 @@ class BacktestEngine:
                         continue
 
                     open_positions = self._portfolio.position_book.open_positions_count()
+                    position = self._portfolio.position_book.get(signal.symbol)
+                    current_qty = position.qty
                     order_intent, decision_reason = self._risk.signal_to_order_intent(
                          ts=ts,
                          signal=signal,
@@ -132,6 +134,7 @@ class BacktestEngine:
                          free_margin=self._portfolio.free_margin,
                          open_positions=open_positions,
                          max_leverage=self._portfolio.max_leverage,
+                         current_qty=current_qty,
                          )
 
                     if order_intent is None:
@@ -151,7 +154,7 @@ class BacktestEngine:
                         ts_submitted=ts,
                         symbol=order_intent.symbol,
                         side=order_intent.side,
-                        qty=order_intent.qty,
+                        qty=abs(order_intent.qty),
                         order_type=order_intent.order_type,
                         limit_price=order_intent.limit_price,
                         state=OrderState.NEW,
