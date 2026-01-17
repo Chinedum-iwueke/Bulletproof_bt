@@ -45,7 +45,13 @@ def test_signal_to_order_intent_approves_and_sizes() -> None:
         free_margin=10_000,
         open_positions=0,
         max_leverage=2.0,
+        current_qty=0.0,
     )
+
+    assert order_intent is not None
+    assert reason == "risk_approved"
+    assert order_intent.metadata["scaled_by_margin"] is False
+    assert order_intent.qty == pytest.approx(10.0)
 
     assert order_intent is not None
     assert reason == "risk_approved"
@@ -68,6 +74,7 @@ def test_signal_to_order_intent_rejects_max_positions() -> None:
         free_margin=10_000,
         open_positions=1,
         max_leverage=2.0,
+        current_qty=0.0,
     )
 
     assert order_intent is None
@@ -88,6 +95,7 @@ def test_signal_to_order_intent_applies_notional_cap() -> None:
         free_margin=10_000,
         open_positions=0,
         max_leverage=2.0,
+        current_qty=0.0,
     )
 
     assert order_intent is not None
@@ -110,6 +118,7 @@ def test_signal_to_order_intent_rejects_no_side() -> None:
         free_margin=10_000,
         open_positions=0,
         max_leverage=2.0,
+        current_qty=0.0,
     )
 
     assert order_intent is None
@@ -130,6 +139,7 @@ def test_signal_to_order_intent_scales_when_margin_insufficient() -> None:
         free_margin=50,
         open_positions=0,
         max_leverage=2.0,
+        current_qty=0.0,
     )
 
     assert order_intent is not None
@@ -153,9 +163,72 @@ def test_signal_to_order_intent_allows_when_margin_sufficient() -> None:
         free_margin=10_000,
         open_positions=0,
         max_leverage=2.0,
+        current_qty=0.0,
+    )
+
+
+def test_signal_to_order_intent_rejects_pyramiding() -> None:
+    engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01)
+    ts = pd.Timestamp("2024-01-01T00:00:00Z")
+    bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY)
+
+    order_intent, reason = engine.signal_to_order_intent(
+        ts=ts,
+        signal=signal,
+        bar=bar,
+        equity=10_000,
+        free_margin=10_000,
+        open_positions=1,
+        max_leverage=2.0,
+        current_qty=5.0,
+    )
+
+    assert order_intent is None
+    assert "already_in_position" in reason
+
+
+def test_signal_to_order_intent_flip_generates_net_sell_order() -> None:
+    engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01)
+    ts = pd.Timestamp("2024-01-01T00:00:00Z")
+    bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.SELL)
+
+    order_intent, reason = engine.signal_to_order_intent(
+        ts=ts,
+        signal=signal,
+        bar=bar,
+        equity=10_000,
+        free_margin=10_000,
+        open_positions=1,
+        max_leverage=2.0,
+        current_qty=5.0,
     )
 
     assert order_intent is not None
     assert reason == "risk_approved"
-    assert order_intent.metadata["scaled_by_margin"] is False
-    assert order_intent.qty == pytest.approx(10.0)
+    assert order_intent.qty < 0
+    assert abs(order_intent.qty) > 5.0
+
+
+def test_signal_to_order_intent_flip_scales_for_margin() -> None:
+    engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01)
+    ts = pd.Timestamp("2024-01-01T00:00:00Z")
+    bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=100)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.SELL)
+
+    order_intent, reason = engine.signal_to_order_intent(
+        ts=ts,
+        signal=signal,
+        bar=bar,
+        equity=10_000,
+        free_margin=300,
+        open_positions=1,
+        max_leverage=2.0,
+        current_qty=5.0,
+    )
+
+    assert order_intent is not None
+    assert reason == "risk_approved"
+    assert order_intent.metadata["scaled_by_margin"] is True
+    assert abs(order_intent.qty) <= 6.0 + 1e-9
