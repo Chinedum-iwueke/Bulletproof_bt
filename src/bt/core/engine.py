@@ -125,12 +125,14 @@ class BacktestEngine:
 
                     open_positions = self._portfolio.position_book.open_positions_count()
                     order_intent, decision_reason = self._risk.signal_to_order_intent(
-                        ts=ts,
-                        signal=signal,
-                        bar=bar,
-                        equity=self._portfolio.equity,
-                        open_positions=open_positions,
-                    )
+                         ts=ts,
+                         signal=signal,
+                         bar=bar,
+                         equity=self._portfolio.equity,
+                         free_margin=self._portfolio.free_margin,
+                         open_positions=open_positions,
+                         max_leverage=self._portfolio.max_leverage,
+                         )
 
                     if order_intent is None:
                         self._decisions_writer.write(
