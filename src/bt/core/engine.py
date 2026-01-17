@@ -3,11 +3,16 @@ from __future__ import annotations
 
 from pathlib import Path
 import csv
+from typing import Any, Mapping
 
 from bt.core.enums import OrderState
 from bt.core.types import Order
 from bt.data.feed import HistoricalDataFeed
 from bt.execution.execution_model import ExecutionModel
+from bt.indicators.base import Indicator
+from bt.indicators.atr import ATR
+from bt.indicators.ema import EMA
+from bt.indicators.vwap import VWAP
 from bt.logging.jsonl import JsonlWriter
 from bt.logging.trades import TradesCsvWriter
 from bt.portfolio.portfolio import Portfolio
@@ -46,6 +51,20 @@ class BacktestEngine:
         self._equity_path = equity_path
         self._config = config
         self._order_counter = 0
+        self._indicators: dict[str, dict[str, Indicator]] = {}
+
+    def _build_indicator_set(self) -> dict[str, Indicator]:
+        return {
+            "ema_20": EMA(20),
+            "ema_50": EMA(50),
+            "atr_14": ATR(14),
+            "vwap": VWAP(),
+        }
+
+    def _ensure_symbol_indicators(self, symbol: str) -> dict[str, Indicator]:
+        if symbol not in self._indicators:
+            self._indicators[symbol] = self._build_indicator_set()
+        return self._indicators[symbol]
 
     def _next_order_id(self) -> str:
         self._order_counter += 1
@@ -70,7 +89,7 @@ class BacktestEngine:
         1) bars = feed.next()
         2) universe.update(...) for each bar
         3) build bars_by_symbol dict for this ts
-        4) strategy.on_bars(ts, bars_by_symbol, tradeable_set)
+        4) update indicators and strategy.on_bars(ts, bars_by_symbol, tradeable_set, ctx)
         5) for each Signal: risk.signal_to_order_intent(...)
         6) turn OrderIntent into Order and submit to open_orders list
         7) execution.process(ts, bars_by_symbol, open_orders) -> (open_orders, fills)
@@ -104,9 +123,23 @@ class BacktestEngine:
 
                 for bar in bars_list:
                     self._universe.update(bar)
+                    indicators = self._ensure_symbol_indicators(bar.symbol)
+                    for indicator in indicators.values():
+                        indicator.update(bar)
 
                 tradeable = self._universe.tradeable_at(ts)
-                signals = self._strategy.on_bars(ts, bars_by_symbol, tradeable)
+                indicators_snapshot: dict[str, dict[str, tuple[float | None, bool]]] = {}
+                for symbol in bars_by_symbol:
+                    symbol_indicators = self._indicators.get(symbol, {})
+                    indicators_snapshot[symbol] = {
+                        name: (indicator.value, indicator.is_ready)
+                        for name, indicator in symbol_indicators.items()
+                    }
+                ctx: Mapping[str, Any] = {
+                    "indicators": indicators_snapshot,
+                    "tradeable": tradeable,
+                }
+                signals = self._strategy.on_bars(ts, bars_by_symbol, tradeable, ctx)
 
                 for signal in signals:
                     bar = bars_by_symbol.get(signal.symbol)

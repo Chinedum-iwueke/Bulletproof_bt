@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+from typing import Any, Mapping
 
 import pandas as pd
 
@@ -23,6 +24,7 @@ class CoinFlipStrategy(Strategy):
         ts: pd.Timestamp,
         bars_by_symbol: dict[str, Bar],
         tradeable: set[str],
+        ctx: Mapping[str, Any],
     ) -> list[Signal]:
         signals: list[Signal] = []
         for symbol in tradeable:
