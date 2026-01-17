@@ -13,6 +13,7 @@ from bt.core.types import Fill, Position, Trade
 class PositionBook:
     def __init__(self) -> None:
         self._positions: dict[str, Position] = {}
+        self._position_costs: dict[str, tuple[float, float]] = {}
 
     def get(self, symbol: str) -> Position:
         """Return current Position for symbol (create FLAT if missing)."""
@@ -47,10 +48,12 @@ class PositionBook:
         """
         position = self.get(fill.symbol)
         trade: Optional[Trade] = None
+        fees_paid, slippage_paid = self._position_costs.get(fill.symbol, (0.0, 0.0))
 
         if position.state in {PositionState.FLAT, PositionState.CLOSED} or position.qty == 0:
             position = self._open_new_position(fill)
             self._positions[fill.symbol] = position
+            self._position_costs[fill.symbol] = (fill.fee, fill.slippage)
             return position, None
 
         if position.side == fill.side:
@@ -68,12 +71,22 @@ class PositionBook:
                 mfe_price=mfe_price,
             )
             self._positions[fill.symbol] = position
+            self._position_costs[fill.symbol] = (
+                fees_paid + fill.fee,
+                slippage_paid + fill.slippage,
+            )
             return position, None
 
         reduce_qty = min(position.qty, fill.qty)
         realized_pnl = self._realized_pnl(position, fill.price, reduce_qty)
         mae_price, mfe_price = self._update_mae_mfe(position, fill.price)
         remaining_qty = position.qty - reduce_qty
+        fill_qty = max(abs(fill.qty), 1e-12)
+        close_ratio = reduce_qty / fill_qty
+        closing_fee = fill.fee * close_ratio
+        closing_slippage = fill.slippage * close_ratio
+        total_fees = fees_paid + closing_fee
+        total_slippage = slippage_paid + closing_slippage
 
         if fill.qty > position.qty:
             trade = self._build_trade(
@@ -82,10 +95,16 @@ class PositionBook:
                 exit_ts=fill.ts,
                 qty=reduce_qty,
                 pnl=realized_pnl,
+                fees=total_fees,
+                slippage=total_slippage,
                 mae_price=mae_price,
                 mfe_price=mfe_price,
             )
             position = self._open_new_position(fill, qty=fill.qty - reduce_qty)
+            self._position_costs[fill.symbol] = (
+                fill.fee - closing_fee,
+                fill.slippage - closing_slippage,
+            )
         elif remaining_qty == 0:
             trade = self._build_trade(
                 position=position,
@@ -93,6 +112,8 @@ class PositionBook:
                 exit_ts=fill.ts,
                 qty=reduce_qty,
                 pnl=realized_pnl,
+                fees=total_fees,
+                slippage=total_slippage,
                 mae_price=mae_price,
                 mfe_price=mfe_price,
             )
@@ -109,6 +130,7 @@ class PositionBook:
                 opened_ts=None,
                 closed_ts=fill.ts,
             )
+            self._position_costs.pop(fill.symbol, None)
         else:
             position = replace(
                 position,
@@ -118,6 +140,7 @@ class PositionBook:
                 mae_price=mae_price,
                 mfe_price=mfe_price,
             )
+            self._position_costs[fill.symbol] = (total_fees, total_slippage)
 
         self._positions[fill.symbol] = position
         return position, trade
@@ -160,6 +183,8 @@ class PositionBook:
         exit_ts: pd.Timestamp,
         qty: float,
         pnl: float,
+        fees: float,
+        slippage: float,
         mae_price: float,
         mfe_price: float,
     ) -> Trade:
@@ -172,8 +197,8 @@ class PositionBook:
             exit_price=exit_price,
             qty=qty,
             pnl=pnl,
-            fees=0.0,  # TODO: incorporate fees at portfolio aggregation stage.
-            slippage=0.0,
+            fees=fees,
+            slippage=slippage,
             mae_price=mae_price,
             mfe_price=mfe_price,
             metadata={},
