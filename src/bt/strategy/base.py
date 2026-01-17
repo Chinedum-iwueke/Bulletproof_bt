@@ -2,12 +2,23 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Iterable
+
+import pandas as pd
 
 from bt.core.types import Bar, Signal
 
 
 class Strategy(ABC):
     @abstractmethod
-    def on_bar(self, bar: Bar) -> Iterable[Signal]:
-        """Generate signals for the incoming bar."""
+    def on_bars(
+        self,
+        ts: pd.Timestamp,
+        bars_by_symbol: dict[str, Bar],
+        tradeable: set[str],
+    ) -> list[Signal]:
+        """
+        Called once per timestamp.
+        bars_by_symbol includes only symbols that have a bar at ts (gaps preserved).
+        tradeable is the universe membership at ts.
+        Return a list of Signals (intent only).
+        """
