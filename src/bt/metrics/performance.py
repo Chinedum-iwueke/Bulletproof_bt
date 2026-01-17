@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import numpy as np
 import pandas as pd
+import yaml
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,14 @@ class PerformanceReport:
     slippage_total: float
     fee_drag_pct_of_gross: Optional[float]
     slippage_drag_pct_of_gross: Optional[float]
+    trade_return_skew: Optional[float]
+    trade_return_kurtosis_excess: Optional[float]
+    worst_streak_loss: float
+    max_consecutive_losses: int
+    sharpe_annualized: Optional[float]
+    sortino_annualized: Optional[float]
+    cagr: Optional[float]
+    mar_ratio: Optional[float]
     ev_by_bucket: Dict[str, float]
     trades_by_bucket: Dict[str, int]
     extra: Dict[str, Any]
@@ -60,6 +70,14 @@ def _max_drawdown_duration(dd: pd.Series) -> int:
     return max_len
 
 
+def _append_note(extra: Dict[str, Any], note: str) -> None:
+    notes = extra.setdefault("notes", [])
+    if isinstance(notes, list):
+        notes.append(note)
+    else:
+        extra["notes"] = [note]
+
+
 def _bucket_metrics(
     pnl_net: pd.Series, bucket_series: Optional[pd.Series]
 ) -> tuple[Dict[str, float], Dict[str, int]]:
@@ -74,6 +92,186 @@ def _bucket_metrics(
     ev_by_bucket = {str(idx): float(val) for idx, val in ev.items()}
     trades_by_bucket = {str(idx): int(val) for idx, val in counts.items()}
     return ev_by_bucket, trades_by_bucket
+
+
+def _infer_periods_per_year(ts_series: pd.Series) -> int:
+    if ts_series.empty:
+        return 365
+    ts = pd.to_datetime(ts_series, errors="coerce").dropna()
+    if ts.shape[0] < 2:
+        return 365
+    deltas = ts.sort_values().diff().dropna().dt.total_seconds()
+    if deltas.empty:
+        return 365
+    median_seconds = float(deltas.median())
+    if median_seconds <= 90:
+        return 365 * 24 * 60
+    return 365
+
+
+def _load_periods_per_year(run_path: Path, ts_series: pd.Series) -> int:
+    config_path = run_path / "config_used.yaml"
+    if config_path.exists():
+        with config_path.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+        periods = config.get("periods_per_year")
+        if periods is not None:
+            try:
+                return int(periods)
+            except (TypeError, ValueError):
+                return _infer_periods_per_year(ts_series)
+    return _infer_periods_per_year(ts_series)
+
+
+def _compute_trade_returns(
+    trades_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.Series, pd.Series, pd.Series]:
+    columns = [
+        "entry_ts",
+        "exit_ts",
+        "symbol",
+        "side",
+        "trade_return",
+        "pnl",
+        "fees",
+        "slippage",
+    ]
+    if trades_df.empty:
+        empty_df = pd.DataFrame(columns=columns)
+        return empty_df, pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
+
+    pnl_col = "pnl_net" if "pnl_net" in trades_df.columns else "pnl"
+    if pnl_col not in trades_df.columns:
+        raise ValueError("Trades must include pnl_net or pnl column")
+
+    pnl_net = _coerce_numeric(trades_df[pnl_col])
+    fees = _sum_costs(trades_df, preferred="fees_total", fallbacks=["fees", "fee"])
+    slippage = _sum_costs(
+        trades_df, preferred="slippage_total", fallbacks=["slippage", "slip"]
+    )
+    entry_price = _coerce_numeric(
+        trades_df.get("entry_price", pd.Series(0.0, index=trades_df.index))
+    )
+    qty = _coerce_numeric(trades_df.get("qty", pd.Series(0.0, index=trades_df.index)))
+    # TODO: support equity-based / margin-based denominators.
+    entry_notional = (entry_price * qty).abs()
+    trade_return = pnl_net.where(entry_notional != 0, np.nan) / entry_notional.replace(
+        0, np.nan
+    )
+
+    trade_returns_df = pd.DataFrame(
+        {
+            "entry_ts": trades_df.get(
+                "entry_ts", pd.Series("", index=trades_df.index)
+            ),
+            "exit_ts": trades_df.get("exit_ts", pd.Series("", index=trades_df.index)),
+            "symbol": trades_df.get("symbol", pd.Series("", index=trades_df.index)),
+            "side": trades_df.get("side", pd.Series("", index=trades_df.index)),
+            "trade_return": trade_return,
+            "pnl": pnl_net,
+            "fees": fees,
+            "slippage": slippage,
+        }
+    )
+    return trade_returns_df, trade_return, fees, slippage
+
+
+def _order_trade_returns(trade_returns_df: pd.DataFrame) -> pd.DataFrame:
+    if trade_returns_df.empty:
+        return trade_returns_df
+    ordered = trade_returns_df.copy()
+    ordered["_entry_ts_sort"] = pd.to_datetime(
+        ordered["entry_ts"], errors="coerce"
+    )
+    ordered["_symbol_sort"] = ordered["symbol"].fillna("").astype(str)
+    ordered = ordered.sort_values(
+        by=["_entry_ts_sort", "_symbol_sort"],
+        kind="mergesort",
+        na_position="last",
+    )
+    return ordered.drop(columns=["_entry_ts_sort", "_symbol_sort"])
+
+
+def _trade_return_moments(
+    trade_returns: pd.Series, extra: Dict[str, Any]
+) -> tuple[Optional[float], Optional[float]]:
+    values = trade_returns.dropna().to_numpy(dtype=float)
+    if values.size < 3:
+        _append_note(
+            extra,
+            "trade_return_distribution: insufficient trades for skew/kurtosis",
+        )
+        return None, None
+    mean = float(np.mean(values))
+    std = float(np.std(values))
+    if std == 0:
+        _append_note(
+            extra,
+            "trade_return_distribution: zero variance for skew/kurtosis",
+        )
+        return None, None
+    centered = values - mean
+    skew = float(np.mean(centered**3) / (std**3))
+    kurtosis_excess = float(np.mean(centered**4) / (std**4) - 3.0)
+    return skew, kurtosis_excess
+
+
+def _trade_return_streaks(trade_returns: pd.Series) -> tuple[int, float]:
+    max_consecutive_losses = 0
+    worst_streak_loss = 0.0
+    current_losses = 0
+    current_sum = 0.0
+    for value in trade_returns.dropna().to_numpy(dtype=float):
+        if value < 0:
+            current_losses += 1
+            current_sum += value
+            max_consecutive_losses = max(max_consecutive_losses, current_losses)
+            worst_streak_loss = min(worst_streak_loss, current_sum)
+        else:
+            current_losses = 0
+            current_sum = 0.0
+    return max_consecutive_losses, worst_streak_loss
+
+
+def compute_param_stability(run_summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    if len(run_summaries) < 3:
+        return {
+            "ev_std_across_params": None,
+            "dd_std_across_params": None,
+            "sharpe_surface_flatness": None,
+            "notes": ["insufficient runs for param stability metrics"],
+        }
+
+    ev_values = [summary.get("ev_net") for summary in run_summaries]
+    dd_values = [summary.get("max_drawdown_pct") for summary in run_summaries]
+    sharpe_values = [summary.get("sharpe_annualized") for summary in run_summaries]
+
+    def _to_float(values: list[Any]) -> list[float]:
+        return [float(value) for value in values if value is not None]
+
+    ev_float = _to_float(ev_values)
+    dd_float = _to_float(dd_values)
+    sharpe_float = _to_float(sharpe_values)
+
+    if len(ev_float) < 3 or len(dd_float) < 3 or len(sharpe_float) < 3:
+        return {
+            "ev_std_across_params": None,
+            "dd_std_across_params": None,
+            "sharpe_surface_flatness": None,
+            "notes": ["insufficient data for param stability metrics"],
+        }
+
+    ev_std = float(np.std(ev_float))
+    dd_std = float(np.std(dd_float))
+    sharpe_std = float(np.std(sharpe_float))
+    sharpe_mean = float(np.mean(sharpe_float))
+    flatness = sharpe_std / (abs(sharpe_mean) + 1e-12)
+    return {
+        "ev_std_across_params": ev_std,
+        "dd_std_across_params": dd_std,
+        "sharpe_surface_flatness": flatness,
+        "notes": [],
+    }
 
 
 def compute_performance(run_dir: str | Path) -> PerformanceReport:
@@ -106,8 +304,63 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
     max_drawdown_pct = float(dd.min()) if not dd.empty else 0.0
     max_drawdown_duration_bars = _max_drawdown_duration(dd)
 
+    extra: Dict[str, Any] = {}
+
+    returns = equity_series.pct_change().dropna()
+    sharpe_annualized: Optional[float]
+    sortino_annualized: Optional[float]
+    if returns.shape[0] < 3:
+        sharpe_annualized = None
+        sortino_annualized = None
+    else:
+        periods_per_year = _load_periods_per_year(
+            run_path, equity_df.get("ts", pd.Series(index=equity_df.index))
+        )
+        mean_return = float(returns.mean())
+        std_return = float(returns.std(ddof=0))
+        sharpe_annualized = (
+            mean_return / std_return * float(np.sqrt(periods_per_year))
+            if std_return != 0
+            else None
+        )
+        downside = returns[returns < 0]
+        downside_std = float(downside.std(ddof=0)) if not downside.empty else 0.0
+        sortino_annualized = (
+            mean_return / downside_std * float(np.sqrt(periods_per_year))
+            if downside_std != 0
+            else None
+        )
+
+    cagr: Optional[float]
+    mar_ratio: Optional[float]
+    if "ts" not in equity_df.columns:
+        cagr = None
+        mar_ratio = None
+    else:
+        ts_values = pd.to_datetime(equity_df["ts"], errors="coerce").dropna()
+        if ts_values.shape[0] < 2 or equity_series.empty:
+            cagr = None
+            mar_ratio = None
+        else:
+            total_seconds = float((ts_values.iloc[-1] - ts_values.iloc[0]).total_seconds())
+            seconds_per_year = 365.25243600 * 24 * 60 * 60
+            total_years = total_seconds / seconds_per_year if seconds_per_year > 0 else 0.0
+            initial_equity = float(equity_series.iloc[0])
+            if total_years <= 0 or initial_equity <= 0 or final_equity <= 0:
+                cagr = None
+            else:
+                cagr = float((final_equity / initial_equity) ** (1.0 / total_years) - 1.0)
+            if cagr is None or max_drawdown_pct == 0:
+                mar_ratio = None
+            else:
+                mar_ratio = cagr / abs(max_drawdown_pct)
+
     total_trades = int(trades_df.shape[0])
     if total_trades == 0:
+        _append_note(
+            extra,
+            "trade_return_distribution: insufficient trades for skew/kurtosis",
+        )
         return PerformanceReport(
             run_id=run_id,
             final_equity=final_equity,
@@ -123,9 +376,17 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
             slippage_total=0.0,
             fee_drag_pct_of_gross=None,
             slippage_drag_pct_of_gross=None,
+            trade_return_skew=None,
+            trade_return_kurtosis_excess=None,
+            worst_streak_loss=0.0,
+            max_consecutive_losses=0,
+            sharpe_annualized=sharpe_annualized,
+            sortino_annualized=sortino_annualized,
+            cagr=cagr,
+            mar_ratio=mar_ratio,
             ev_by_bucket={"all": 0.0},
             trades_by_bucket={"all": 0},
-            extra={},
+            extra=extra,
         )
 
     pnl_col = "pnl_net" if "pnl_net" in trades_df.columns else "pnl"
@@ -169,6 +430,12 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
         bucket_series = trades_df["regime_bucket"]
 
     ev_by_bucket, trades_by_bucket = _bucket_metrics(pnl_net, bucket_series)
+    trade_returns_df, trade_returns, _, _ = _compute_trade_returns(trades_df)
+    trade_returns = trade_returns.dropna()
+    trade_return_skew, trade_return_kurtosis_excess = _trade_return_moments(
+        trade_returns, extra
+    )
+    max_consecutive_losses, worst_streak_loss = _trade_return_streaks(trade_returns_df["trade_return"])
 
     return PerformanceReport(
         run_id=run_id,
@@ -185,9 +452,17 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
         slippage_total=slippage_total,
         fee_drag_pct_of_gross=fee_drag_pct_of_gross,
         slippage_drag_pct_of_gross=slippage_drag_pct_of_gross,
+        trade_return_skew=trade_return_skew,
+        trade_return_kurtosis_excess=trade_return_kurtosis_excess,
+        worst_streak_loss=worst_streak_loss,
+        max_consecutive_losses=max_consecutive_losses,
+        sharpe_annualized=sharpe_annualized,
+        sortino_annualized=sortino_annualized,
+        cagr=cagr,
+        mar_ratio=mar_ratio,
         ev_by_bucket=ev_by_bucket,
         trades_by_bucket=trades_by_bucket,
-        extra={},
+        extra=extra,
     )
 
 
@@ -201,6 +476,7 @@ def write_performance_artifacts(report: PerformanceReport, run_dir: str | Path) 
     run_path = Path(run_dir)
     performance_path = run_path / "performance.json"
     by_bucket_path = run_path / "performance_by_bucket.csv"
+    trade_returns_path = run_path / "trade_returns.csv"
 
     with performance_path.open("w", encoding="utf-8") as handle:
         json.dump(asdict(report), handle, indent=2, sort_keys=True)
@@ -218,3 +494,36 @@ def write_performance_artifacts(report: PerformanceReport, run_dir: str | Path) 
     pd.DataFrame(rows, columns=["bucket", "n_trades", "ev_net"]).to_csv(
         by_bucket_path, index=False
     )
+
+    trades_path = run_path / "trades.csv"
+    if trades_path.exists():
+        try:
+            trades_df = pd.read_csv(trades_path)
+        except pd.errors.EmptyDataError:
+            trades_df = pd.DataFrame()
+    else:
+        trades_df = pd.DataFrame()
+    trade_returns_df, _, _, _ = _compute_trade_returns(trades_df)
+    ordered_trade_returns = _order_trade_returns(trade_returns_df)
+    ordered_trade_returns.to_csv(trade_returns_path, index=False)
+
+    param_sweep_dir = run_path / "param_sweep"
+    if param_sweep_dir.exists() and param_sweep_dir.is_dir():
+        run_summaries = []
+        for subdir in sorted(param_sweep_dir.iterdir()):
+            if not subdir.is_dir():
+                continue
+            perf_path = subdir / "performance.json"
+            if not perf_path.exists():
+                continue
+            with perf_path.open("r", encoding="utf-8") as handle:
+                try:
+                    run_summaries.append(json.load(handle))
+                except json.JSONDecodeError:
+                    continue
+        if run_summaries:
+            stability = compute_param_stability(run_summaries)
+            stability_path = run_path / "param_stability.json"
+            with stability_path.open("w", encoding="utf-8") as handle:
+                json.dump(stability, handle, indent=2, sort_keys=True)
+                handle.write("\n")
