@@ -30,7 +30,9 @@ class RiskEngine:
         signal: Signal,
         bar: Bar,
         equity: float,
+        free_margin: float,
         open_positions: int,
+        max_leverage: float,
     ) -> tuple[OrderIntent | None, str]:
         """
         Returns (order_intent_or_none, reason_string).
@@ -60,6 +62,22 @@ class RiskEngine:
             notional = abs(qty) * bar.close
             cap_applied = True
 
+        leverage_for_margin = max(max_leverage, self.eps)
+        margin_required = notional / leverage_for_margin
+        max_notional_by_margin = free_margin * leverage_for_margin
+        scaled_by_margin = False
+
+        if free_margin <= 0:
+            return None, "risk_rejected:insufficient_free_margin"
+
+        if margin_required > free_margin:
+            qty = min(qty, max_notional_by_margin / bar.close)
+            if qty <= 0:
+                return None, "risk_rejected:insufficient_free_margin"
+            scaled_by_margin = True
+            notional = abs(qty) * bar.close
+            margin_required = notional / leverage_for_margin
+
         reason = "risk_approved"
         metadata = dict(signal.metadata)
         metadata.update(
@@ -68,6 +86,11 @@ class RiskEngine:
                 "stop_dist": stop_dist,
                 "notional_est": notional,
                 "cap_applied": cap_applied,
+                "margin_required": margin_required,
+                "free_margin": free_margin,
+                "max_leverage": max_leverage,
+                "scaled_by_margin": scaled_by_margin,
+                "max_notional_by_margin": max_notional_by_margin,
                 "reason": reason,
             }
         )
