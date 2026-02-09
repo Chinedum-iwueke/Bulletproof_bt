@@ -8,7 +8,7 @@ import yaml
 
 from bt.core.engine import BacktestEngine
 from bt.data.feed import HistoricalDataFeed
-from bt.data.loader import load_bars
+from bt.data.loader import load_dataset
 from bt.execution.execution_model import ExecutionModel
 from bt.execution.fees import FeeModel
 from bt.execution.slippage import SlippageModel
@@ -54,7 +54,8 @@ def main() -> None:
     run_dir = prepare_run_dir(Path("outputs/runs"), run_id)
     write_config_used(run_dir, config)
 
-    bars_df = load_bars(args.data)
+    dataset_path = args.data
+    bars_df = load_dataset(dataset_path)
     datafeed = HistoricalDataFeed(bars_df)
 
     universe = UniverseEngine(
