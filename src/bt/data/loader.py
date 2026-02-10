@@ -1,6 +1,7 @@
 """Data loader for parquet/csv into in-memory format."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -67,29 +68,81 @@ def _normalize_and_validate(df: pd.DataFrame, *, sort_columns: list[str]) -> pd.
     return df
 
 
-def _parse_manifest(manifest_path: Path) -> list[str]:
+@dataclass(frozen=True)
+class _ParsedManifest:
+    manifest_type: str
+    file_list: list[Path]
+
+
+def _manifest_error(manifest_path: Path, detail: str) -> ValueError:
+    expected = (
+        "Expected v1 {version, format, files} or legacy "
+        "{format: per_symbol_parquet, symbols, path}."
+    )
+    return ValueError(f"Invalid manifest.yaml at {manifest_path}: {detail}. {expected}")
+
+
+def _parse_manifest(manifest_path: Path) -> _ParsedManifest:
+    dataset_dir = manifest_path.parent
     try:
         with manifest_path.open("r", encoding="utf-8") as handle:
             raw_manifest: Any = yaml.safe_load(handle)
     except yaml.YAMLError as exc:
-        raise ValueError(f"Invalid manifest.yaml at {manifest_path}: invalid YAML") from exc
+        raise _manifest_error(manifest_path, "invalid YAML") from exc
 
     if not isinstance(raw_manifest, dict):
-        raise ValueError(f"Invalid manifest.yaml at {manifest_path}: expected a mapping")
+        raise _manifest_error(manifest_path, "expected a mapping")
 
-    if raw_manifest.get("version") != 1:
-        raise ValueError(f"Invalid manifest.yaml at {manifest_path}: version must be 1")
+    if "version" in raw_manifest:
+        if raw_manifest.get("version") != 1:
+            raise _manifest_error(manifest_path, "version must be 1")
+        if raw_manifest.get("format") != "parquet":
+            raise _manifest_error(manifest_path, "format must be parquet for version=1 manifests")
 
-    if raw_manifest.get("format") != "parquet":
-        raise ValueError(f"Invalid manifest.yaml at {manifest_path}: format must be parquet")
+        files = raw_manifest.get("files")
+        if not isinstance(files, list) or not files:
+            raise _manifest_error(manifest_path, "files must be a non-empty list")
+        if not all(isinstance(file_path, str) and file_path for file_path in files):
+            raise _manifest_error(manifest_path, "files entries must be non-empty strings")
 
-    files = raw_manifest.get("files")
-    if not isinstance(files, list) or not files:
-        raise ValueError(f"Invalid manifest.yaml at {manifest_path}: files must be a non-empty list")
-    if not all(isinstance(file_path, str) and file_path for file_path in files):
-        raise ValueError(f"Invalid manifest.yaml at {manifest_path}: files entries must be non-empty strings")
+        resolved_files = [dataset_dir / file_path for file_path in files]
+        for file_path in resolved_files:
+            if not file_path.is_file():
+                raise _manifest_error(manifest_path, f"missing file listed in files: {file_path}")
 
-    return files
+        return _ParsedManifest(manifest_type="v1_files", file_list=resolved_files)
+
+    if raw_manifest.get("format") != "per_symbol_parquet":
+        raise ValueError(
+            f"Unsupported manifest schema at {manifest_path}: "
+            "Expected v1 {version,format,files} or legacy "
+            "{format: per_symbol_parquet, symbols, path}."
+        )
+
+    symbols = raw_manifest.get("symbols")
+    if not isinstance(symbols, list) or not symbols:
+        raise _manifest_error(manifest_path, "symbols must be a non-empty list for legacy manifests")
+    if not all(isinstance(symbol, str) and symbol for symbol in symbols):
+        raise _manifest_error(manifest_path, "symbols entries must be non-empty strings")
+
+    path_template = raw_manifest.get("path")
+    if not isinstance(path_template, str) or not path_template:
+        raise _manifest_error(manifest_path, "path must be a non-empty string for legacy manifests")
+    if "{symbol}" not in path_template:
+        raise _manifest_error(manifest_path, "path must include {symbol} placeholder for legacy manifests")
+
+    resolved_files = [dataset_dir / path_template.format(symbol=symbol) for symbol in symbols]
+    missing_files = [file_path for file_path in resolved_files if not file_path.is_file()]
+    if missing_files:
+        raise _manifest_error(
+            manifest_path,
+            (
+                "missing legacy parquet files; first missing "
+                f"{missing_files[0]} (missing {len(missing_files)} total)"
+            ),
+        )
+
+    return _ParsedManifest(manifest_type="legacy_per_symbol", file_list=resolved_files)
 
 
 def load_dataset(dataset_path: str) -> pd.DataFrame:
@@ -105,16 +158,15 @@ def load_dataset(dataset_path: str) -> pd.DataFrame:
     if not manifest_path.exists():
         raise ValueError(f"Dataset manifest missing: {manifest_path}")
 
-    manifest_files = _parse_manifest(manifest_path)
+    parsed_manifest = _parse_manifest(manifest_path)
     frames: list[pd.DataFrame] = []
-    for relative_file in manifest_files:
-        parquet_path = path / relative_file
+    for parquet_path in parsed_manifest.file_list:
         if parquet_path.suffix != ".parquet":
-            raise ValueError(f"Invalid manifest.yaml at {manifest_path}: only parquet files are supported")
-        if not parquet_path.is_file():
-            raise ValueError(f"Dataset file listed in manifest not found: {parquet_path}")
+            raise _manifest_error(manifest_path, f"only parquet files are supported, got: {parquet_path}")
         frames.append(pd.read_parquet(parquet_path))
 
     combined = pd.concat(frames, ignore_index=True)
-    # TODO: Add support for additional manifest-level options (e.g., partition filters).
+    # TODO: Add chunked loading/streaming concat for huge universes.
+    # TODO: Add optional symbol-subset loading.
+    # TODO: Read manifest counts metadata for quick sanity checks.
     return _normalize_and_validate(combined, sort_columns=["ts", "symbol"])
