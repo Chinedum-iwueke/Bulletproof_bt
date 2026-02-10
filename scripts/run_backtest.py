@@ -17,7 +17,8 @@ from bt.logging.jsonl import JsonlWriter
 from bt.logging.trades import TradesCsvWriter, make_run_id, prepare_run_dir, write_config_used
 from bt.portfolio.portfolio import Portfolio
 from bt.risk.risk_engine import RiskEngine
-from bt.strategy.coinflip import CoinFlipStrategy
+from bt.strategy import make_strategy
+from bt.strategy.htf_context import HTFContextStrategyAdapter
 from bt.universe.universe import UniverseEngine
 
 
@@ -73,11 +74,25 @@ def main() -> None:
         lag_bars=int(config.get("lag_bars", 0)),
     )
 
-    strategy = CoinFlipStrategy(
-        seed=int(config.get("seed", 42)),
-        p_trade=float(config.get("p_trade", 0.2)),
-        cooldown_bars=int(config.get("cooldown_bars", 0)),
+    strategy_cfg = config.get("strategy") if isinstance(config.get("strategy"), dict) else {}
+    strategy_name = strategy_cfg.get("name", "coinflip")
+    strategy_kwargs = {k: v for k, v in strategy_cfg.items() if k != "name"}
+    if strategy_name == "volfloor_donchian":
+        if "entry_lookback" in strategy_kwargs and "donchian_entry_lookback" not in strategy_kwargs:
+            strategy_kwargs["donchian_entry_lookback"] = strategy_kwargs.pop("entry_lookback")
+        if "exit_lookback" in strategy_kwargs and "donchian_exit_lookback" not in strategy_kwargs:
+            strategy_kwargs["donchian_exit_lookback"] = strategy_kwargs.pop("exit_lookback")
+        if "vol_window_days" in strategy_kwargs and "vol_lookback_bars" not in strategy_kwargs:
+            strategy_kwargs["vol_lookback_bars"] = int(float(strategy_kwargs.pop("vol_window_days")) * 24 * 4)
+    strategy = make_strategy(
+        strategy_name,
+        seed=int(strategy_kwargs.pop("seed", config.get("seed", 42))),
+        **strategy_kwargs,
     )
+
+    htf_resampler = config.get("htf_resampler")
+    if isinstance(htf_resampler, TimeframeResampler):
+        strategy = HTFContextStrategyAdapter(inner=strategy, resampler=htf_resampler)
 
     risk = RiskEngine(
         max_positions=int(config.get("max_positions", 5)),

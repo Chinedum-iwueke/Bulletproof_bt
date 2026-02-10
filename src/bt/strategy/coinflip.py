@@ -9,8 +9,10 @@ import pandas as pd
 from bt.core.enums import Side
 from bt.core.types import Bar, Signal
 from bt.strategy.base import Strategy
+from bt.strategy import register_strategy
 
 
+@register_strategy("coinflip")
 class CoinFlipStrategy(Strategy):
     def __init__(self, *, seed: int = 42, p_trade: float = 0.2, cooldown_bars: int = 0):
         self._seed = seed

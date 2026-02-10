@@ -25,7 +25,8 @@ from bt.logging.trades import TradesCsvWriter
 from bt.metrics.performance import compute_performance, write_performance_artifacts
 from bt.portfolio.portfolio import Portfolio
 from bt.risk.risk_engine import RiskEngine
-from bt.strategy.coinflip import CoinFlipStrategy
+from bt.strategy import make_strategy
+from bt.strategy.htf_context import HTFContextStrategyAdapter
 from bt.universe.universe import UniverseEngine
 
 
@@ -136,16 +137,22 @@ def _build_strategy(config: dict[str, Any]):
     if not strategy_name:
         raise ValueError("Strategy config missing strategy.name")
 
+    strategy_kwargs = {k: v for k, v in strategy_cfg.items() if k != "name"}
     if strategy_name == "coinflip":
-        return CoinFlipStrategy(
-            seed=int(strategy_cfg.get("seed", config.get("seed", 42))),
-            p_trade=float(strategy_cfg.get("p_trade", config.get("p_trade", 0.2))),
-            cooldown_bars=int(strategy_cfg.get("cooldown_bars", config.get("cooldown_bars", 0))),
-        )
+        strategy_kwargs.setdefault("p_trade", float(config.get("p_trade", 0.2)))
+        strategy_kwargs.setdefault("cooldown_bars", int(config.get("cooldown_bars", 0)))
+    if strategy_name == "volfloor_donchian":
+        if "entry_lookback" in strategy_kwargs and "donchian_entry_lookback" not in strategy_kwargs:
+            strategy_kwargs["donchian_entry_lookback"] = strategy_kwargs.pop("entry_lookback")
+        if "exit_lookback" in strategy_kwargs and "donchian_exit_lookback" not in strategy_kwargs:
+            strategy_kwargs["donchian_exit_lookback"] = strategy_kwargs.pop("exit_lookback")
+        if "vol_window_days" in strategy_kwargs and "vol_lookback_bars" not in strategy_kwargs:
+            strategy_kwargs["vol_lookback_bars"] = int(float(strategy_kwargs.pop("vol_window_days")) * 24 * 4)
 
-    raise ValueError(
-        f"Strategy config missing implementation for '{strategy_name}'. "
-        "TODO: wire this strategy in run_experiment_grid.py without changing engine loop."
+    return make_strategy(
+        strategy_name,
+        seed=int(strategy_kwargs.pop("seed", config.get("seed", 42))),
+        **strategy_kwargs,
     )
 
 
@@ -184,6 +191,9 @@ def _build_engine(config: dict[str, Any], bars_df, run_dir: Path) -> BacktestEng
         lag_bars=int(config.get("lag_bars", 0)),
     )
     strategy = _build_strategy(config)
+    htf_resampler = config.get("htf_resampler")
+    if isinstance(htf_resampler, TimeframeResampler):
+        strategy = HTFContextStrategyAdapter(inner=strategy, resampler=htf_resampler)
     risk = RiskEngine(
         max_positions=int(config.get("max_positions", 5)),
         risk_per_trade_pct=float(config.get("risk_per_trade_pct", 0.01)),
