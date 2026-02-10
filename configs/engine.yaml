@@ -5,3 +5,5 @@ max_positions: 5
 risk_per_trade_pct: 0.01
 maker_fee_bps: 1.0
 taker_fee_bps: 2.0
+htf_timeframes: ["5m", "15m", "1h"]
+htf_strict: true

@@ -9,6 +9,7 @@ import yaml
 from bt.core.engine import BacktestEngine
 from bt.data.feed import HistoricalDataFeed
 from bt.data.loader import load_dataset
+from bt.data.resample import TimeframeResampler
 from bt.execution.execution_model import ExecutionModel
 from bt.execution.fees import FeeModel
 from bt.execution.slippage import SlippageModel
@@ -49,6 +50,13 @@ def main() -> None:
     slippage_config = _load_yaml(Path("configs/slippage.yaml"))
     config = _merge_config(base_config, fees_config)
     config = _merge_config(config, slippage_config)
+
+    htf_timeframes = config.get("htf_timeframes")
+    if htf_timeframes:
+        config["htf_resampler"] = TimeframeResampler(
+            timeframes=[str(tf) for tf in htf_timeframes],
+            strict=bool(config.get("htf_strict", True)),
+        )
 
     run_id = args.run_id or make_run_id()
     run_dir = prepare_run_dir(Path("outputs/runs"), run_id)
