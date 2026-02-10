@@ -1,40 +1,36 @@
-"""Average true range indicator."""
+"""True Range indicator."""
 from __future__ import annotations
 
 from bt.core.types import Bar
-from bt.indicators._helpers import WilderRMA
 from bt.indicators.base import BaseIndicator
 from bt.indicators.registry import register
 
 
-@register("atr")
-class ATR(BaseIndicator):
-    """Streaming ATR indicator using True Range + Wilder smoothing."""
-
-    def __init__(self, period: int) -> None:
-        self._period = period
-        super().__init__(name=f"atr_{period}", warmup_bars=period + 1)
+@register("true_range")
+class TrueRange(BaseIndicator):
+    def __init__(self) -> None:
+        super().__init__(name="true_range", warmup_bars=2)
         self._prev_close: float | None = None
-        self._rma = WilderRMA(period)
+        self._value: float | None = None
 
     def update(self, bar: Bar) -> None:
         self._bars_seen += 1
         if self._prev_close is None:
             self._prev_close = bar.close
+            self._value = None
             return
-        tr = max(
+        self._value = max(
             bar.high - bar.low,
             abs(bar.high - self._prev_close),
             abs(bar.low - self._prev_close),
         )
         self._prev_close = bar.close
-        self._rma.update(tr)
 
     def reset(self) -> None:
         self._bars_seen = 0
         self._prev_close = None
-        self._rma.reset()
+        self._value = None
 
     @property
     def value(self) -> float | None:
-        return self._rma.value
+        return self._value
