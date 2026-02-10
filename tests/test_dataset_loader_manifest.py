@@ -119,3 +119,116 @@ def test_load_dataset_manifest_invalid_raises(tmp_path: Path, manifest: dict[str
 
     with pytest.raises(ValueError, match="Invalid manifest.yaml"):
         load_dataset(str(dataset_dir))
+
+
+def test_load_dataset_manifest_legacy_per_symbol_loads(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "dataset"
+    symbols_dir = dataset_dir / "symbols"
+    symbols_dir.mkdir(parents=True)
+
+    manifest = {
+        "dataset_name": "legacy_dataset",
+        "format": "per_symbol_parquet",
+        "path": "symbols/{symbol}.parquet",
+        "symbols": ["AAA", "BBB"],
+    }
+    (dataset_dir / "manifest.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+    aaa_df = pd.DataFrame(
+        [
+            {
+                "ts": pd.Timestamp("2025-01-01 00:00:00", tz="UTC"),
+                "symbol": "AAA",
+                "open": 1.0,
+                "high": 1.1,
+                "low": 0.9,
+                "close": 1.05,
+                "volume": 10.0,
+            },
+            {
+                "ts": pd.Timestamp("2025-01-01 00:02:00", tz="UTC"),
+                "symbol": "AAA",
+                "open": 1.2,
+                "high": 1.3,
+                "low": 1.1,
+                "close": 1.25,
+                "volume": 11.0,
+            },
+        ]
+    )
+    bbb_df = pd.DataFrame(
+        [
+            {
+                "ts": pd.Timestamp("2025-01-01 00:01:00", tz="UTC"),
+                "symbol": "BBB",
+                "open": 2.0,
+                "high": 2.1,
+                "low": 1.9,
+                "close": 2.05,
+                "volume": 12.0,
+            }
+        ]
+    )
+    aaa_df.to_parquet(symbols_dir / "AAA.parquet", index=False)
+    bbb_df.to_parquet(symbols_dir / "BBB.parquet", index=False)
+
+    df = load_dataset(str(dataset_dir))
+
+    assert len(df) == 3
+    assert str(df["ts"].dt.tz) == "UTC"
+    assert list(zip(df["ts"], df["symbol"])) == [
+        (pd.Timestamp("2025-01-01 00:00:00", tz="UTC"), "AAA"),
+        (pd.Timestamp("2025-01-01 00:01:00", tz="UTC"), "BBB"),
+        (pd.Timestamp("2025-01-01 00:02:00", tz="UTC"), "AAA"),
+    ]
+    assert (
+        df[(df["symbol"] == "BBB") & (df["ts"] == pd.Timestamp("2025-01-01 00:02:00", tz="UTC"))].empty
+    )
+
+
+def test_load_dataset_manifest_legacy_missing_symbol_placeholder_raises(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+
+    manifest = {
+        "format": "per_symbol_parquet",
+        "path": "symbols/AAA.parquet",
+        "symbols": ["AAA", "BBB"],
+    }
+    (dataset_dir / "manifest.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"path must include \{symbol\} placeholder"):
+        load_dataset(str(dataset_dir))
+
+
+def test_load_dataset_manifest_legacy_missing_parquet_files_raises(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "dataset"
+    symbols_dir = dataset_dir / "symbols"
+    symbols_dir.mkdir(parents=True)
+
+    manifest = {
+        "format": "per_symbol_parquet",
+        "path": "symbols/{symbol}.parquet",
+        "symbols": ["AAA", "BBB"],
+    }
+    (dataset_dir / "manifest.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+    pd.DataFrame(_valid_rows()).to_parquet(symbols_dir / "AAA.parquet", index=False)
+
+    with pytest.raises(ValueError, match=r"first missing .*BBB.parquet.*missing 1 total"):
+        load_dataset(str(dataset_dir))
+
+
+def test_load_dataset_manifest_unsupported_schema_raises(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+
+    manifest = {
+        "dataset_name": "stable_data_1m_canonical",
+        "format": "csv",
+        "symbols": ["AAA"],
+    }
+    (dataset_dir / "manifest.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported manifest schema"):
+        load_dataset(str(dataset_dir))
