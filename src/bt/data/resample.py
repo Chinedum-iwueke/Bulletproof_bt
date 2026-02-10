@@ -1,0 +1,180 @@
+"""Streaming higher-timeframe (HTF) resampling from 1-minute bars.
+
+This module is event-driven and bar-by-bar only:
+- no lookahead
+- no interpolation/filling of missing 1m bars
+- strict mode emits only complete HTF bars
+
+Timestamp convention:
+- ``HTFBar.ts`` is the HTF bucket start timestamp (UTC).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import pandas as pd
+
+from bt.core.types import Bar
+
+
+_TIMEFRAME_TO_MINUTES: dict[str, int] = {
+    "5m": 5,
+    "15m": 15,
+    "1h": 60,
+}
+
+
+@dataclass(frozen=True)
+class HTFBar:
+    """Closed higher-timeframe bar aggregated from 1m bars."""
+
+    ts: pd.Timestamp
+    symbol: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    timeframe: str
+    n_bars: int
+    expected_bars: int
+    is_complete: bool
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class _BucketState:
+    bucket_start: pd.Timestamp
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    n_bars: int
+    expected_bars: int
+    is_incomplete: bool
+    last_seen_minute: pd.Timestamp
+
+
+class TimeframeResampler:
+    """Streaming per-symbol/per-timeframe resampler for HTF bars.
+
+    Notes:
+    - Input is assumed to be 1-minute bars in UTC.
+    - In strict mode, missing minutes mark a bucket incomplete and it is never emitted.
+
+    TODO:
+    - support non-1m base feeds / partial fill modes.
+    - support emitting incomplete bars when strict=False.
+    """
+
+    def __init__(self, timeframes: list[str], strict: bool = True, base_freq: str = "1min") -> None:
+        if base_freq != "1min":
+            raise ValueError("Only base_freq='1min' is supported in v1")
+        if not timeframes:
+            raise ValueError("At least one timeframe is required")
+
+        unsupported = [tf for tf in timeframes if tf not in _TIMEFRAME_TO_MINUTES]
+        if unsupported:
+            raise ValueError(f"Unsupported timeframe(s): {unsupported}")
+
+        # Preserve declared order while deduplicating.
+        self._timeframes = list(dict.fromkeys(timeframes))
+        self._strict = strict
+        self._base_freq = base_freq
+
+        self._states: dict[tuple[str, str], _BucketState] = {}
+        self._latest_closed: dict[tuple[str, str], HTFBar] = {}
+
+    def reset(self) -> None:
+        """Reset all in-flight and latest-closed state."""
+        self._states.clear()
+        self._latest_closed.clear()
+
+    def latest_closed(self, symbol: str, timeframe: str) -> HTFBar | None:
+        """Return the latest closed HTF bar for a symbol/timeframe."""
+        return self._latest_closed.get((symbol, timeframe))
+
+    def update(self, bar: Bar) -> list[HTFBar]:
+        """Update state with one 1m bar and return newly closed HTF bars."""
+        self._assert_utc(bar.ts)
+        emitted: list[HTFBar] = []
+
+        for timeframe in self._timeframes:
+            bucket_start = self._bucket_start(bar.ts, timeframe)
+            key = (bar.symbol, timeframe)
+            state = self._states.get(key)
+
+            if state is None:
+                self._states[key] = self._init_state(bucket_start, timeframe, bar)
+                continue
+
+            if bucket_start != state.bucket_start:
+                closed = self._finalize(bar.symbol, timeframe, state)
+                if closed is not None:
+                    emitted.append(closed)
+                    self._latest_closed[key] = closed
+                self._states[key] = self._init_state(bucket_start, timeframe, bar)
+                continue
+
+            # Same bucket: detect minute gap and roll current candle.
+            if bar.ts - state.last_seen_minute > pd.Timedelta(minutes=1):
+                state.is_incomplete = True
+
+            state.high = max(state.high, bar.high)
+            state.low = min(state.low, bar.low)
+            state.close = bar.close
+            state.volume += bar.volume
+            state.n_bars += 1
+            state.last_seen_minute = bar.ts
+
+        return emitted
+
+    @staticmethod
+    def _assert_utc(ts: pd.Timestamp) -> None:
+        if ts.tz is None:
+            raise AssertionError("bar.ts must be timezone-aware UTC")
+        if str(ts.tz) != "UTC":
+            raise AssertionError("bar.ts must be UTC")
+
+    @staticmethod
+    def _bucket_start(ts: pd.Timestamp, timeframe: str) -> pd.Timestamp:
+        minutes = _TIMEFRAME_TO_MINUTES[timeframe]
+        if timeframe == "1h":
+            return ts.floor("1h")
+        return ts.floor(f"{minutes}min")
+
+    @staticmethod
+    def _init_state(bucket_start: pd.Timestamp, timeframe: str, bar: Bar) -> _BucketState:
+        expected = _TIMEFRAME_TO_MINUTES[timeframe]
+        return _BucketState(
+            bucket_start=bucket_start,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
+            n_bars=1,
+            expected_bars=expected,
+            is_incomplete=False,
+            last_seen_minute=bar.ts,
+        )
+
+    def _finalize(self, symbol: str, timeframe: str, state: _BucketState) -> HTFBar | None:
+        is_complete = (not state.is_incomplete) and (state.n_bars == state.expected_bars)
+        if self._strict and not is_complete:
+            return None
+
+        return HTFBar(
+            ts=state.bucket_start,
+            symbol=symbol,
+            open=state.open,
+            high=state.high,
+            low=state.low,
+            close=state.close,
+            volume=state.volume,
+            timeframe=timeframe,
+            n_bars=state.n_bars,
+            expected_bars=state.expected_bars,
+            is_complete=is_complete,
+            metadata={},
+        )
