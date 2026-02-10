@@ -1,0 +1,372 @@
+"""Deterministic experiment grid runner."""
+from __future__ import annotations
+
+import argparse
+import copy
+import csv
+import itertools
+import json
+import re
+import shutil
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from bt.core.engine import BacktestEngine
+from bt.data.feed import HistoricalDataFeed
+from bt.data.loader import load_dataset
+from bt.data.resample import TimeframeResampler
+from bt.execution.execution_model import ExecutionModel
+from bt.execution.fees import FeeModel
+from bt.execution.slippage import SlippageModel
+from bt.logging.jsonl import JsonlWriter
+from bt.logging.trades import TradesCsvWriter
+from bt.metrics.performance import compute_performance, write_performance_artifacts
+from bt.portfolio.portfolio import Portfolio
+from bt.risk.risk_engine import RiskEngine
+from bt.strategy.coinflip import CoinFlipStrategy
+from bt.universe.universe import UniverseEngine
+
+
+_TEMPLATE_PATTERN = re.compile(r"{([^{}]+)}")
+_SUMMARY_COLUMNS = [
+    "run_name",
+    "strategy_adx_min",
+    "strategy_vol_floor_pct",
+    "total_trades",
+    "ev_net",
+    "ev_gross",
+    "final_equity",
+    "max_drawdown_pct",
+    "max_drawdown_duration_bars",
+    "tail_loss_p95",
+    "tail_loss_p99",
+    "sharpe",
+    "sortino",
+    "mar",
+    "max_consecutive_losses",
+    "worst_streak_loss",
+    "fee_total",
+    "slippage_total",
+    "win_rate",
+]
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid YAML mapping at {path}")
+    return data
+
+
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def set_by_dotpath(cfg: dict[str, Any], dotpath: str, value: Any) -> None:
+    parts = dotpath.split(".")
+    current = cfg
+    for part in parts[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[part] = next_value
+        current = next_value
+    current[parts[-1]] = value
+
+
+def get_by_dotpath(cfg: dict[str, Any], dotpath: str) -> Any:
+    current: Any = cfg
+    for part in dotpath.split("."):
+        if not isinstance(current, dict) or part not in current:
+            raise KeyError(dotpath)
+        current = current[part]
+    return current
+
+
+def _validate_experiment(exp_cfg: dict[str, Any]) -> None:
+    if exp_cfg.get("version") != 1:
+        raise ValueError("Experiment config version must be 1")
+
+    fixed = exp_cfg.get("fixed")
+    if fixed is not None and not isinstance(fixed, dict):
+        raise ValueError("Experiment config fixed must be a mapping when provided")
+
+    grid = exp_cfg.get("grid")
+    if not isinstance(grid, dict) or not grid:
+        raise ValueError("Experiment config grid must be a non-empty mapping")
+
+    for key, values in grid.items():
+        if not isinstance(values, list) or not values:
+            raise ValueError(f"Experiment grid values for '{key}' must be non-empty lists")
+
+
+def _expand_grid(grid: dict[str, list[Any]]) -> list[dict[str, Any]]:
+    keys = sorted(grid.keys())
+    values_product = itertools.product(*(grid[key] for key in keys))
+    return [dict(zip(keys, values, strict=True)) for values in values_product]
+
+
+def _render_run_suffix(template: str, context_cfg: dict[str, Any]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        dotpath = match.group(1)
+        try:
+            value = get_by_dotpath(context_cfg, dotpath)
+        except KeyError as exc:
+            raise ValueError(f"Run naming template references missing key: {dotpath}") from exc
+        return str(value)
+
+    return _TEMPLATE_PATTERN.sub(replace, template)
+
+
+def _build_strategy(config: dict[str, Any]):
+    strategy_cfg = config.get("strategy")
+    if not isinstance(strategy_cfg, dict):
+        raise ValueError("Strategy config missing 'strategy' mapping")
+
+    strategy_name = strategy_cfg.get("name")
+    if not strategy_name:
+        raise ValueError("Strategy config missing strategy.name")
+
+    if strategy_name == "coinflip":
+        return CoinFlipStrategy(
+            seed=int(strategy_cfg.get("seed", config.get("seed", 42))),
+            p_trade=float(strategy_cfg.get("p_trade", config.get("p_trade", 0.2))),
+            cooldown_bars=int(strategy_cfg.get("cooldown_bars", config.get("cooldown_bars", 0))),
+        )
+
+    raise ValueError(
+        f"Strategy config missing implementation for '{strategy_name}'. "
+        "TODO: wire this strategy in run_experiment_grid.py without changing engine loop."
+    )
+
+
+def _ensure_timeframe_config(config: dict[str, Any]) -> None:
+    timeframe = config.get("timeframe")
+    if timeframe is None:
+        return
+
+    htf_resampler = config.get("htf_resampler")
+    has_structured_resampler = isinstance(htf_resampler, dict) and bool(htf_resampler.get("enabled"))
+    htf_timeframes = config.get("htf_timeframes")
+    has_timeframe_list = isinstance(htf_timeframes, list) and str(timeframe) in {
+        str(item) for item in htf_timeframes
+    }
+
+    if not has_structured_resampler and not has_timeframe_list:
+        raise ValueError(
+            f"HTF resampler not enabled; set config.htf_resampler.enabled=true and timeframe={timeframe}"
+        )
+
+
+def _build_engine(config: dict[str, Any], bars_df, run_dir: Path) -> BacktestEngine:
+    htf_timeframes = config.get("htf_timeframes")
+    if htf_timeframes:
+        config = copy.deepcopy(config)
+        config["htf_resampler"] = TimeframeResampler(
+            timeframes=[str(tf) for tf in htf_timeframes],
+            strict=bool(config.get("htf_strict", True)),
+        )
+
+    datafeed = HistoricalDataFeed(bars_df)
+    universe = UniverseEngine(
+        min_history_bars=int(config.get("min_history_bars", 1)),
+        lookback_bars=int(config.get("lookback_bars", 1)),
+        min_avg_volume=float(config.get("min_avg_volume", 0.0)),
+        lag_bars=int(config.get("lag_bars", 0)),
+    )
+    strategy = _build_strategy(config)
+    risk = RiskEngine(
+        max_positions=int(config.get("max_positions", 5)),
+        risk_per_trade_pct=float(config.get("risk_per_trade_pct", 0.01)),
+        max_notional_per_symbol=config.get("max_notional_per_symbol"),
+    )
+
+    fee_model = FeeModel(
+        maker_fee_bps=float(config.get("maker_fee_bps", 0.0)),
+        taker_fee_bps=float(config.get("taker_fee_bps", 0.0)),
+    )
+    slippage_model = SlippageModel(
+        k=float(config.get("slippage_k", 1.0)),
+        atr_pct_cap=float(config.get("atr_pct_cap", 0.20)),
+        impact_cap=float(config.get("impact_cap", 0.05)),
+    )
+    execution = ExecutionModel(
+        fee_model=fee_model,
+        slippage_model=slippage_model,
+        delay_bars=int(config.get("signal_delay_bars", 1)),
+    )
+
+    portfolio = Portfolio(
+        initial_cash=float(config.get("initial_cash", 100000.0)),
+        max_leverage=float(config.get("max_leverage", 2.0)),
+    )
+
+    return BacktestEngine(
+        datafeed=datafeed,
+        universe=universe,
+        strategy=strategy,
+        risk=risk,
+        execution=execution,
+        portfolio=portfolio,
+        decisions_writer=JsonlWriter(run_dir / "decisions.jsonl"),
+        fills_writer=JsonlWriter(run_dir / "fills.jsonl"),
+        trades_writer=TradesCsvWriter(run_dir / "trades.csv"),
+        equity_path=run_dir / "equity.csv",
+        config=config,
+    )
+
+
+def _build_summary_row(run_name: str, params: dict[str, Any], perf: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "run_name": run_name,
+        "strategy_adx_min": params.get("strategy.adx_min"),
+        "strategy_vol_floor_pct": params.get("strategy.vol_floor_pct"),
+        "total_trades": perf.get("total_trades"),
+        "ev_net": perf.get("ev_net"),
+        "ev_gross": perf.get("ev_gross"),
+        "final_equity": perf.get("final_equity"),
+        "max_drawdown_pct": perf.get("max_drawdown_pct"),
+        "max_drawdown_duration_bars": perf.get("max_drawdown_duration_bars"),
+        "tail_loss_p95": perf.get("tail_loss_p95"),
+        "tail_loss_p99": perf.get("tail_loss_p99"),
+        "sharpe": perf.get("sharpe_annualized"),
+        "sortino": perf.get("sortino_annualized"),
+        "mar": perf.get("mar_ratio"),
+        "max_consecutive_losses": perf.get("max_consecutive_losses"),
+        "worst_streak_loss": perf.get("worst_streak_loss"),
+        "fee_total": perf.get("fee_total"),
+        "slippage_total": perf.get("slippage_total"),
+        "win_rate": perf.get("win_rate"),
+    }
+
+
+def run_grid(config_path: Path, experiment_path: Path, data_path: str, out_path: Path, *, force: bool = False) -> None:
+    base_cfg = _load_yaml(config_path)
+    exp_cfg = _load_yaml(experiment_path)
+    _validate_experiment(exp_cfg)
+
+    runs_dir = out_path / "runs"
+    if runs_dir.exists() and any(runs_dir.iterdir()) and not force:
+        raise RuntimeError(f"Output already contains runs: {runs_dir}")
+    if force and out_path.exists():
+        shutil.rmtree(out_path)
+
+    out_path.mkdir(parents=True, exist_ok=True)
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    bars_df = load_dataset(data_path)
+
+    grid = exp_cfg["grid"]
+    grid_runs = _expand_grid(grid)
+    sorted_keys = sorted(grid.keys())
+
+    with (out_path / "grid_used.yaml").open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(
+            {
+                "experiment": exp_cfg,
+                "resolved_grid_keys": sorted_keys,
+                "grid_runs": grid_runs,
+                "paths": {
+                    "config": str(config_path),
+                    "experiment": str(experiment_path),
+                    "data": str(data_path),
+                },
+            },
+            handle,
+            sort_keys=False,
+        )
+
+    run_template = (
+        exp_cfg.get("run_naming", {}).get("template")
+        if isinstance(exp_cfg.get("run_naming"), dict)
+        else None
+    ) or "run"
+    fixed_overrides = exp_cfg.get("fixed") or {}
+
+    summary_rows: list[dict[str, Any]] = []
+
+    for index, params in enumerate(grid_runs, start=1):
+        overrides = copy.deepcopy(fixed_overrides)
+        for dotpath, value in params.items():
+            set_by_dotpath(overrides, dotpath, value)
+
+        run_cfg = deep_merge(base_cfg, overrides)
+        _ensure_timeframe_config(run_cfg)
+
+        run_suffix = _render_run_suffix(run_template, run_cfg)
+        run_name = f"run_{index:03d}__{run_suffix}"
+        run_dir = runs_dir / run_name
+        run_dir.mkdir(parents=True, exist_ok=False)
+
+        with (run_dir / "config_used.yaml").open("w", encoding="utf-8") as handle:
+            yaml.safe_dump(run_cfg, handle, sort_keys=False)
+
+        engine = _build_engine(run_cfg, bars_df, run_dir)
+        engine.run()
+
+        report = compute_performance(run_dir)
+        write_performance_artifacts(report, run_dir)
+
+        performance_path = run_dir / "performance.json"
+        if not performance_path.exists():
+            raise RuntimeError(f"Missing performance.json for run '{run_name}' at {performance_path}")
+
+        with performance_path.open("r", encoding="utf-8") as handle:
+            perf_payload = json.load(handle)
+
+        summary_rows.append(_build_summary_row(run_name, params, perf_payload))
+
+    with (out_path / "summary.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=_SUMMARY_COLUMNS)
+        writer.writeheader()
+        for row in summary_rows:
+            writer.writerow(row)
+
+    with (out_path / "summary.json").open("w", encoding="utf-8") as handle:
+        json.dump(
+            {
+                "metadata": {
+                    "config": str(config_path),
+                    "experiment": str(experiment_path),
+                    "data": str(data_path),
+                    "out": str(out_path),
+                    "run_count": len(summary_rows),
+                },
+                "runs": summary_rows,
+            },
+            handle,
+            indent=2,
+            sort_keys=True,
+        )
+        handle.write("\n")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run deterministic backtest experiment grid")
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--experiment", required=True)
+    parser.add_argument("--data", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--force", action="store_true")
+    args = parser.parse_args()
+
+    run_grid(
+        config_path=Path(args.config),
+        experiment_path=Path(args.experiment),
+        data_path=args.data,
+        out_path=Path(args.out),
+        force=args.force,
+    )
+
+
+if __name__ == "__main__":
+    main()
