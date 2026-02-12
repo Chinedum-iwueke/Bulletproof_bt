@@ -24,6 +24,7 @@ class Portfolio:
         self.free_margin = initial_cash
         self._position_book = PositionBook()
         self._mark_prices: dict[str, float] = {}
+        self._last_fills: list[Fill] = []
 
     @property
     def position_book(self) -> PositionBook:
@@ -32,6 +33,7 @@ class Portfolio:
     def apply_fills(self, fills: list[Fill]) -> list[Trade]:
         """Apply fills to position book and cash/margin. Return trades closed."""
         trades: list[Trade] = []
+        self._last_fills = list(fills)[-5:]
         for fill in fills:
             self.cash -= fill.fee
             if fill.symbol not in self._mark_prices:
@@ -60,7 +62,24 @@ class Portfolio:
         self.equity = self.cash + self.realized_pnl + self.unrealized_pnl
         self.used_margin = self._calculate_used_margin()
         self.free_margin = self.equity - self.used_margin
-        assert self.free_margin >= -1e-9
+        if self.free_margin < -1e-9:
+            fills_summary = [
+                {
+                    "symbol": fill.symbol,
+                    "qty": fill.qty,
+                    "price": fill.price,
+                    "fee": fill.fee,
+                    "slippage": fill.slippage,
+                }
+                for fill in self._last_fills
+            ]
+            raise RuntimeError(
+                "Negative free_margin after apply_fills(). "
+                f"free_margin={self.free_margin:.6f}, used_margin={self.used_margin:.6f}, "
+                f"cash={self.cash:.6f}, equity={self.equity:.6f}. "
+                "This indicates a bug in risk sizing/reservation or execution cost buffers. "
+                f"last_fills={fills_summary}"
+            )
 
     def _update_unrealized_pnl(self) -> None:
         total_unrealized = 0.0

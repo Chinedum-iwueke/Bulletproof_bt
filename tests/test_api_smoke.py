@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
+
 from bt.api import run_backtest, run_grid
 
 
@@ -48,10 +50,40 @@ def test_api_run_backtest_creates_run_dir_and_artifacts(tmp_path: Path) -> None:
 
 
 def test_api_run_grid_creates_experiment_outputs(tmp_path: Path) -> None:
+    config_path = tmp_path / "engine.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "initial_cash": 100000.0,
+                "max_leverage": 5.0,
+                "risk": {"max_positions": 1, "risk_per_trade_pct": 0.001},
+                "signal_delay_bars": 1,
+                "strategy": {"name": "coinflip", "p_trade": 0.0, "cooldown_bars": 0, "seed": 7},
+                "htf_timeframes": ["15m"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    experiment_path = tmp_path / "experiment.yaml"
+    experiment_path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "fixed": {"timeframe": "15m", "strategy": {"name": "coinflip", "p_trade": 0.0}},
+                "grid": {"strategy.seed": [7, 8]},
+                "run_naming": {"template": "seed{strategy.seed}"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
     experiment_dir = Path(
         run_grid(
-            config_path="configs/engine.yaml",
-            experiment_path="configs/experiments/h1_volfloor_donchian.yaml",
+            config_path=str(config_path),
+            experiment_path=str(experiment_path),
             data_path="data/curated/sample.csv",
             out_dir=str(tmp_path / "grid_out"),
         )
