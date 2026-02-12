@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from bt.core.types import Bar
+from bt.data.config_utils import parse_date_range
 from bt.data.dataset import DatasetManifest
 from bt.data.symbol_source import RowTuple, SymbolDataSource
 
@@ -39,9 +40,29 @@ class StreamingHistoricalDataFeed:
         if not isinstance(data_cfg, dict):
             raise ValueError("config.data must be a mapping when provided")
 
-        date_range = data_cfg.get("date_range")
+        try:
+            date_range = parse_date_range(self._config)
+        except ValueError as exc:
+            raise ValueError(f"dataset_dir='{self._dataset_dir}': {exc}") from exc
+
         row_limit = data_cfg.get("row_limit_per_symbol")
-        chunksize = int(data_cfg.get("chunksize", 50_000))
+        if row_limit is not None:
+            if not isinstance(row_limit, int) or row_limit <= 0:
+                raise ValueError(
+                    f"dataset_dir='{self._dataset_dir}': "
+                    f"data.row_limit_per_symbol must be > 0 (got: {row_limit!r})"
+                )
+
+        chunksize_raw = data_cfg.get("chunksize", 50_000)
+        if chunksize_raw is None:
+            chunksize = 50_000
+        else:
+            if not isinstance(chunksize_raw, int) or chunksize_raw <= 0:
+                raise ValueError(
+                    f"dataset_dir='{self._dataset_dir}': "
+                    f"data.chunksize must be > 0 (got: {chunksize_raw!r})"
+                )
+            chunksize = chunksize_raw
 
         for symbol in self._symbols:
             rel_path = self._manifest.files_by_symbol.get(symbol)

@@ -58,3 +58,28 @@ for bar in bars:
     if ind.is_ready:
         print(ind.value)
 ```
+
+
+## Streaming acceleration knobs
+
+When using dataset-directory streaming mode, you can cheaply reduce scope for smoke tests and debugging:
+
+- `data.symbols_subset`: explicit symbol allow-list.
+- `data.max_symbols`: cap the selected symbol list after subset filtering.
+- `data.date_range`: UTC window filter applied per symbol (`start` inclusive, `end` exclusive).
+- `data.row_limit_per_symbol`: maximum emitted rows per symbol.
+- `data.chunksize`: parquet/csv chunk batch size used by each per-symbol source.
+
+Quick smoke-test example:
+
+```yaml
+data:
+  mode: streaming
+  symbols_subset: [AAA, BBB]
+  max_symbols: 2
+  date_range:
+    start: "2025-01-01T00:00:00Z"
+    end: "2025-01-02T00:00:00Z"
+  row_limit_per_symbol: 100
+  chunksize: 1000
+```
