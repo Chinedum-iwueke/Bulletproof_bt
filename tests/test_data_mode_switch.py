@@ -9,11 +9,11 @@ import pytest
 from bt.data.load_feed import load_feed
 
 
-def test_dataset_directory_defaults_to_streaming_not_implemented(tmp_path: Path) -> None:
+def test_dataset_directory_defaults_to_streaming_requires_manifest(tmp_path: Path) -> None:
     dataset_dir = tmp_path / "dataset_dir"
     dataset_dir.mkdir()
 
-    with pytest.raises(NotImplementedError, match="Streaming dataset directory feed is not implemented yet"):
+    with pytest.raises(ValueError, match="manifest.yaml"):
         load_feed(str(dataset_dir), {})
 
 
