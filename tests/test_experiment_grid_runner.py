@@ -22,7 +22,7 @@ def _load_run_grid():
 run_grid = _load_run_grid()
 
 
-def _write_manifest_dataset(dataset_dir: Path) -> None:
+def _write_manifest_dataset(dataset_dir: Path) -> Path:
     dataset_dir.mkdir(parents=True, exist_ok=True)
 
     ts_index = pd.date_range("2024-01-01", periods=30, freq="min", tz="UTC")
@@ -49,10 +49,12 @@ def _write_manifest_dataset(dataset_dir: Path) -> None:
     with (dataset_dir / "manifest.yaml").open("w", encoding="utf-8") as handle:
         yaml.safe_dump(manifest, handle, sort_keys=False)
 
+    return dataset_dir / "bars.parquet"
+
 
 def test_experiment_grid_runner_deterministic_outputs(tmp_path: Path) -> None:
     dataset_dir = tmp_path / "dataset"
-    _write_manifest_dataset(dataset_dir)
+    bars_path = _write_manifest_dataset(dataset_dir)
 
     base_config = {
         "signal_delay_bars": 1,
@@ -95,7 +97,7 @@ def test_experiment_grid_runner_deterministic_outputs(tmp_path: Path) -> None:
         yaml.safe_dump(experiment_cfg, handle, sort_keys=False)
 
     out_dir = tmp_path / "out"
-    run_grid(base_cfg_path, exp_path, str(dataset_dir), out_dir)
+    run_grid(base_cfg_path, exp_path, str(bars_path), out_dir)
 
     run_dirs = sorted((out_dir / "runs").iterdir())
     assert len(run_dirs) == 15

@@ -7,8 +7,7 @@ from pathlib import Path
 import yaml
 
 from bt.core.engine import BacktestEngine
-from bt.data.feed import HistoricalDataFeed
-from bt.data.loader import load_dataset
+from bt.data.load_feed import load_feed
 from bt.data.resample import TimeframeResampler
 from bt.execution.execution_model import ExecutionModel
 from bt.execution.fees import FeeModel
@@ -64,8 +63,7 @@ def main() -> None:
     write_config_used(run_dir, config)
 
     dataset_path = args.data
-    bars_df = load_dataset(dataset_path)
-    datafeed = HistoricalDataFeed(bars_df)
+    datafeed = load_feed(dataset_path, config)
 
     universe = UniverseEngine(
         min_history_bars=int(config.get("min_history_bars", 1)),
