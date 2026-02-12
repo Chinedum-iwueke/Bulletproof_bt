@@ -11,3 +11,6 @@ dist/
 .pytest_cache/
 outputs/runs/
 outputs/cache/
+
+# Local / personal overrides (do not commit)
+configs/local/
