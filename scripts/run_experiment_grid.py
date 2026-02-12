@@ -20,7 +20,7 @@ from bt.execution.execution_model import ExecutionModel
 from bt.execution.fees import FeeModel
 from bt.execution.slippage import SlippageModel
 from bt.logging.jsonl import JsonlWriter
-from bt.logging.trades import TradesCsvWriter
+from bt.logging.trades import TradesCsvWriter, write_data_scope
 from bt.metrics.performance import compute_performance, write_performance_artifacts
 from bt.portfolio.portfolio import Portfolio
 from bt.risk.risk_engine import RiskEngine
@@ -315,6 +315,11 @@ def run_grid(config_path: Path, experiment_path: Path, data_path: str, out_path:
 
         with (run_dir / "config_used.yaml").open("w", encoding="utf-8") as handle:
             yaml.safe_dump(run_cfg, handle, sort_keys=False)
+        write_data_scope(
+            run_dir,
+            config=run_cfg,
+            dataset_dir=data_path if Path(data_path).is_dir() else None,
+        )
 
         datafeed = load_feed(data_path, run_cfg)
         engine = _build_engine(run_cfg, datafeed, run_dir)
