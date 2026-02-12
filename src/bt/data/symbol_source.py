@@ -37,10 +37,10 @@ class SymbolDataSource:
 
     def __init__(
         self,
-        *,
         symbol: str,
         path: str,
-        date_range: dict[str, Any] | None = None,
+        *,
+        date_range: dict[str, Any] | tuple[Any, Any] | None = None,
         row_limit: int | None = None,
         chunksize: int = 50_000,
     ) -> None:
@@ -59,18 +59,21 @@ class SymbolDataSource:
         self._chunksize = chunksize
         self._date_range = self._parse_date_range(date_range)
 
-    def _parse_date_range(self, date_range: dict[str, Any] | None) -> DateRange:
+    def _parse_date_range(self, date_range: dict[str, Any] | tuple[Any, Any] | None) -> DateRange:
         if date_range is None:
             return DateRange(start=None, end=None)
-        if not isinstance(date_range, dict):
-            raise ValueError("date_range must be a mapping with optional start/end")
 
-        start_raw = date_range.get("start")
-        end_raw = date_range.get("end")
+        if isinstance(date_range, dict):
+            start_raw = date_range.get("start")
+            end_raw = date_range.get("end")
+        elif isinstance(date_range, tuple) and len(date_range) == 2:
+            start_raw, end_raw = date_range
+        else:
+            raise ValueError("date_range must be a (start, end) tuple or mapping with optional start/end")
         start = pd.Timestamp(start_raw).tz_convert("UTC") if start_raw is not None else None
         end = pd.Timestamp(end_raw).tz_convert("UTC") if end_raw is not None else None
         if start is not None and end is not None and start > end:
-            raise ValueError("date_range.start must be <= date_range.end")
+            raise ValueError("date_range start must be <= end")
         return DateRange(start=start, end=end)
 
     def __iter__(self) -> Iterator[RowTuple]:
@@ -147,13 +150,13 @@ class SymbolDataSource:
         ts = _parse_ts_utc(normalized["ts"], symbol=self._symbol, row_number=row_number)
         if last_ts is not None and ts <= last_ts:
             raise ValueError(
-                f"{self._symbol}: timestamps must be strictly increasing; row {row_number} has {ts}"
+                f"{self._symbol}: non-monotonic ts in {self._path}; row {row_number} has {ts}"
             )
 
         start, end = self._date_range.start, self._date_range.end
         if start is not None and ts < start:
             return None
-        if end is not None and ts > end:
+        if end is not None and ts >= end:
             return None
 
         o = _to_float(normalized["open"], symbol=self._symbol, row_number=row_number, field="open")
@@ -162,13 +165,12 @@ class SymbolDataSource:
         c = _to_float(normalized["close"], symbol=self._symbol, row_number=row_number, field="close")
         v = _to_float(normalized["volume"], symbol=self._symbol, row_number=row_number, field="volume")
 
-        if l > min(o, c):
-            raise ValueError(f"{self._symbol}: row {row_number} low must be <= min(open, close)")
-        if h < max(o, c):
-            raise ValueError(f"{self._symbol}: row {row_number} high must be >= max(open, close)")
-        if h < l:
-            raise ValueError(f"{self._symbol}: row {row_number} high must be >= low")
+        if l > min(o, c) or h < max(o, c) or h < l:
+            raise ValueError(
+                f"{self._symbol}: invalid OHLC at row {row_number} in {self._path}: "
+                f"open={o}, high={h}, low={l}, close={c}"
+            )
         if v < 0:
-            raise ValueError(f"{self._symbol}: row {row_number} volume must be >= 0")
+            raise ValueError(f"{self._symbol}: negative volume at row {row_number} in {self._path}: {v}")
 
         return (ts, o, h, l, c, v)
