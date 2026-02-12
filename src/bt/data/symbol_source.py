@@ -1,232 +1,174 @@
-"""Streaming per-symbol data source with strict row validation."""
+"""Streaming per-symbol bar source with strict row validation."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
+from typing import Any, Iterator
 
 import pandas as pd
-import pyarrow.dataset as ds
 
 
-def _normalize_columns(cols: Iterable[str]) -> dict[str, str]:
-    rename_map = {
-        "timestamp": "ts",
-        "time": "ts",
-        "date": "ts",
-        "o": "open",
-        "h": "high",
-        "l": "low",
-        "c": "close",
-        "vol": "volume",
-    }
-    return {col: rename_map.get(col.lower(), col.lower()) for col in cols}
+RowTuple = tuple[pd.Timestamp, float, float, float, float, float]
 
 
-def _parse_ts_like(series: pd.Series) -> pd.Series:
-    if isinstance(series.dtype, pd.DatetimeTZDtype):
-        parsed = pd.to_datetime(series, errors="coerce", utc=True)
-    elif pd.api.types.is_datetime64_dtype(series):
-        raise ValueError("timestamps must be timezone-aware UTC")
-    elif pd.api.types.is_numeric_dtype(series):
-        parsed = pd.to_datetime(series, unit="ms", errors="coerce", utc=True)
-    else:
-        parsed = pd.to_datetime(series, errors="coerce", utc=True)
-
-    if parsed.isna().any():
-        bad_index = int(parsed[parsed.isna()].index[0])
-        bad_value = series.loc[bad_index]
-        raise ValueError(f"unparseable timestamp value at index {bad_index}: {bad_value!r}")
-
-    return parsed
+@dataclass(frozen=True)
+class DateRange:
+    start: pd.Timestamp | None
+    end: pd.Timestamp | None
 
 
-def _parse_ts_array(values: object) -> list[datetime]:
-    parsed = _parse_ts_like(pd.Series(values))
-    return [value.to_pydatetime() for value in parsed]
+def _parse_ts_utc(value: Any, *, symbol: str, row_number: int) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        raise ValueError(f"{symbol}: row {row_number} ts must be timezone-aware UTC")
+    ts = ts.tz_convert("UTC")
+    return ts
 
 
-def _validate_date_range(date_range: tuple[datetime, datetime]) -> tuple[datetime, datetime]:
-    start, end = date_range
-    if start.tzinfo is None or start.utcoffset() is None:
-        raise ValueError("date_range start must be tz-aware UTC")
-    if end.tzinfo is None or end.utcoffset() is None:
-        raise ValueError("date_range end must be tz-aware UTC")
-    if start.astimezone(timezone.utc) != start:
-        raise ValueError("date_range start must be UTC")
-    if end.astimezone(timezone.utc) != end:
-        raise ValueError("date_range end must be UTC")
-    if not start < end:
-        raise ValueError("date_range must satisfy start < end (inclusive start, exclusive end)")
-    return start, end
+def _to_float(value: Any, *, symbol: str, row_number: int, field: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{symbol}: row {row_number} field '{field}' must be numeric") from exc
 
 
 class SymbolDataSource:
+    """Iterate symbol bars from a CSV/parquet file one row at a time."""
+
     def __init__(
         self,
+        *,
         symbol: str,
         path: str,
-        *,
-        date_range: Optional[tuple[datetime, datetime]] = None,
-        row_limit: Optional[int] = None,
-        chunksize: int = 200_000,
+        date_range: dict[str, Any] | None = None,
+        row_limit: int | None = None,
+        chunksize: int = 50_000,
     ) -> None:
-        self.symbol = symbol
-        self.path = path
+        if not symbol:
+            raise ValueError("symbol must be a non-empty string")
+        self._symbol = symbol
         self._path = Path(path)
-        self.row_limit = row_limit
-        self.chunksize = chunksize
-        self.date_range = _validate_date_range(date_range) if date_range is not None else None
+        if not self._path.is_file():
+            raise ValueError(f"{symbol}: data file not found: {path}")
+        if row_limit is not None and row_limit <= 0:
+            raise ValueError("row_limit must be positive when provided")
+        if chunksize <= 0:
+            raise ValueError("chunksize must be positive")
 
-        if self.row_limit is not None and self.row_limit < 0:
-            raise ValueError("row_limit must be >= 0")
-        if self.chunksize <= 0:
-            raise ValueError("chunksize must be > 0")
+        self._row_limit = row_limit
+        self._chunksize = chunksize
+        self._date_range = self._parse_date_range(date_range)
 
-    def __iter__(self) -> Iterator[tuple[datetime, float, float, float, float, float]]:
-        prev_ts: datetime | None = None
-        emitted_count = 0
+    def _parse_date_range(self, date_range: dict[str, Any] | None) -> DateRange:
+        if date_range is None:
+            return DateRange(start=None, end=None)
+        if not isinstance(date_range, dict):
+            raise ValueError("date_range must be a mapping with optional start/end")
 
-        for row in self._iter_rows():
-            ts, o, h, l, c, v = row
+        start_raw = date_range.get("start")
+        end_raw = date_range.get("end")
+        start = pd.Timestamp(start_raw).tz_convert("UTC") if start_raw is not None else None
+        end = pd.Timestamp(end_raw).tz_convert("UTC") if end_raw is not None else None
+        if start is not None and end is not None and start > end:
+            raise ValueError("date_range.start must be <= date_range.end")
+        return DateRange(start=start, end=end)
 
-            if prev_ts is not None and ts <= prev_ts:
-                raise ValueError(
-                    f"{self.symbol} {self.path}: non-monotonic ts at {ts} (prev={prev_ts})"
-                )
-            if l > min(o, c) or h < max(o, c) or l > h:
-                raise ValueError(
-                    f"{self.symbol} {self.path}: invalid OHLC at {ts} "
-                    f"(open={o}, high={h}, low={l}, close={c})"
-                )
-            if v < 0:
-                raise ValueError(
-                    f"{self.symbol} {self.path}: negative volume at {ts} (volume={v})"
-                )
-
-            prev_ts = ts
-            yield row
-            emitted_count += 1
-
-            if self.row_limit is not None and emitted_count >= self.row_limit:
-                return
-
-    def _iter_rows(self) -> Iterator[tuple[datetime, float, float, float, float, float]]:
+    def __iter__(self) -> Iterator[RowTuple]:
         suffix = self._path.suffix.lower()
         if suffix == ".csv":
-            yield from self._iter_rows_csv()
+            yield from self._iter_csv()
             return
         if suffix == ".parquet":
-            yield from self._iter_rows_parquet()
+            yield from self._iter_parquet()
             return
-        raise ValueError(f"Unsupported file type for symbol source: {self.path}")
+        raise ValueError(f"{self._symbol}: unsupported file extension: {self._path.suffix}")
 
-    def _iter_rows_csv(self) -> Iterator[tuple[datetime, float, float, float, float, float]]:
-        for chunk in pd.read_csv(self._path, chunksize=self.chunksize):
-            normalized = _normalize_columns(chunk.columns)
-            chunk = chunk.rename(columns=normalized)
+    def _iter_csv(self) -> Iterator[RowTuple]:
+        emitted = 0
+        last_ts: pd.Timestamp | None = None
+        for chunk in pd.read_csv(self._path, chunksize=self._chunksize):
+            for row in chunk.itertuples(index=False):
+                as_dict = row._asdict()
+                validated = self._validate_row(as_dict, emitted + 1, last_ts)
+                if validated is None:
+                    continue
+                yield validated
+                emitted += 1
+                last_ts = validated[0]
+                if self._row_limit is not None and emitted >= self._row_limit:
+                    return
 
-            if "ts" not in chunk.columns:
-                raise ValueError(f"{self.symbol} {self.path}: missing ts/timestamp column")
-            for col in ("open", "high", "low", "close", "volume"):
-                if col not in chunk.columns:
-                    raise ValueError(f"{self.symbol} {self.path}: missing required column {col}")
+    def _iter_parquet(self) -> Iterator[RowTuple]:
+        emitted = 0
+        last_ts: pd.Timestamp | None = None
 
-            ts_values = _parse_ts_like(chunk["ts"])
+        try:
+            import pyarrow.parquet as pq
+        except ImportError:
+            frame = pd.read_parquet(self._path)
+            batches = [frame]
+        else:
+            parquet_file = pq.ParquetFile(self._path)
+            batches = (
+                batch.to_pandas()
+                for batch in parquet_file.iter_batches(batch_size=self._chunksize)
+            )
 
-            for idx, ts in enumerate(ts_values):
-                ts_dt = ts.to_pydatetime()
-                if self.date_range is not None:
-                    start, end = self.date_range
-                    if ts_dt < start or ts_dt >= end:
-                        continue
+        for batch_df in batches:
+            for row in batch_df.itertuples(index=False):
+                as_dict = row._asdict()
+                validated = self._validate_row(as_dict, emitted + 1, last_ts)
+                if validated is None:
+                    continue
+                yield validated
+                emitted += 1
+                last_ts = validated[0]
+                if self._row_limit is not None and emitted >= self._row_limit:
+                    return
 
-                if "symbol" in chunk.columns:
-                    row_symbol = str(chunk.iloc[idx]["symbol"])
-                    if row_symbol != self.symbol:
-                        raise ValueError(
-                            f"{self.symbol} {self.path}: unexpected symbol {row_symbol!r} at {ts_dt}"
-                        )
+    def _validate_row(
+        self,
+        row: dict[str, Any],
+        row_number: int,
+        last_ts: pd.Timestamp | None,
+    ) -> RowTuple | None:
+        normalized = {str(key).strip().lower(): value for key, value in row.items()}
+        required = ["ts", "open", "high", "low", "close", "volume"]
+        missing = [col for col in required if col not in normalized]
+        if missing:
+            raise ValueError(f"{self._symbol}: missing required column(s): {missing}")
 
-                yield (
-                    ts_dt,
-                    float(chunk.iloc[idx]["open"]),
-                    float(chunk.iloc[idx]["high"]),
-                    float(chunk.iloc[idx]["low"]),
-                    float(chunk.iloc[idx]["close"]),
-                    float(chunk.iloc[idx]["volume"]),
-                )
+        row_symbol = normalized.get("symbol")
+        if row_symbol is not None and str(row_symbol) != self._symbol:
+            raise ValueError(
+                f"{self._symbol}: encountered mismatched symbol value '{row_symbol}' in file"
+            )
 
-    def _iter_rows_parquet(self) -> Iterator[tuple[datetime, float, float, float, float, float]]:
-        dataset = ds.dataset(self._path, format="parquet")
-        available_columns = list(dataset.schema.names)
-        normalized = _normalize_columns(available_columns)
+        ts = _parse_ts_utc(normalized["ts"], symbol=self._symbol, row_number=row_number)
+        if last_ts is not None and ts <= last_ts:
+            raise ValueError(
+                f"{self._symbol}: timestamps must be strictly increasing; row {row_number} has {ts}"
+            )
 
-        timestamp_col = self._select_timestamp_column(available_columns, normalized)
-        required = {
-            "open": self._select_column("open", available_columns, normalized),
-            "high": self._select_column("high", available_columns, normalized),
-            "low": self._select_column("low", available_columns, normalized),
-            "close": self._select_column("close", available_columns, normalized),
-            "volume": self._select_column("volume", available_columns, normalized),
-        }
+        start, end = self._date_range.start, self._date_range.end
+        if start is not None and ts < start:
+            return None
+        if end is not None and ts > end:
+            return None
 
-        symbol_col = None
-        for col in available_columns:
-            if normalized[col] == "symbol":
-                symbol_col = col
-                break
+        o = _to_float(normalized["open"], symbol=self._symbol, row_number=row_number, field="open")
+        h = _to_float(normalized["high"], symbol=self._symbol, row_number=row_number, field="high")
+        l = _to_float(normalized["low"], symbol=self._symbol, row_number=row_number, field="low")
+        c = _to_float(normalized["close"], symbol=self._symbol, row_number=row_number, field="close")
+        v = _to_float(normalized["volume"], symbol=self._symbol, row_number=row_number, field="volume")
 
-        scan_columns = [timestamp_col, *required.values()]
-        if symbol_col is not None:
-            scan_columns.append(symbol_col)
+        if l > min(o, c):
+            raise ValueError(f"{self._symbol}: row {row_number} low must be <= min(open, close)")
+        if h < max(o, c):
+            raise ValueError(f"{self._symbol}: row {row_number} high must be >= max(open, close)")
+        if h < l:
+            raise ValueError(f"{self._symbol}: row {row_number} high must be >= low")
+        if v < 0:
+            raise ValueError(f"{self._symbol}: row {row_number} volume must be >= 0")
 
-        scanner = dataset.scanner(columns=scan_columns, batch_size=self.chunksize)
-        for batch in scanner.to_batches():
-            batch_data = batch.to_pydict()
-            ts_values = _parse_ts_array(batch_data[timestamp_col])
-
-            opens = batch_data[required["open"]]
-            highs = batch_data[required["high"]]
-            lows = batch_data[required["low"]]
-            closes = batch_data[required["close"]]
-            volumes = batch_data[required["volume"]]
-            symbols = batch_data[symbol_col] if symbol_col is not None else None
-
-            for idx, ts in enumerate(ts_values):
-                if self.date_range is not None:
-                    start, end = self.date_range
-                    if ts < start or ts >= end:
-                        continue
-
-                if symbols is not None and str(symbols[idx]) != self.symbol:
-                    raise ValueError(
-                        f"{self.symbol} {self.path}: unexpected symbol {symbols[idx]!r} at {ts}"
-                    )
-
-                yield (
-                    ts,
-                    float(opens[idx]),
-                    float(highs[idx]),
-                    float(lows[idx]),
-                    float(closes[idx]),
-                    float(volumes[idx]),
-                )
-
-    def _select_timestamp_column(self, columns: list[str], normalized: dict[str, str]) -> str:
-        for col in columns:
-            if col.lower() == "ts":
-                return col
-        for col in columns:
-            if col.lower() == "timestamp":
-                return col
-        for col in columns:
-            if normalized[col] == "ts":
-                return col
-        raise ValueError(f"{self.symbol} {self.path}: missing ts/timestamp column")
-
-    def _select_column(self, target: str, columns: list[str], normalized: dict[str, str]) -> str:
-        for col in columns:
-            if normalized[col] == target:
-                return col
-        raise ValueError(f"{self.symbol} {self.path}: missing required column {target}")
+        return (ts, o, h, l, c, v)
