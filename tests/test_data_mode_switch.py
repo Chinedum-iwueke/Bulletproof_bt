@@ -9,14 +9,6 @@ import pytest
 from bt.data.load_feed import load_feed
 
 
-def test_dataset_directory_defaults_to_streaming_not_implemented(tmp_path: Path) -> None:
-    dataset_dir = tmp_path / "dataset_dir"
-    dataset_dir.mkdir()
-
-    with pytest.raises(NotImplementedError, match="Streaming dataset directory feed is not implemented yet"):
-        load_feed(str(dataset_dir), {})
-
-
 def test_single_file_defaults_to_dataframe_and_yields_bars(tmp_path: Path) -> None:
     csv_path = tmp_path / "bars.csv"
     rows = [

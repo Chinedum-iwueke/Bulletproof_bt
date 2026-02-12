@@ -4,8 +4,10 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from bt.data.dataset import load_dataset_manifest
 from bt.data.feed import HistoricalDataFeed
 from bt.data.loader import load_dataset
+from bt.data.stream_feed import StreamingHistoricalDataFeed
 
 
 def _resolve_mode(config: dict[str, Any]) -> str | None:
@@ -28,12 +30,15 @@ def load_feed(data_path: str, config: dict[str, Any]):
     if os.path.isdir(data_path):
         effective_mode = mode or "streaming"
         if effective_mode == "streaming":
-            raise NotImplementedError(
-                "Streaming dataset directory feed is not implemented yet (Stage B Task 4/5)."
+            manifest = load_dataset_manifest(data_path, config)
+            return StreamingHistoricalDataFeed(
+                dataset_dir=data_path,
+                manifest=manifest,
+                config=config,
             )
         raise NotImplementedError(
             "Dataset directories are not supported in dataframe mode. "
-            "Use data.mode=streaming (Stage B) or pass a single .csv/.parquet file."
+            "Use data.mode=streaming for dataset dirs."
         )
 
     if os.path.isfile(data_path):
@@ -44,11 +49,11 @@ def load_feed(data_path: str, config: dict[str, Any]):
         effective_mode = mode or "dataframe"
         if effective_mode == "streaming":
             raise NotImplementedError(
-                "Streaming single-file feed not implemented in Task 1; use data.mode=dataframe for now."
+                "Streaming single-file feed is not supported yet. "
+                "Use a dataset directory with manifest.yaml (data.mode=streaming)."
             )
 
         bars_df = load_dataset(data_path)
         return HistoricalDataFeed(bars_df)
 
     raise ValueError(f"Data path not found: {data_path}")
-
