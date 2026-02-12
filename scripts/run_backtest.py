@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import yaml
@@ -13,7 +14,13 @@ from bt.execution.execution_model import ExecutionModel
 from bt.execution.fees import FeeModel
 from bt.execution.slippage import SlippageModel
 from bt.logging.jsonl import JsonlWriter
-from bt.logging.trades import TradesCsvWriter, make_run_id, prepare_run_dir, write_config_used
+from bt.logging.trades import (
+    TradesCsvWriter,
+    make_run_id,
+    prepare_run_dir,
+    write_config_used,
+    write_data_scope,
+)
 from bt.portfolio.portfolio import Portfolio
 from bt.risk.risk_engine import RiskEngine
 from bt.strategy import make_strategy
@@ -61,6 +68,11 @@ def main() -> None:
     run_id = args.run_id or make_run_id()
     run_dir = prepare_run_dir(Path("outputs/runs"), run_id)
     write_config_used(run_dir, config)
+    write_data_scope(
+        run_dir,
+        config=config,
+        dataset_dir=args.data if os.path.isdir(args.data) else None,
+    )
 
     dataset_path = args.data
     datafeed = load_feed(dataset_path, config)

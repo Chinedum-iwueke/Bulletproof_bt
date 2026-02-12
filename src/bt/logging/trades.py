@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import json
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ from typing import Any
 import pandas as pd
 import yaml
 
+from bt.data.config_utils import parse_date_range
+from bt.data.dataset import load_dataset_manifest
 from bt.core.types import Trade
 
 
@@ -31,6 +34,70 @@ def write_config_used(run_dir: Path, config: dict[str, Any]) -> None:
     path = run_dir / "config_used.yaml"
     with path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(config, handle, sort_keys=False)
+
+
+def write_data_scope(run_dir: Path, *, config: dict, dataset_dir: str | None = None) -> None:
+    """
+    Write data_scope.json into run_dir if any scope-reducing knobs are active.
+    This is metadata only: does not affect engine results.
+
+    Knobs considered "scope-reducing":
+      - data.symbols_subset
+      - data.max_symbols
+      - data.date_range
+      - data.row_limit_per_symbol
+
+    chunksize is NOT scope-reducing (perf-only) and should not trigger writing.
+    """
+    data_cfg = config.get("data", {}) if isinstance(config, dict) else {}
+    if not isinstance(data_cfg, dict):
+        data_cfg = {}
+
+    requested_subset = data_cfg.get("symbols_subset")
+    requested_max_symbols = data_cfg.get("max_symbols")
+    requested_date_range = data_cfg.get("date_range")
+    requested_row_limit = data_cfg.get("row_limit_per_symbol")
+
+    has_scope_knob = any(
+        (
+            requested_subset not in (None, []),
+            requested_max_symbols is not None,
+            requested_date_range not in (None, {}),
+            requested_row_limit is not None,
+        )
+    )
+    if not has_scope_knob:
+        return
+
+    payload: dict[str, Any] = {}
+    if "mode" in data_cfg:
+        payload["mode"] = data_cfg.get("mode")
+    if requested_subset is not None:
+        payload["requested_symbols_subset"] = requested_subset
+    if requested_max_symbols is not None:
+        payload["requested_max_symbols"] = requested_max_symbols
+    if requested_row_limit is not None:
+        payload["row_limit_per_symbol"] = requested_row_limit
+
+    parsed_range = parse_date_range(config)
+    if parsed_range is not None:
+        payload["date_range"] = {
+            "start": parsed_range[0].isoformat(),
+            "end": parsed_range[1].isoformat(),
+        }
+
+    if dataset_dir is not None:
+        try:
+            manifest = load_dataset_manifest(dataset_dir, config)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to compute effective symbols for dataset_dir='{dataset_dir}': {exc}"
+            ) from exc
+        payload["effective_symbols"] = manifest.symbols
+        payload["effective_symbol_count"] = len(manifest.symbols)
+
+    path = run_dir / "data_scope.json"
+    path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
 
 
 class TradesCsvWriter:
