@@ -8,12 +8,15 @@ import itertools
 import json
 import re
 import shutil
+import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from bt.core.engine import BacktestEngine
+from bt.core.config_resolver import resolve_config
 from bt.data.load_feed import load_feed
 from bt.data.resample import TimeframeResampler
 from bt.execution.execution_model import ExecutionModel
@@ -50,6 +53,9 @@ _SUMMARY_COLUMNS = [
     "fee_total",
     "slippage_total",
     "win_rate",
+    "status",
+    "error_type",
+    "error_message",
 ]
 
 
@@ -192,10 +198,14 @@ def _build_engine(config: dict[str, Any], datafeed, run_dir: Path) -> BacktestEn
     htf_resampler = config.get("htf_resampler")
     if isinstance(htf_resampler, TimeframeResampler):
         strategy = HTFContextStrategyAdapter(inner=strategy, resampler=htf_resampler)
+    risk_cfg = config.get("risk", {}) if isinstance(config.get("risk"), dict) else {}
     risk = RiskEngine(
-        max_positions=int(config.get("max_positions", 5)),
-        risk_per_trade_pct=float(config.get("risk_per_trade_pct", 0.01)),
+        max_positions=int(risk_cfg.get("max_positions", 1)),
+        risk_per_trade_pct=float(risk_cfg.get("risk_per_trade_pct", 0.01)),
         max_notional_per_symbol=config.get("max_notional_per_symbol"),
+        margin_buffer_tier=int(risk_cfg.get("margin_buffer_tier", 1)),
+        taker_fee_bps=float(config.get("taker_fee_bps", 0.0)),
+        slippage_k_proxy=float(config.get("slippage_k", 0.0)),
     )
 
     fee_model = FeeModel(
@@ -233,7 +243,15 @@ def _build_engine(config: dict[str, Any], datafeed, run_dir: Path) -> BacktestEn
     )
 
 
-def _build_summary_row(run_name: str, params: dict[str, Any], perf: dict[str, Any]) -> dict[str, Any]:
+def _build_summary_row(
+    run_name: str,
+    params: dict[str, Any],
+    perf: dict[str, Any],
+    *,
+    status: str,
+    error_type: str = "",
+    error_message: str = "",
+) -> dict[str, Any]:
     return {
         "run_name": run_name,
         "strategy_adx_min": params.get("strategy.adx_min"),
@@ -254,10 +272,21 @@ def _build_summary_row(run_name: str, params: dict[str, Any], perf: dict[str, An
         "fee_total": perf.get("fee_total"),
         "slippage_total": perf.get("slippage_total"),
         "win_rate": perf.get("win_rate"),
+        "status": status,
+        "error_type": error_type,
+        "error_message": error_message,
     }
 
 
-def run_grid(config_path: Path, experiment_path: Path, data_path: str, out_path: Path, *, force: bool = False) -> None:
+def run_grid(
+    config_path: Path,
+    experiment_path: Path,
+    data_path: str,
+    out_path: Path,
+    *,
+    force: bool = False,
+    allow_failures: bool = False,
+) -> int:
     base_cfg = _load_yaml(config_path)
     exp_cfg = _load_yaml(experiment_path)
     _validate_experiment(exp_cfg)
@@ -306,6 +335,7 @@ def run_grid(config_path: Path, experiment_path: Path, data_path: str, out_path:
             set_by_dotpath(overrides, dotpath, value)
 
         run_cfg = deep_merge(base_cfg, overrides)
+        run_cfg = resolve_config(run_cfg)
         _ensure_timeframe_config(run_cfg)
 
         run_suffix = _render_run_suffix(run_template, run_cfg)
@@ -321,21 +351,63 @@ def run_grid(config_path: Path, experiment_path: Path, data_path: str, out_path:
             dataset_dir=data_path if Path(data_path).is_dir() else None,
         )
 
-        datafeed = load_feed(data_path, run_cfg)
-        engine = _build_engine(run_cfg, datafeed, run_dir)
-        engine.run()
+        try:
+            datafeed = load_feed(data_path, run_cfg)
+            engine = _build_engine(run_cfg, datafeed, run_dir)
+            engine.run()
 
-        report = compute_performance(run_dir)
-        write_performance_artifacts(report, run_dir)
+            report = compute_performance(run_dir)
+            write_performance_artifacts(report, run_dir)
 
-        performance_path = run_dir / "performance.json"
-        if not performance_path.exists():
-            raise RuntimeError(f"Missing performance.json for run '{run_name}' at {performance_path}")
+            performance_path = run_dir / "performance.json"
+            if not performance_path.exists():
+                raise RuntimeError(f"Missing performance.json for run '{run_name}' at {performance_path}")
 
-        with performance_path.open("r", encoding="utf-8") as handle:
-            perf_payload = json.load(handle)
+            with performance_path.open("r", encoding="utf-8") as handle:
+                perf_payload = json.load(handle)
 
-        summary_rows.append(_build_summary_row(run_name, params, perf_payload))
+            status_payload = {
+                "status": "PASS",
+                "error_type": "",
+                "error_message": "",
+                "traceback": "",
+                "run_id": run_name,
+            }
+            with (run_dir / "run_status.json").open("w", encoding="utf-8") as handle:
+                json.dump(status_payload, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+
+            summary_rows.append(
+                _build_summary_row(
+                    run_name,
+                    params,
+                    perf_payload,
+                    status="PASS",
+                )
+            )
+        except Exception as exc:
+            tb = traceback.format_exc()
+            status_payload = {
+                "status": "FAIL",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "traceback": tb,
+                "run_id": run_name,
+            }
+            with (run_dir / "run_status.json").open("w", encoding="utf-8") as handle:
+                json.dump(status_payload, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+
+            summary_rows.append(
+                _build_summary_row(
+                    run_name,
+                    params,
+                    {},
+                    status="FAIL",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                )
+            )
 
     with (out_path / "summary.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=_SUMMARY_COLUMNS)
@@ -361,6 +433,11 @@ def run_grid(config_path: Path, experiment_path: Path, data_path: str, out_path:
         )
         handle.write("\n")
 
+    fail_count = sum(1 for row in summary_rows if row.get("status") == "FAIL")
+    if fail_count and not allow_failures:
+        return 1
+    return 0
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run deterministic backtest experiment grid")
@@ -369,15 +446,18 @@ def main() -> None:
     parser.add_argument("--data", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--allow-failures", action="store_true")
     args = parser.parse_args()
 
-    run_grid(
+    exit_code = run_grid(
         config_path=Path(args.config),
         experiment_path=Path(args.experiment),
         data_path=args.data,
         out_path=Path(args.out),
         force=args.force,
+        allow_failures=args.allow_failures,
     )
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

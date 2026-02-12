@@ -16,12 +16,39 @@ class RiskEngine:
         max_positions: int,
         risk_per_trade_pct: float,
         max_notional_per_symbol: float | None = None,
+        margin_buffer_tier: int = 1,
+        taker_fee_bps: float = 0.0,
+        slippage_k_proxy: float = 0.0,
         eps: float = 1e-12,
     ) -> None:
         self.max_positions = max_positions
         self.risk_per_trade_pct = risk_per_trade_pct
         self.max_notional_per_symbol = max_notional_per_symbol
+        self.margin_buffer_tier = int(margin_buffer_tier)
+        self.taker_fee_bps = float(taker_fee_bps)
+        self.slippage_k_proxy = float(slippage_k_proxy)
         self.eps = eps
+
+    def estimate_required_margin(
+        self,
+        *,
+        notional: float,
+        max_leverage: float,
+        fee_buffer: float,
+        slippage_buffer: float,
+    ) -> float:
+        leverage_for_margin = max(max_leverage, self.eps)
+        return (notional / leverage_for_margin) + fee_buffer + slippage_buffer
+
+    def _estimate_buffers(self, notional: float) -> tuple[float, float]:
+        if self.margin_buffer_tier <= 1:
+            return 0.0, 0.0
+        fee_buffer = notional * (self.taker_fee_bps / 1e4)
+        slippage_buffer = notional * self.slippage_k_proxy
+        if self.margin_buffer_tier >= 3:
+            fee_buffer *= 2.0
+            slippage_buffer *= 2.0
+        return fee_buffer, slippage_buffer
 
     def signal_to_order_intent(
         self,
@@ -84,38 +111,19 @@ class RiskEngine:
         else:
             order_qty = desired_qty if signal.side == Side.BUY else -desired_qty
 
-        leverage_for_margin = max(max_leverage, self.eps)
-        max_notional_by_margin = free_margin * leverage_for_margin
-        scaled_by_margin = False
-
         if free_margin <= 0:
             return None, "risk_rejected:insufficient_free_margin"
 
         notional = abs(order_qty) * bar.close
-        margin_required = notional / leverage_for_margin
-
+        fee_buffer, slippage_buffer = self._estimate_buffers(notional)
+        margin_required = self.estimate_required_margin(
+            notional=notional,
+            max_leverage=max_leverage,
+            fee_buffer=fee_buffer,
+            slippage_buffer=slippage_buffer,
+        )
         if margin_required > free_margin:
-            max_order_qty = max_notional_by_margin / bar.close
-            if flip:
-                max_desired_qty = max_order_qty - abs(cur_qty)
-            else:
-                max_desired_qty = max_order_qty
-
-            desired_qty = min(desired_qty, max_desired_qty)
-            if desired_qty <= 0:
-                return None, "risk_rejected:insufficient_free_margin"
-
-            if flip:
-                if signal.side == Side.SELL and cur_qty > 0:
-                    order_qty = -cur_qty - desired_qty
-                else:
-                    order_qty = -cur_qty + desired_qty
-            else:
-                order_qty = desired_qty if signal.side == Side.BUY else -desired_qty
-
-            scaled_by_margin = True
-            notional = abs(order_qty) * bar.close
-            margin_required = notional / leverage_for_margin
+            return None, "risk_rejected:insufficient_free_margin"
 
         reason = "risk_approved"
         metadata = dict(signal.metadata)
@@ -129,10 +137,11 @@ class RiskEngine:
                 "notional_est": notional,
                 "cap_applied": cap_applied,
                 "margin_required": margin_required,
+                "margin_fee_buffer": fee_buffer,
+                "margin_slippage_buffer": slippage_buffer,
                 "free_margin": free_margin,
                 "max_leverage": max_leverage,
-                "scaled_by_margin": scaled_by_margin,
-                "max_notional_by_margin": max_notional_by_margin,
+                "scaled_by_margin": False,
                 "reason": reason,
             }
         )

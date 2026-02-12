@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from bt.core.engine import BacktestEngine
+from bt.core.config_resolver import resolve_config
 from bt.data.load_feed import load_feed
 from bt.data.resample import TimeframeResampler
 from bt.execution.execution_model import ExecutionModel
@@ -57,6 +58,7 @@ def main() -> None:
     slippage_config = _load_yaml(Path("configs/slippage.yaml"))
     config = _merge_config(base_config, fees_config)
     config = _merge_config(config, slippage_config)
+    config = resolve_config(config)
 
     htf_timeframes = config.get("htf_timeframes")
     if htf_timeframes:
@@ -104,10 +106,14 @@ def main() -> None:
     if isinstance(htf_resampler, TimeframeResampler):
         strategy = HTFContextStrategyAdapter(inner=strategy, resampler=htf_resampler)
 
+    risk_cfg = config.get("risk", {}) if isinstance(config.get("risk"), dict) else {}
     risk = RiskEngine(
-        max_positions=int(config.get("max_positions", 5)),
-        risk_per_trade_pct=float(config.get("risk_per_trade_pct", 0.01)),
+        max_positions=int(risk_cfg.get("max_positions", 1)),
+        risk_per_trade_pct=float(risk_cfg.get("risk_per_trade_pct", 0.01)),
         max_notional_per_symbol=config.get("max_notional_per_symbol"),
+        margin_buffer_tier=int(risk_cfg.get("margin_buffer_tier", 1)),
+        taker_fee_bps=float(config.get("taker_fee_bps", 0.0)),
+        slippage_k_proxy=float(config.get("slippage_k", 0.0)),
     )
 
     fee_model = FeeModel(

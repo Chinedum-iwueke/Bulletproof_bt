@@ -141,6 +141,9 @@ class BacktestEngine:
                 }
                 signals = self._strategy.on_bars(ts, bars_by_symbol, tradeable, ctx)
 
+                reserved_open_positions = self._portfolio.position_book.open_positions_count()
+                reserved_free_margin = self._portfolio.free_margin
+
                 for signal in signals:
                     bar = bars_by_symbol.get(signal.symbol)
                     if bar is None:
@@ -156,19 +159,18 @@ class BacktestEngine:
                         )
                         continue
 
-                    open_positions = self._portfolio.position_book.open_positions_count()
                     position = self._portfolio.position_book.get(signal.symbol)
                     current_qty = position.qty
                     order_intent, decision_reason = self._risk.signal_to_order_intent(
-                         ts=ts,
-                         signal=signal,
-                         bar=bar,
-                         equity=self._portfolio.equity,
-                         free_margin=self._portfolio.free_margin,
-                         open_positions=open_positions,
-                         max_leverage=self._portfolio.max_leverage,
-                         current_qty=current_qty,
-                         )
+                        ts=ts,
+                        signal=signal,
+                        bar=bar,
+                        equity=self._portfolio.equity,
+                        free_margin=reserved_free_margin,
+                        open_positions=reserved_open_positions,
+                        max_leverage=self._portfolio.max_leverage,
+                        current_qty=current_qty,
+                    )
 
                     if order_intent is None:
                         self._decisions_writer.write(
@@ -194,6 +196,19 @@ class BacktestEngine:
                         metadata=dict(order_intent.metadata),
                     )
                     open_orders.append(order)
+
+                    notional_est = float(order_intent.metadata.get("notional_est", abs(order_intent.qty) * bar.close))
+                    fee_buffer = float(order_intent.metadata.get("margin_fee_buffer", 0.0))
+                    slippage_buffer = float(order_intent.metadata.get("margin_slippage_buffer", 0.0))
+                    reserved_margin = self._risk.estimate_required_margin(
+                        notional=notional_est,
+                        max_leverage=self._portfolio.max_leverage,
+                        fee_buffer=fee_buffer,
+                        slippage_buffer=slippage_buffer,
+                    )
+                    reserved_free_margin = max(reserved_free_margin - reserved_margin, 0.0)
+                    if current_qty == 0:
+                        reserved_open_positions += 1
 
                     self._decisions_writer.write(
                         {
