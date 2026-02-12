@@ -14,8 +14,7 @@ from typing import Any
 import yaml
 
 from bt.core.engine import BacktestEngine
-from bt.data.feed import HistoricalDataFeed
-from bt.data.loader import load_dataset
+from bt.data.load_feed import load_feed
 from bt.data.resample import TimeframeResampler
 from bt.execution.execution_model import ExecutionModel
 from bt.execution.fees import FeeModel
@@ -174,7 +173,7 @@ def _ensure_timeframe_config(config: dict[str, Any]) -> None:
         )
 
 
-def _build_engine(config: dict[str, Any], bars_df, run_dir: Path) -> BacktestEngine:
+def _build_engine(config: dict[str, Any], datafeed, run_dir: Path) -> BacktestEngine:
     htf_timeframes = config.get("htf_timeframes")
     if htf_timeframes:
         config = copy.deepcopy(config)
@@ -183,7 +182,6 @@ def _build_engine(config: dict[str, Any], bars_df, run_dir: Path) -> BacktestEng
             strict=bool(config.get("htf_strict", True)),
         )
 
-    datafeed = HistoricalDataFeed(bars_df)
     universe = UniverseEngine(
         min_history_bars=int(config.get("min_history_bars", 1)),
         lookback_bars=int(config.get("lookback_bars", 1)),
@@ -273,8 +271,6 @@ def run_grid(config_path: Path, experiment_path: Path, data_path: str, out_path:
     out_path.mkdir(parents=True, exist_ok=True)
     runs_dir.mkdir(parents=True, exist_ok=True)
 
-    bars_df = load_dataset(data_path)
-
     grid = exp_cfg["grid"]
     grid_runs = _expand_grid(grid)
     sorted_keys = sorted(grid.keys())
@@ -320,7 +316,8 @@ def run_grid(config_path: Path, experiment_path: Path, data_path: str, out_path:
         with (run_dir / "config_used.yaml").open("w", encoding="utf-8") as handle:
             yaml.safe_dump(run_cfg, handle, sort_keys=False)
 
-        engine = _build_engine(run_cfg, bars_df, run_dir)
+        datafeed = load_feed(data_path, run_cfg)
+        engine = _build_engine(run_cfg, datafeed, run_dir)
         engine.run()
 
         report = compute_performance(run_dir)
