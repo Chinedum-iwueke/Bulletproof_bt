@@ -1,11 +1,40 @@
+# Default backtest engine config: safe, streaming-first, and overlay-friendly.
 intrabar_mode: worst_case
 signal_delay_bars: 1
 initial_cash: 100000.0
-risk:
-  max_positions: 5
-  risk_per_trade_pct: 0.01
 maker_fee_bps: 1.0
 taker_fee_bps: 2.0
+
+# Strategy defaults to a deterministic baseline that runs on any dataset.
+strategy:
+  name: coinflip
+  p_trade: 0.10
+  cooldown_bars: 1
+
+# Streaming dataset mode (manifest.yaml + parquet files).
+data:
+  mode: streaming
+  symbols_subset: null
+  max_symbols: null
+  date_range: null  # set {start, end} in an overlay when you need a slice
+  row_limit_per_symbol: null
+  chunksize: 50000
+
+# Stage C risk spec (normalized sizing, conservative leverage).
+risk:
+  mode: equity_pct
+  r_per_trade: 0.005
+  max_positions: 5
+  max_leverage: 1.5
+
+# Keep legacy HTF keys for compatibility with existing overlays.
 htf_timeframes: ["5m", "15m", "1h"]
 htf_strict: true
+htf_resampler:
+  timeframes: ["5m", "15m", "1h"]
+  strict: true
 
+# Informational defaults for runners/artifacts.
+outputs:
+  root_dir: outputs/runs
+  jsonl: true
