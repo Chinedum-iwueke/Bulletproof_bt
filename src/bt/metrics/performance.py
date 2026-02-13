@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from bt.metrics.r_metrics import summarize_r
+
 
 @dataclass(frozen=True)
 class PerformanceReport:
@@ -37,6 +39,13 @@ class PerformanceReport:
     mar_ratio: Optional[float]
     ev_by_bucket: Dict[str, float]
     trades_by_bucket: Dict[str, int]
+    ev_r_gross: Optional[float]
+    ev_r_net: Optional[float]
+    win_rate_r: Optional[float]
+    avg_r_win: Optional[float]
+    avg_r_loss: Optional[float]
+    profit_factor_r: Optional[float]
+    payoff_ratio_r: Optional[float]
     extra: Dict[str, Any]
 
 
@@ -386,6 +395,13 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
             mar_ratio=mar_ratio,
             ev_by_bucket={"all": 0.0},
             trades_by_bucket={"all": 0},
+            ev_r_gross=None,
+            ev_r_net=None,
+            win_rate_r=None,
+            avg_r_win=None,
+            avg_r_loss=None,
+            profit_factor_r=None,
+            payoff_ratio_r=None,
             extra=extra,
         )
 
@@ -430,6 +446,12 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
         bucket_series = trades_df["regime_bucket"]
 
     ev_by_bucket, trades_by_bucket = _bucket_metrics(pnl_net, bucket_series)
+
+    r_net_summary = summarize_r(trades_df.get("r_multiple_net", pd.Series(index=trades_df.index)))
+    r_gross_summary = summarize_r(
+        trades_df.get("r_multiple_gross", pd.Series(index=trades_df.index))
+    )
+
     trade_returns_df, trade_returns, _, _ = _compute_trade_returns(trades_df)
     trade_returns = trade_returns.dropna()
     trade_return_skew, trade_return_kurtosis_excess = _trade_return_moments(
@@ -462,6 +484,13 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
         mar_ratio=mar_ratio,
         ev_by_bucket=ev_by_bucket,
         trades_by_bucket=trades_by_bucket,
+        ev_r_gross=r_gross_summary.ev_r,
+        ev_r_net=r_net_summary.ev_r,
+        win_rate_r=r_net_summary.win_rate,
+        avg_r_win=r_net_summary.avg_r_win,
+        avg_r_loss=r_net_summary.avg_r_loss,
+        profit_factor_r=r_net_summary.profit_factor_r,
+        payoff_ratio_r=r_net_summary.payoff_ratio_r,
         extra=extra,
     )
 
