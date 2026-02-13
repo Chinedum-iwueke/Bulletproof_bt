@@ -2,14 +2,70 @@
 
 Scaffold for an event-driven, bar-by-bar backtesting engine.
 
-## Quick start
+## Install
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
-python scripts/run_backtest.py --help
+pip install -e ".[dev]"
+pytest -q
 ```
+
+## Run a backtest (CLI)
+
+```bash
+python scripts/run_backtest.py --data <PATH> --config configs/engine.yaml
+```
+
+## Run an experiment grid (CLI)
+
+```bash
+python scripts/run_experiment_grid.py --config configs/engine.yaml --experiment configs/experiments/h1_volfloor_donchian.yaml --data <PATH> --out <OUT_DIR>
+```
+
+## Overrides (recommended workflow)
+
+- Add one or more overlays with `--override path/to/override.yaml` (flag is repeatable).
+- For local-only edits, use `--local-config configs/local/engine.local.yaml`.
+- Effective merge order is:
+  1. base config (`--config`)
+  2. `configs/fees.yaml`
+  3. `configs/slippage.yaml`
+  4. each `--override` in the order provided
+  5. `--local-config` (if supplied)
+
+## Public API
+
+```python
+from bt import run_backtest, run_grid
+
+run_dir = run_backtest(
+    config_path="configs/engine.yaml",
+    data_path="data/curated/sample.csv",
+    out_dir="outputs/runs",
+)
+
+experiment_dir = run_grid(
+    config_path="configs/engine.yaml",
+    experiment_path="configs/experiments/h1_volfloor_donchian.yaml",
+    data_path="data/curated/sample.csv",
+    out_dir="outputs/experiments",
+)
+```
+
+## How to add a strategy
+
+1. Copy `src/bt/strategy/templates/client_strategy_template.py`.
+2. Rename class/file and place your strategy in `src/bt/strategy/`.
+3. Register it with `register_strategy(...)`.
+4. Strategy must emit `Signal` objects only.
+5. `ctx` is read-only (`StrategyContextView`).
+
+### DO NOT
+
+- Do **not** edit `bt/core/engine.py`.
+- Do **not** mutate `ctx`.
+- Do **not** access portfolio/execution internals from a strategy.
 
 ## Streaming indicator library
 
@@ -57,29 +113,4 @@ for bar in bars:
     ind.update(bar)
     if ind.is_ready:
         print(ind.value)
-```
-
-
-## Streaming acceleration knobs
-
-When using dataset-directory streaming mode, you can cheaply reduce scope for smoke tests and debugging:
-
-- `data.symbols_subset`: explicit symbol allow-list.
-- `data.max_symbols`: cap the selected symbol list after subset filtering.
-- `data.date_range`: UTC window filter applied per symbol (`start` inclusive, `end` exclusive).
-- `data.row_limit_per_symbol`: maximum emitted rows per symbol.
-- `data.chunksize`: parquet/csv chunk batch size used by each per-symbol source.
-
-Quick smoke-test example:
-
-```yaml
-data:
-  mode: streaming
-  symbols_subset: [AAA, BBB]
-  max_symbols: 2
-  date_range:
-    start: "2025-01-01T00:00:00Z"
-    end: "2025-01-02T00:00:00Z"
-  row_limit_per_symbol: 100
-  chunksize: 1000
 ```
