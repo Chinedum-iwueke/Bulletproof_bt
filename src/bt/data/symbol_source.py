@@ -7,6 +7,8 @@ from typing import Any, Iterator
 
 import pandas as pd
 
+from bt.data.parquet_io import ensure_pyarrow_parquet
+
 
 RowTuple = tuple[pd.Timestamp, float, float, float, float, float]
 
@@ -105,13 +107,15 @@ class SymbolDataSource:
         emitted = 0
         last_ts: pd.Timestamp | None = None
 
+        ensure_pyarrow_parquet()
+
         try:
-            import pyarrow.parquet as pq
+            import pyarrow as pa
         except ImportError:
             frame = pd.read_parquet(self._path)
             batches = [frame]
         else:
-            parquet_file = pq.ParquetFile(self._path)
+            parquet_file = pa.parquet.ParquetFile(self._path)
             batches = (
                 batch.to_pandas()
                 for batch in parquet_file.iter_batches(batch_size=self._chunksize)
