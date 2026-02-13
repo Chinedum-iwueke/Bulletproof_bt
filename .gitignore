@@ -14,3 +14,4 @@ outputs/cache/
 
 # Local / personal overrides (do not commit)
 configs/local/
+*.local.yaml
