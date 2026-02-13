@@ -58,14 +58,17 @@ def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
 
     risk_cfg = config.get("risk", {}) if isinstance(config.get("risk"), dict) else {}
     risk_cfg_for_spec = dict(risk_cfg)
-    risk_cfg_for_spec.setdefault("mode", "equity_pct")
-    risk_cfg_for_spec.setdefault("r_per_trade", risk_cfg.get("risk_per_trade_pct", 0.01))
+    if "mode" not in risk_cfg_for_spec:
+        risk_cfg_for_spec["mode"] = "equity_pct"
+    if "r_per_trade" not in risk_cfg_for_spec and "risk_per_trade_pct" in risk_cfg_for_spec:
+        risk_cfg_for_spec["r_per_trade"] = risk_cfg_for_spec["risk_per_trade_pct"]
     risk_spec = parse_risk_spec({"risk": risk_cfg_for_spec})
 
     risk = RiskEngine(
         max_positions=int(risk_cfg.get("max_positions", 5)),
         risk_per_trade_pct=risk_spec.r_per_trade,
         max_notional_per_symbol=config.get("max_notional_per_symbol"),
+        config={"risk": risk_cfg_for_spec},
     )
 
     fee_model = FeeModel(
