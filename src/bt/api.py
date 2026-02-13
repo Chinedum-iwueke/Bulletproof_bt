@@ -56,7 +56,9 @@ def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
     if isinstance(htf_resampler, TimeframeResampler):
         strategy = HTFContextStrategyAdapter(inner=strategy, resampler=htf_resampler)
 
-    risk_cfg = config.get("risk", {}) if isinstance(config.get("risk"), dict) else {}
+    if not isinstance(config.get("risk"), dict):
+        raise ValueError("risk.mode and risk.r_per_trade are required")
+    risk_cfg = config["risk"]
     risk_cfg_for_spec = dict(risk_cfg)
     if "mode" not in risk_cfg_for_spec:
         risk_cfg_for_spec["mode"] = "equity_pct"

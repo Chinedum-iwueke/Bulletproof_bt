@@ -14,6 +14,7 @@ class PositionBook:
     def __init__(self) -> None:
         self._positions: dict[str, Position] = {}
         self._position_costs: dict[str, tuple[float, float]] = {}
+        self._position_metadata: dict[str, dict[str, object]] = {}
 
     def get(self, symbol: str) -> Position:
         """Return current Position for symbol (create FLAT if missing)."""
@@ -54,6 +55,7 @@ class PositionBook:
             position = self._open_new_position(fill)
             self._positions[fill.symbol] = position
             self._position_costs[fill.symbol] = (fill.fee, fill.slippage)
+            self._position_metadata[fill.symbol] = self._extract_risk_metadata(fill.metadata)
             return position, None
 
         if position.side == fill.side:
@@ -99,12 +101,14 @@ class PositionBook:
                 slippage=total_slippage,
                 mae_price=mae_price,
                 mfe_price=mfe_price,
+                metadata=self._position_metadata.get(fill.symbol, {}),
             )
             position = self._open_new_position(fill, qty=fill.qty - reduce_qty)
             self._position_costs[fill.symbol] = (
                 fill.fee - closing_fee,
                 fill.slippage - closing_slippage,
             )
+            self._position_metadata[fill.symbol] = self._extract_risk_metadata(fill.metadata)
         elif remaining_qty == 0:
             trade = self._build_trade(
                 position=position,
@@ -116,6 +120,7 @@ class PositionBook:
                 slippage=total_slippage,
                 mae_price=mae_price,
                 mfe_price=mfe_price,
+                metadata=self._position_metadata.get(fill.symbol, {}),
             )
             position = replace(
                 position,
@@ -131,6 +136,7 @@ class PositionBook:
                 closed_ts=fill.ts,
             )
             self._position_costs.pop(fill.symbol, None)
+            self._position_metadata.pop(fill.symbol, None)
         else:
             position = replace(
                 position,
@@ -175,6 +181,14 @@ class PositionBook:
         mfe_price = max(position.mfe_price, price)
         return mae_price, mfe_price
 
+
+    @staticmethod
+    def _extract_risk_metadata(metadata: object) -> dict[str, object]:
+        if not isinstance(metadata, dict):
+            return {}
+        keys = ("risk_amount", "stop_distance", "stop_source")
+        return {key: metadata.get(key) for key in keys if key in metadata}
+
     @staticmethod
     def _build_trade(
         *,
@@ -187,6 +201,7 @@ class PositionBook:
         slippage: float,
         mae_price: float,
         mfe_price: float,
+        metadata: dict[str, object],
     ) -> Trade:
         return Trade(
             symbol=position.symbol,
@@ -201,5 +216,5 @@ class PositionBook:
             slippage=slippage,
             mae_price=mae_price,
             mfe_price=mfe_price,
-            metadata={},
+            metadata=dict(metadata),
         )
