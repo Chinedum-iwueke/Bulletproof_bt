@@ -77,6 +77,14 @@ class ExecutionModel:
             notional = abs(updated_order.qty) * fill_price
             fee = self._fee_model.fee_for_notional(notional=notional, is_maker=False)
 
+            fill_metadata = dict(updated_order.metadata)
+            fill_metadata.update(
+                {
+                    "intrabar_mode": self._intrabar_mode.value,
+                    "delay_bars": self._delay_bars,
+                }
+            )
+
             fills.append(
                 Fill(
                     order_id=updated_order.id,
@@ -87,10 +95,7 @@ class ExecutionModel:
                     price=fill_price,
                     fee=fee,
                     slippage=slippage_quote,
-                    metadata={
-                        "intrabar_mode": self._intrabar_mode.value,
-                        "delay_bars": self._delay_bars,
-                    },
+                    metadata=fill_metadata,
                 )
             )
 

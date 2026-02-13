@@ -180,13 +180,7 @@ class RiskEngine:
             return None, "risk_rejected:invalid_side"
 
         stop_price = self._extract_stop_price(signal)
-        if stop_price is None:
-            fallback_stop_distance = max(bar.high - bar.low, self.eps)
-            if side == "long":
-                stop_price = bar.close - fallback_stop_distance
-            else:
-                stop_price = bar.close + fallback_stop_distance
-        signal_payload: object = {"stop_price": stop_price}
+        signal_payload: object = signal if stop_price is None else {"stop_price": stop_price}
         bars_payload: dict[str, object] = {signal.symbol: bar}
         ctx_payload: dict[str, object] = {}
         if isinstance(signal, Signal):
@@ -207,7 +201,18 @@ class RiskEngine:
                 equity=equity,
             )
         except ValueError as exc:
-            return None, f"risk_rejected:invalid_stop:{exc}"
+            message = str(exc)
+            if "stop distance cannot be resolved" in message:
+                fallback_stop_distance = max(bar.high - bar.low, self.eps)
+                desired_qty = (equity * self._risk_spec.r_per_trade) / fallback_stop_distance
+                risk_meta = {
+                    "risk_amount": None,
+                    "stop_distance": None,
+                    "stop_source": "legacy_fallback",
+                    "stop_details": {"fallback_stop_distance": fallback_stop_distance},
+                }
+            else:
+                return None, f"risk_rejected:invalid_stop:{exc}"
 
         risk_budget = risk_meta["risk_amount"]
         stop_dist = risk_meta["stop_distance"]
