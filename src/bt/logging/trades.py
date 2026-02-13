@@ -14,6 +14,7 @@ import yaml
 from bt.data.config_utils import parse_date_range
 from bt.data.dataset import load_dataset_manifest
 from bt.core.types import Trade
+from bt.risk.r_multiple import compute_r_multiple
 
 
 def make_run_id(prefix: str = "run") -> str:
@@ -114,6 +115,10 @@ class TradesCsvWriter:
         "slippage",
         "mae_price",
         "mfe_price",
+        "risk_amount",
+        "stop_distance",
+        "r_multiple_gross",
+        "r_multiple_net",
     ]
 
     def __init__(self, path: Path):
@@ -137,9 +142,26 @@ class TradesCsvWriter:
 
     def write_trade(self, trade: Trade) -> None:
         """Append one trade row."""
+        metadata = trade.metadata if isinstance(trade.metadata, dict) else {}
+        risk_amount = metadata.get("risk_amount")
+        stop_distance = metadata.get("stop_distance")
+
+        pnl_net = trade.pnl
+        pnl_gross = trade.pnl + trade.fees + trade.slippage
+
+        computed_values: dict[str, Any] = {
+            "risk_amount": risk_amount,
+            "stop_distance": stop_distance,
+            "r_multiple_gross": compute_r_multiple(pnl_gross, risk_amount),
+            "r_multiple_net": compute_r_multiple(pnl_net, risk_amount),
+        }
+
         row: list[str] = []
         for column in self._columns:
-            value = getattr(trade, column, "")  # TODO: populate when Trade adds field.
+            if column in computed_values:
+                value = computed_values[column]
+            else:
+                value = getattr(trade, column, "")  # TODO: populate when Trade adds field.
             row.append(self._serialize_value(value))
         self._writer.writerow(row)
         self._file.flush()
