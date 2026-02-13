@@ -4,11 +4,16 @@ from dataclasses import dataclass
 from numbers import Real
 from typing import Any
 
+from bt.risk.stop_resolution import (
+    STOP_RESOLUTION_ATR_MULTIPLE,
+    STOP_RESOLUTION_EXPLICIT_STOP_PRICE,
+)
+
 
 @dataclass(frozen=True)
 class StopDistanceResult:
     stop_distance: float
-    source: str  # "signal_stop" | "atr_multiple"
+    source: str
     details: dict[str, Any]
 
 
@@ -84,7 +89,7 @@ def resolve_stop_distance(
             raise ValueError(f"{symbol}: computed stop_distance must be > 0, got {stop_distance}.")
         return StopDistanceResult(
             stop_distance=stop_distance,
-            source="signal_stop",
+            source=STOP_RESOLUTION_EXPLICIT_STOP_PRICE,
             details={"stop_price": stop_price},
         )
 
@@ -112,7 +117,7 @@ def resolve_stop_distance(
             raise ValueError(f"{symbol}: computed stop_distance must be > 0, got {stop_distance}.")
         return StopDistanceResult(
             stop_distance=stop_distance,
-            source="atr_multiple",
+            source=STOP_RESOLUTION_ATR_MULTIPLE,
             details={"atr_multiple": atr_multiple, "atr_value": atr_value, "atr_name": atr_name},
         )
 

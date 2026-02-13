@@ -30,7 +30,7 @@ def test_resolve_stop_distance_signal_stop_long() -> None:
     )
 
     assert result.stop_distance == 5.0
-    assert result.source == "signal_stop"
+    assert result.source == "explicit_stop_price"
 
 
 def test_resolve_stop_distance_signal_stop_invalid_side_long() -> None:

@@ -11,6 +11,7 @@ from bt.core.enums import OrderType, Side
 from bt.core.types import Bar, OrderIntent, Signal
 from bt.risk.spec import parse_risk_spec
 from bt.risk.stop_distance import resolve_stop_distance
+from bt.risk.stop_resolution import STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY
 
 
 class RiskEngine:
@@ -46,8 +47,9 @@ class RiskEngine:
         value = getattr(signal, "stop_price", None)
         if value is not None:
             return float(value)
-        if isinstance(signal, Signal):
-            value = signal.metadata.get("stop_price")
+        metadata = getattr(signal, "metadata", None)
+        if isinstance(metadata, dict):
+            value = metadata.get("stop_price")
             if value is not None:
                 return float(value)
         return None
@@ -111,6 +113,8 @@ class RiskEngine:
             "stop_distance": stop_distance,
             "stop_source": stop_result.source,
             "stop_details": stop_result.details,
+            "used_legacy_stop_proxy": False,
+            "r_metrics_valid": stop_result.source in {"explicit_stop_price", "atr_multiple"},
         }
 
     def estimate_required_margin(
@@ -208,11 +212,16 @@ class RiskEngine:
                 risk_meta = {
                     "risk_amount": None,
                     "stop_distance": None,
-                    "stop_source": "legacy_fallback",
+                    "stop_source": STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY,
                     "stop_details": {"fallback_stop_distance": fallback_stop_distance},
+                    "used_legacy_stop_proxy": True,
+                    "r_metrics_valid": False,
                 }
             else:
                 return None, f"risk_rejected:invalid_stop:{exc}"
+
+        risk_meta.setdefault("used_legacy_stop_proxy", risk_meta.get("stop_source") == STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY)
+        risk_meta.setdefault("r_metrics_valid", bool(risk_meta.get("stop_source") in {"explicit_stop_price", "atr_multiple"}))
 
         risk_budget = risk_meta["risk_amount"]
         stop_dist = risk_meta["stop_distance"]
@@ -260,6 +269,8 @@ class RiskEngine:
                 "stop_distance": risk_meta["stop_distance"],
                 "stop_source": risk_meta["stop_source"],
                 "stop_details": risk_meta["stop_details"],
+                "used_legacy_stop_proxy": risk_meta["used_legacy_stop_proxy"],
+                "r_metrics_valid": risk_meta["r_metrics_valid"],
                 "current_qty": cur_qty,
                 "desired_qty": desired_qty,
                 "flip": flip,

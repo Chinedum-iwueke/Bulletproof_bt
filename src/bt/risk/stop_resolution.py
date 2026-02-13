@@ -1,0 +1,15 @@
+"""Canonical stop-resolution provenance labels."""
+from __future__ import annotations
+
+STOP_RESOLUTION_EXPLICIT_STOP_PRICE = "explicit_stop_price"
+STOP_RESOLUTION_ATR_MULTIPLE = "atr_multiple"
+STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY = "legacy_high_low_proxy"
+STOP_RESOLUTION_UNRESOLVED = "unresolved"
+
+STOP_RESOLUTION_LABELS = {
+    STOP_RESOLUTION_EXPLICIT_STOP_PRICE,
+    STOP_RESOLUTION_ATR_MULTIPLE,
+    STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY,
+    STOP_RESOLUTION_UNRESOLVED,
+}
+
