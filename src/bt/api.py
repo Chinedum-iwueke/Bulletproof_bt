@@ -18,6 +18,7 @@ def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
     from bt.logging.trades import TradesCsvWriter
     from bt.portfolio.portfolio import Portfolio
     from bt.risk.risk_engine import RiskEngine
+    from bt.risk.spec import parse_risk_spec
     from bt.strategy import make_strategy
     from bt.strategy.htf_context import HTFContextStrategyAdapter, ReadOnlyContextStrategyAdapter
     from bt.universe.universe import UniverseEngine
@@ -56,9 +57,14 @@ def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
         strategy = HTFContextStrategyAdapter(inner=strategy, resampler=htf_resampler)
 
     risk_cfg = config.get("risk", {}) if isinstance(config.get("risk"), dict) else {}
+    risk_cfg_for_spec = dict(risk_cfg)
+    risk_cfg_for_spec.setdefault("mode", "equity_pct")
+    risk_cfg_for_spec.setdefault("r_per_trade", risk_cfg.get("risk_per_trade_pct", 0.01))
+    risk_spec = parse_risk_spec({"risk": risk_cfg_for_spec})
+
     risk = RiskEngine(
         max_positions=int(risk_cfg.get("max_positions", 5)),
-        risk_per_trade_pct=float(risk_cfg.get("risk_per_trade_pct", 0.01)),
+        risk_per_trade_pct=risk_spec.r_per_trade,
         max_notional_per_symbol=config.get("max_notional_per_symbol"),
     )
 
@@ -77,9 +83,13 @@ def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
         delay_bars=int(config.get("signal_delay_bars", 1)),
     )
 
+    portfolio_max_leverage = risk_spec.max_leverage
+    if portfolio_max_leverage is None:
+        portfolio_max_leverage = float(config.get("max_leverage", 2.0))
+
     portfolio = Portfolio(
         initial_cash=float(config.get("initial_cash", 100000.0)),
-        max_leverage=float(config.get("max_leverage", 2.0)),
+        max_leverage=portfolio_max_leverage,
     )
 
     return BacktestEngine(
