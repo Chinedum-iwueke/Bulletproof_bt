@@ -48,10 +48,9 @@ def load_feed(data_path: str, config: dict[str, Any]):
 
         effective_mode = mode or "dataframe"
         if effective_mode == "streaming":
-            raise NotImplementedError(
-                "Streaming single-file feed is not supported yet. "
-                "Use a dataset directory with manifest.yaml (data.mode=streaming)."
-            )
+            # Keep engine defaults dataset-directory-first while remaining
+            # backward-compatible with single-file smoke/test inputs.
+            effective_mode = "dataframe"
 
         bars_df = load_dataset(data_path)
         return HistoricalDataFeed(bars_df)
