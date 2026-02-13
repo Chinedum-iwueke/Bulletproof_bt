@@ -8,6 +8,23 @@ import pandas as pd
 from bt.core.types import Bar, Signal
 from bt.data.resample import HTFBar, TimeframeResampler
 from bt.strategy.base import Strategy
+from bt.strategy.context_view import StrategyContextView
+
+
+class ReadOnlyContextStrategyAdapter(Strategy):
+    """Wrap a strategy to expose context as a read-only view."""
+
+    def __init__(self, *, inner: Strategy) -> None:
+        self._inner = inner
+
+    def on_bars(
+        self,
+        ts: pd.Timestamp,
+        bars_by_symbol: dict[str, Bar],
+        tradeable: set[str],
+        ctx: Mapping[str, Any],
+    ) -> list[Signal]:
+        return self._inner.on_bars(ts, bars_by_symbol, tradeable, StrategyContextView(ctx))
 
 
 class HTFContextStrategyAdapter(Strategy):
@@ -35,4 +52,4 @@ class HTFContextStrategyAdapter(Strategy):
 
         new_ctx = dict(ctx)
         new_ctx["htf"] = emitted_index
-        return self._inner.on_bars(ts, bars_by_symbol, tradeable, new_ctx)
+        return self._inner.on_bars(ts, bars_by_symbol, tradeable, StrategyContextView(new_ctx))
