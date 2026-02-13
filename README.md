@@ -114,3 +114,11 @@ for bar in bars:
     if ind.is_ready:
         print(ind.value)
 ```
+
+## Troubleshooting: Parquet / PyArrow
+
+- Symptom: `AttributeError: module 'pyarrow' has no attribute 'parquet'` when pandas reads/writes parquet.
+- Cause: in some environments `import pyarrow.parquet` works, but `pyarrow.parquet` (`pa.parquet`) is not attached as a module attribute that pandas may expect.
+- Implemented fix: parquet IO now runs a runtime guard `ensure_pyarrow_parquet()` before parquet operations.
+- Quick workaround: upgrade `pyarrow`/`pandas`, or run `import pyarrow.parquet` before parquet IO.
+- In this project, the guard is already applied, so manual import is usually unnecessary.
