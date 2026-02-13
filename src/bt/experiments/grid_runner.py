@@ -13,6 +13,15 @@ from typing import Any
 
 import yaml
 
+from bt.logging.jsonl import to_jsonable
+from bt.risk.stop_resolution import (
+    STOP_RESOLUTION_ATR_MULTIPLE,
+    STOP_RESOLUTION_EXPLICIT_STOP_PRICE,
+    STOP_RESOLUTION_LABELS,
+    STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY,
+    STOP_RESOLUTION_UNRESOLVED,
+)
+
 from bt.config import deep_merge
 from bt.core.config_resolver import resolve_config
 from bt.data.load_feed import load_feed
@@ -45,6 +54,87 @@ _SUMMARY_COLUMNS = [
     "error_type",
     "error_message",
 ]
+
+
+def _collect_run_stop_resolution(run_dir: Path) -> tuple[str, bool, bool, list[str]]:
+    decisions_path = run_dir / "decisions.jsonl"
+    observed_sources: set[str] = set()
+
+    if decisions_path.exists():
+        with decisions_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Invalid decisions JSONL at {decisions_path}: {exc}") from exc
+                order = payload.get("order")
+                if not isinstance(order, dict):
+                    continue
+                metadata = order.get("metadata")
+                if not isinstance(metadata, dict):
+                    continue
+                stop_source = metadata.get("stop_source")
+                if stop_source is None:
+                    continue
+                if stop_source not in STOP_RESOLUTION_LABELS:
+                    raise ValueError(
+                        f"Invalid stop_source value {stop_source!r} in {decisions_path}; expected one of {sorted(STOP_RESOLUTION_LABELS)}"
+                    )
+                observed_sources.add(str(stop_source))
+
+    if STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY in observed_sources:
+        stop_resolution = STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY
+    elif STOP_RESOLUTION_ATR_MULTIPLE in observed_sources:
+        stop_resolution = STOP_RESOLUTION_ATR_MULTIPLE
+    elif STOP_RESOLUTION_EXPLICIT_STOP_PRICE in observed_sources:
+        stop_resolution = STOP_RESOLUTION_EXPLICIT_STOP_PRICE
+    else:
+        stop_resolution = STOP_RESOLUTION_UNRESOLVED
+
+    used_legacy_stop_proxy = stop_resolution == STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY
+    r_metrics_valid = stop_resolution in {STOP_RESOLUTION_EXPLICIT_STOP_PRICE, STOP_RESOLUTION_ATR_MULTIPLE}
+
+    notes: list[str] = []
+    if used_legacy_stop_proxy:
+        notes.append(
+            "Legacy stop proxy used because stop distance was not resolvable from signal or ATR config."
+        )
+
+    return stop_resolution, used_legacy_stop_proxy, r_metrics_valid, notes
+
+
+def _write_run_status(run_dir: Path, status_payload: dict[str, Any]) -> None:
+    path = run_dir / "run_status.json"
+    existing_notes: list[str] = []
+    if path.exists():
+        try:
+            existing_payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid existing run_status.json at {path}: {exc}") from exc
+        maybe_notes = existing_payload.get("notes") if isinstance(existing_payload, dict) else None
+        if maybe_notes is not None:
+            if not isinstance(maybe_notes, list) or not all(isinstance(item, str) for item in maybe_notes):
+                raise ValueError(f"Invalid notes in existing run_status.json at {path}; expected list[str].")
+            existing_notes = list(maybe_notes)
+
+    stop_resolution, used_legacy_stop_proxy, r_metrics_valid, derived_notes = _collect_run_stop_resolution(run_dir)
+    merged_notes = list(existing_notes)
+    for note in derived_notes:
+        if note not in merged_notes:
+            merged_notes.append(note)
+
+    payload = dict(status_payload)
+    payload["stop_resolution"] = stop_resolution
+    payload["used_legacy_stop_proxy"] = used_legacy_stop_proxy
+    payload["r_metrics_valid"] = r_metrics_valid
+    payload["notes"] = merged_notes
+
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(to_jsonable(payload), handle, indent=2, sort_keys=True)
+        handle.write("\n")
 
 
 def set_by_dotpath(cfg: dict[str, Any], dotpath: str, value: Any) -> None:
@@ -242,9 +332,7 @@ def run_grid(
                 "traceback": "",
                 "run_id": run_name,
             }
-            with (run_dir / "run_status.json").open("w", encoding="utf-8") as handle:
-                json.dump(status_payload, handle, indent=2, sort_keys=True)
-                handle.write("\n")
+            _write_run_status(run_dir, status_payload)
 
             summary_rows.append(_build_summary_row(run_name, params, perf_payload, status="PASS"))
         except Exception as exc:
@@ -256,9 +344,7 @@ def run_grid(
                 "traceback": tb,
                 "run_id": run_name,
             }
-            with (run_dir / "run_status.json").open("w", encoding="utf-8") as handle:
-                json.dump(status_payload, handle, indent=2, sort_keys=True)
-                handle.write("\n")
+            _write_run_status(run_dir, status_payload)
 
             summary_rows.append(
                 _build_summary_row(

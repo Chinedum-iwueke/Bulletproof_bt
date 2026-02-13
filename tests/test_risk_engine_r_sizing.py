@@ -37,7 +37,7 @@ def test_compute_position_size_r_basic_with_explicit_stop() -> None:
     assert qty == pytest.approx(20.0)
     assert meta["risk_amount"] == pytest.approx(100.0)
     assert meta["stop_distance"] == pytest.approx(5.0)
-    assert meta["stop_source"] == "signal_stop"
+    assert meta["stop_source"] == "explicit_stop_price"
     assert "stop_details" in meta
 
 
