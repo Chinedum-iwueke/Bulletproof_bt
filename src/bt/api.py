@@ -19,7 +19,7 @@ def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
     from bt.portfolio.portfolio import Portfolio
     from bt.risk.risk_engine import RiskEngine
     from bt.strategy import make_strategy
-    from bt.strategy.htf_context import HTFContextStrategyAdapter
+    from bt.strategy.htf_context import HTFContextStrategyAdapter, ReadOnlyContextStrategyAdapter
     from bt.universe.universe import UniverseEngine
 
     universe = UniverseEngine(
@@ -44,6 +44,7 @@ def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
         seed=int(strategy_kwargs.pop("seed", config.get("seed", 42))),
         **strategy_kwargs,
     )
+    strategy = ReadOnlyContextStrategyAdapter(inner=strategy)
 
     htf_resampler = config.get("htf_resampler")
     if isinstance(htf_resampler, dict):
