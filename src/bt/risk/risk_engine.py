@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import math
+from typing import Any
 
 import pandas as pd
 
 from bt.core.enums import OrderType, Side
 from bt.core.types import Bar, OrderIntent, Signal
+from bt.risk.spec import parse_risk_spec
+from bt.risk.stop_distance import resolve_stop_distance
 
 
 class RiskEngine:
@@ -20,6 +24,7 @@ class RiskEngine:
         taker_fee_bps: float = 0.0,
         slippage_k_proxy: float = 0.0,
         eps: float = 1e-12,
+        config: dict[str, Any] | None = None,
     ) -> None:
         self.max_positions = max_positions
         self.risk_per_trade_pct = risk_per_trade_pct
@@ -28,6 +33,85 @@ class RiskEngine:
         self.taker_fee_bps = float(taker_fee_bps)
         self.slippage_k_proxy = float(slippage_k_proxy)
         self.eps = eps
+        if config is None:
+            raise ValueError("risk.mode and risk.r_per_trade are required")
+        self._config = config
+        self._risk_spec = parse_risk_spec(config)
+
+    @staticmethod
+    def _extract_stop_price(signal: object) -> float | None:
+        if isinstance(signal, dict):
+            value = signal.get("stop_price")
+            return None if value is None else float(value)
+        value = getattr(signal, "stop_price", None)
+        if value is not None:
+            return float(value)
+        if isinstance(signal, Signal):
+            value = signal.metadata.get("stop_price")
+            if value is not None:
+                return float(value)
+        return None
+
+    @staticmethod
+    def _round_qty(qty: float, rounding: str) -> float:
+        if rounding == "none":
+            return qty
+        scale = 10**8
+        if rounding == "floor":
+            return math.floor(qty * scale) / scale
+        if rounding == "round":
+            return round(qty, 8)
+        raise ValueError(f"Invalid risk.qty_rounding={rounding!r}")
+
+    def compute_position_size_r(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        signal: object,
+        bars_by_symbol: dict[str, object],
+        ctx: dict[str, object],
+        equity: float,
+    ) -> tuple[float, dict[str, object]]:
+        if equity <= 0:
+            raise ValueError(f"{symbol}: equity must be > 0, got {equity}")
+        if self._risk_spec.r_per_trade <= 0:
+            raise ValueError(f"{symbol}: r_per_trade must be > 0, got {self._risk_spec.r_per_trade}")
+
+        risk_amount = equity * self._risk_spec.r_per_trade
+        stop_result = resolve_stop_distance(
+            symbol=symbol,
+            side=side,
+            entry_price=entry_price,
+            signal=signal,
+            bars_by_symbol=bars_by_symbol,
+            ctx=ctx,
+            config=self._config,
+        )
+        stop_distance = float(stop_result.stop_distance)
+        if stop_distance <= 0:
+            raise ValueError(f"{symbol}: invalid stop_distance computed: {stop_distance}")
+
+        min_stop_distance = self._risk_spec.min_stop_distance
+        if min_stop_distance is not None:
+            stop_distance = max(stop_distance, min_stop_distance)
+
+        qty = risk_amount / stop_distance
+        risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
+        qty_rounding = "none"
+        if isinstance(risk_cfg, dict):
+            qty_rounding = str(risk_cfg.get("qty_rounding", "none"))
+        qty = self._round_qty(qty, qty_rounding)
+        if not math.isfinite(qty) or qty <= 0:
+            raise ValueError(f"{symbol}: invalid qty computed: {qty}")
+
+        return qty, {
+            "risk_amount": risk_amount,
+            "stop_distance": stop_distance,
+            "stop_source": stop_result.source,
+            "stop_details": stop_result.details,
+        }
 
     def estimate_required_margin(
         self,
@@ -88,9 +172,45 @@ class RiskEngine:
         if cur_qty != 0 and signal.side == cur_side:
             return None, "risk_rejected:already_in_position"
 
-        risk_budget = equity * self.risk_per_trade_pct
-        stop_dist = max(bar.high - bar.low, self.eps)
-        desired_qty = risk_budget / stop_dist
+        if signal.side == Side.BUY:
+            side = "long"
+        elif signal.side == Side.SELL:
+            side = "short"
+        else:
+            return None, "risk_rejected:invalid_side"
+
+        stop_price = self._extract_stop_price(signal)
+        if stop_price is None:
+            fallback_stop_distance = max(bar.high - bar.low, self.eps)
+            if side == "long":
+                stop_price = bar.close - fallback_stop_distance
+            else:
+                stop_price = bar.close + fallback_stop_distance
+        signal_payload: object = {"stop_price": stop_price}
+        bars_payload: dict[str, object] = {signal.symbol: bar}
+        ctx_payload: dict[str, object] = {}
+        if isinstance(signal, Signal):
+            maybe_ctx = signal.metadata.get("ctx")
+            if isinstance(maybe_ctx, dict):
+                ctx_payload = maybe_ctx
+
+        if self._risk_spec.mode not in {"r_fixed", "equity_pct"}:
+            raise NotImplementedError(f"Unsupported risk mode: {self._risk_spec.mode}")
+        try:
+            desired_qty, risk_meta = self.compute_position_size_r(
+                symbol=signal.symbol,
+                side=side,
+                entry_price=bar.close,
+                signal=signal_payload,
+                bars_by_symbol=bars_payload,
+                ctx=ctx_payload,
+                equity=equity,
+            )
+        except ValueError as exc:
+            return None, f"risk_rejected:invalid_stop:{exc}"
+
+        risk_budget = risk_meta["risk_amount"]
+        stop_dist = risk_meta["stop_distance"]
         desired_notional = abs(desired_qty) * bar.close
         cap_applied = False
 
@@ -131,6 +251,10 @@ class RiskEngine:
             {
                 "risk_budget": risk_budget,
                 "stop_dist": stop_dist,
+                "risk_amount": risk_meta["risk_amount"],
+                "stop_distance": risk_meta["stop_distance"],
+                "stop_source": risk_meta["stop_source"],
+                "stop_details": risk_meta["stop_details"],
                 "current_qty": cur_qty,
                 "desired_qty": desired_qty,
                 "flip": flip,

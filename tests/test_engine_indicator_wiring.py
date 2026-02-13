@@ -73,7 +73,7 @@ def test_engine_indicator_context_wiring(tmp_path: Path) -> None:
     )
 
     strategy = IndicatorContextStrategy()
-    risk = RiskEngine(max_positions=1, risk_per_trade_pct=0.01)
+    risk = RiskEngine(max_positions=1, risk_per_trade_pct=0.01, config={"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "stop": {}}})
 
     fee_model = FeeModel(maker_fee_bps=1.0, taker_fee_bps=2.0)
     slippage_model = SlippageModel(k=0.01)

@@ -21,6 +21,7 @@ from bt.logging.jsonl import JsonlWriter
 from bt.logging.trades import TradesCsvWriter, prepare_run_dir, write_config_used
 from bt.portfolio.portfolio import Portfolio
 from bt.risk.risk_engine import RiskEngine
+from bt.risk.spec import parse_risk_spec
 from bt.strategy.coinflip import CoinFlipStrategy
 from bt.universe.universe import UniverseEngine
 
@@ -154,10 +155,22 @@ def run_stress_suite(
             p_trade=float(scenario_config.get("p_trade", 0.2)),
             cooldown_bars=int(scenario_config.get("cooldown_bars", 0)),
         )
+        risk_cfg = scenario_config.get("risk", {}) if isinstance(scenario_config.get("risk"), dict) else {}
+        risk_cfg_for_spec = dict(risk_cfg)
+        if "max_positions" not in risk_cfg_for_spec and "max_positions" in scenario_config:
+            risk_cfg_for_spec["max_positions"] = scenario_config["max_positions"]
+        if "risk_per_trade_pct" not in risk_cfg_for_spec and "risk_per_trade_pct" in scenario_config:
+            risk_cfg_for_spec["risk_per_trade_pct"] = scenario_config["risk_per_trade_pct"]
+        if "mode" not in risk_cfg_for_spec:
+            risk_cfg_for_spec["mode"] = "equity_pct"
+        if "r_per_trade" not in risk_cfg_for_spec and "risk_per_trade_pct" in risk_cfg_for_spec:
+            risk_cfg_for_spec["r_per_trade"] = risk_cfg_for_spec["risk_per_trade_pct"]
+        risk_spec = parse_risk_spec({"risk": risk_cfg_for_spec})
         risk = RiskEngine(
-            max_positions=int(scenario_config.get("max_positions", 5)),
-            risk_per_trade_pct=float(scenario_config.get("risk_per_trade_pct", 0.01)),
+            max_positions=int(risk_cfg_for_spec.get("max_positions", 5)),
+            risk_per_trade_pct=risk_spec.r_per_trade,
             max_notional_per_symbol=scenario_config.get("max_notional_per_symbol"),
+            config={"risk": risk_cfg_for_spec},
         )
         fee_model = FeeModel(
             maker_fee_bps=float(scenario_config.get("maker_fee_bps", 0.0)),
@@ -202,7 +215,7 @@ def run_stress_suite(
             fills_writer=fills_writer,
             trades_writer=trades_writer,
             equity_path=equity_path,
-            config=scenario_config,
+            config={"risk": risk_cfg_for_spec},
         )
         engine.run()
 
