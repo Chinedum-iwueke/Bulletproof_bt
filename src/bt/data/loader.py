@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 import yaml
 
+from bt.data.parquet_io import ensure_pyarrow_parquet
 from bt.data.schema import BAR_COLUMNS, DTYPES, normalize_columns
 from bt.data.validation import validate_bars_df
 
@@ -25,6 +26,7 @@ def _ensure_utc(ts: pd.Series) -> None:
 def load_bars(path: str | Path) -> pd.DataFrame:
     path = Path(path)
     if path.suffix == ".parquet":
+        ensure_pyarrow_parquet()
         df = pd.read_parquet(path)
     elif path.suffix == ".csv":
         df = pd.read_csv(path)
@@ -163,6 +165,7 @@ def load_dataset(dataset_path: str) -> pd.DataFrame:
     for parquet_path in parsed_manifest.file_list:
         if parquet_path.suffix != ".parquet":
             raise _manifest_error(manifest_path, f"only parquet files are supported, got: {parquet_path}")
+        ensure_pyarrow_parquet()
         frames.append(pd.read_parquet(parquet_path))
 
     combined = pd.concat(frames, ignore_index=True)
