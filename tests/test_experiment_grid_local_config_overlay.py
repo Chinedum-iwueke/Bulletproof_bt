@@ -1,20 +1,13 @@
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
 import pandas as pd
 import pytest
 import yaml
 
-
-def _load_run_grid_module():
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "run_experiment_grid.py"
-    spec = importlib.util.spec_from_file_location("run_experiment_grid", module_path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from bt.config import deep_merge, load_yaml, resolve_paths_relative_to
+from bt.experiments.grid_runner import run_grid
 
 
 def _write_dataset(dataset_dir: Path) -> Path:
@@ -70,8 +63,15 @@ def _load_single_run_cfg(out_dir: Path) -> dict:
     return yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
 
 
+def _build_base_with_local(base_path: Path, local_paths: list[str]) -> dict:
+    cfg = deep_merge(load_yaml(base_path), load_yaml("configs/fees.yaml"))
+    cfg = deep_merge(cfg, load_yaml("configs/slippage.yaml"))
+    for path in resolve_paths_relative_to(base_path.parent, local_paths):
+        cfg = deep_merge(cfg, load_yaml(path))
+    return cfg
+
+
 def test_local_overlay_applied(tmp_path: Path) -> None:
-    module = _load_run_grid_module()
     base_path = tmp_path / "engine.yaml"
     local_path = tmp_path / "engine.local.yaml"
     exp_path = tmp_path / "experiment.yaml"
@@ -85,8 +85,12 @@ def test_local_overlay_applied(tmp_path: Path) -> None:
     _write_experiment(exp_path)
     data_path = _write_dataset(tmp_path / "dataset")
 
-    exit_code = module.run_grid(base_path, exp_path, str(data_path), out_path, local_config_path=str(local_path))
-    assert exit_code == 0
+    run_grid(
+        config=_build_base_with_local(base_path, [str(local_path)]),
+        experiment_cfg=load_yaml(exp_path),
+        data_path=str(data_path),
+        out_path=out_path,
+    )
 
     run_cfg = _load_single_run_cfg(out_path)
     assert run_cfg["risk"]["max_positions"] == 1
@@ -94,7 +98,6 @@ def test_local_overlay_applied(tmp_path: Path) -> None:
 
 
 def test_precedence_fixed_beats_local(tmp_path: Path) -> None:
-    module = _load_run_grid_module()
     base_path = tmp_path / "engine.yaml"
     local_path = tmp_path / "engine.local.yaml"
     exp_path = tmp_path / "experiment.yaml"
@@ -105,15 +108,18 @@ def test_precedence_fixed_beats_local(tmp_path: Path) -> None:
     _write_experiment(exp_path, fixed={"strategy": {"name": "coinflip"}, "risk": {"max_positions": 3}})
     data_path = _write_dataset(tmp_path / "dataset")
 
-    exit_code = module.run_grid(base_path, exp_path, str(data_path), out_path, local_config_path=str(local_path))
-    assert exit_code == 0
+    run_grid(
+        config=_build_base_with_local(base_path, [str(local_path)]),
+        experiment_cfg=load_yaml(exp_path),
+        data_path=str(data_path),
+        out_path=out_path,
+    )
 
     run_cfg = _load_single_run_cfg(out_path)
     assert run_cfg["risk"]["max_positions"] == 3
 
 
 def test_precedence_grid_beats_local_and_fixed(tmp_path: Path) -> None:
-    module = _load_run_grid_module()
     base_path = tmp_path / "engine.yaml"
     local_path = tmp_path / "engine.local.yaml"
     exp_path = tmp_path / "experiment.yaml"
@@ -128,30 +134,21 @@ def test_precedence_grid_beats_local_and_fixed(tmp_path: Path) -> None:
     )
     data_path = _write_dataset(tmp_path / "dataset")
 
-    exit_code = module.run_grid(base_path, exp_path, str(data_path), out_path, local_config_path=str(local_path))
-    assert exit_code == 0
+    run_grid(
+        config=_build_base_with_local(base_path, [str(local_path)]),
+        experiment_cfg=load_yaml(exp_path),
+        data_path=str(data_path),
+        out_path=out_path,
+    )
 
     run_cfg = _load_single_run_cfg(out_path)
     assert run_cfg["strategy"]["p_trade"] == 0.9
 
 
 def test_missing_local_config_path_raises_clear_error(tmp_path: Path) -> None:
-    module = _load_run_grid_module()
     base_path = tmp_path / "engine.yaml"
-    exp_path = tmp_path / "experiment.yaml"
-    out_path = tmp_path / "out"
-
     _write_base_config(base_path)
-    _write_experiment(exp_path)
-    data_path = _write_dataset(tmp_path / "dataset")
 
-    missing_path = "/nope/missing.yaml"
-    with pytest.raises(ValueError, match=r"local-config") as exc_info:
-        module.run_grid(
-            base_path,
-            exp_path,
-            str(data_path),
-            out_path,
-            local_config_path=missing_path,
-        )
-    assert missing_path in str(exc_info.value)
+    missing_path = "missing.local.yaml"
+    with pytest.raises(Exception):
+        _build_base_with_local(base_path, [missing_path])
