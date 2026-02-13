@@ -59,12 +59,17 @@ _SUMMARY_COLUMNS = [
 ]
 
 
-def _load_yaml(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
+def _load_yaml_file(path: str) -> dict[str, Any]:
+    yaml_path = Path(path)
+    with yaml_path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     if not isinstance(data, dict):
-        raise ValueError(f"Invalid YAML mapping at {path}")
+        raise ValueError(f"Invalid YAML mapping at {yaml_path}")
     return data
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    return _load_yaml_file(str(path))
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -284,10 +289,22 @@ def run_grid(
     data_path: str,
     out_path: Path,
     *,
+    local_config_path: str | None = None,
     force: bool = False,
     allow_failures: bool = False,
 ) -> int:
     base_cfg = _load_yaml(config_path)
+    local_cfg: dict[str, Any] = {}
+    if local_config_path is not None:
+        local_path = Path(local_config_path)
+        if not local_path.exists():
+            raise ValueError(f"Invalid --local-config: file does not exist: {local_path}")
+        if local_path.suffix.lower() not in {".yaml", ".yml"}:
+            raise ValueError(
+                f"Invalid --local-config: expected a .yaml/.yml file, got: {local_path}"
+            )
+        local_cfg = _load_yaml_file(str(local_path))
+
     exp_cfg = _load_yaml(experiment_path)
     _validate_experiment(exp_cfg)
 
@@ -312,6 +329,7 @@ def run_grid(
                 "grid_runs": grid_runs,
                 "paths": {
                     "config": str(config_path),
+                    "local_config": local_config_path,
                     "experiment": str(experiment_path),
                     "data": str(data_path),
                 },
@@ -330,28 +348,43 @@ def run_grid(
     summary_rows: list[dict[str, Any]] = []
 
     for index, params in enumerate(grid_runs, start=1):
+        run_prefix = f"run_{index:03d}"
         overrides = copy.deepcopy(fixed_overrides)
         for dotpath, value in params.items():
             set_by_dotpath(overrides, dotpath, value)
 
-        run_cfg = deep_merge(base_cfg, overrides)
-        run_cfg = resolve_config(run_cfg)
-        _ensure_timeframe_config(run_cfg)
+        merged_cfg = deep_merge(base_cfg, local_cfg)
+        merged_cfg = deep_merge(merged_cfg, overrides)
 
-        run_suffix = _render_run_suffix(run_template, run_cfg)
-        run_name = f"run_{index:03d}__{run_suffix}"
+        run_suffix = "run"
+        run_name_error: Exception | None = None
+        try:
+            run_suffix = _render_run_suffix(run_template, merged_cfg)
+        except Exception as exc:  # pragma: no cover - rare invalid run_naming configs
+            run_suffix = "template_error"
+            run_name_error = exc
+
+        run_name = f"{run_prefix}__{run_suffix}"
         run_dir = runs_dir / run_name
         run_dir.mkdir(parents=True, exist_ok=False)
 
-        with (run_dir / "config_used.yaml").open("w", encoding="utf-8") as handle:
-            yaml.safe_dump(run_cfg, handle, sort_keys=False)
-        write_data_scope(
-            run_dir,
-            config=run_cfg,
-            dataset_dir=data_path if Path(data_path).is_dir() else None,
-        )
-
         try:
+            if run_name_error is not None:
+                raise ValueError(
+                    f"Invalid run naming template for run {run_prefix}: {run_name_error}"
+                )
+
+            run_cfg = resolve_config(merged_cfg)
+            _ensure_timeframe_config(run_cfg)
+
+            with (run_dir / "config_used.yaml").open("w", encoding="utf-8") as handle:
+                yaml.safe_dump(run_cfg, handle, sort_keys=False)
+            write_data_scope(
+                run_dir,
+                config=run_cfg,
+                dataset_dir=data_path if Path(data_path).is_dir() else None,
+            )
+
             datafeed = load_feed(data_path, run_cfg)
             engine = _build_engine(run_cfg, datafeed, run_dir)
             engine.run()
@@ -445,6 +478,7 @@ def main() -> None:
     parser.add_argument("--experiment", required=True)
     parser.add_argument("--data", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--local-config")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--allow-failures", action="store_true")
     args = parser.parse_args()
@@ -454,6 +488,7 @@ def main() -> None:
         experiment_path=Path(args.experiment),
         data_path=args.data,
         out_path=Path(args.out),
+        local_config_path=args.local_config,
         force=args.force,
         allow_failures=args.allow_failures,
     )
