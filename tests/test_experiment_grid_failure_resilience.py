@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import importlib.util
 import json
 from pathlib import Path
 
@@ -9,14 +8,8 @@ import pandas as pd
 import pytest
 import yaml
 
-
-def _load_run_grid_module():
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "run_experiment_grid.py"
-    spec = importlib.util.spec_from_file_location("run_experiment_grid", module_path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+import bt.strategy
+from bt.experiments.grid_runner import run_grid
 
 
 def _write_dataset(dataset_dir: Path) -> Path:
@@ -45,16 +38,14 @@ def _write_dataset(dataset_dir: Path) -> Path:
 
 
 def test_grid_runner_records_failures_and_continues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    module = _load_run_grid_module()
-
-    original_make_strategy = module.make_strategy
+    original_make_strategy = bt.strategy.make_strategy
 
     def flaky_make_strategy(name, **kwargs):
         if kwargs.get("seed") == 2:
             raise RuntimeError("intentional test failure")
         return original_make_strategy(name, **kwargs)
 
-    monkeypatch.setattr(module, "make_strategy", flaky_make_strategy)
+    monkeypatch.setattr(bt.strategy, "make_strategy", flaky_make_strategy)
 
     cfg = {
         "initial_cash": 10000.0,
@@ -62,23 +53,21 @@ def test_grid_runner_records_failures_and_continues(tmp_path: Path, monkeypatch:
         "risk": {"max_positions": 1, "risk_per_trade_pct": 0.001},
         "signal_delay_bars": 0,
         "strategy": {"name": "coinflip", "p_trade": 0.0},
+        "maker_fee_bps": 0.0,
+        "taker_fee_bps": 0.0,
+        "slippage_k": 0.0,
     }
-    cfg_path = tmp_path / "engine.yaml"
-    cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
 
     exp = {
         "version": 1,
         "grid": {"strategy.seed": [1, 2, 3]},
         "run_naming": {"template": "seed{strategy.seed}"},
     }
-    exp_path = tmp_path / "experiment.yaml"
-    exp_path.write_text(yaml.safe_dump(exp, sort_keys=False), encoding="utf-8")
 
     data_path = _write_dataset(tmp_path / "dataset")
     out_path = tmp_path / "out"
 
-    exit_code = module.run_grid(cfg_path, exp_path, str(data_path), out_path, allow_failures=True)
-    assert exit_code == 0
+    run_grid(config=cfg, experiment_cfg=exp, data_path=str(data_path), out_path=out_path)
 
     with (out_path / "summary.csv").open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))

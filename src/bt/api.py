@@ -4,26 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-
-def _load_yaml_mapping(path: Path, *, missing_message: str, parse_message: str) -> dict[str, Any]:
-    import yaml
-
-    if not path.exists():
-        raise ValueError(f"{missing_message}: {path}")
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            data = yaml.safe_load(handle) or {}
-    except yaml.YAMLError as exc:  # pragma: no cover - defensive parse mapping
-        raise ValueError(f"{parse_message}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError(f"{parse_message}: expected a YAML mapping")
-    return data
-
-
-def _merge_config(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    merged.update(update)
-    return merged
+from bt.config import deep_merge, load_yaml, resolve_paths_relative_to
+from bt.core.config_resolver import resolve_config
 
 
 def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
@@ -39,14 +21,6 @@ def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
     from bt.strategy import make_strategy
     from bt.strategy.htf_context import HTFContextStrategyAdapter
     from bt.universe.universe import UniverseEngine
-
-    htf_timeframes = config.get("htf_timeframes")
-    if htf_timeframes:
-        config = dict(config)
-        config["htf_resampler"] = TimeframeResampler(
-            timeframes=[str(tf) for tf in htf_timeframes],
-            strict=bool(config.get("htf_strict", True)),
-        )
 
     universe = UniverseEngine(
         min_history_bars=int(config.get("min_history_bars", 1)),
@@ -72,12 +46,18 @@ def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
     )
 
     htf_resampler = config.get("htf_resampler")
+    if isinstance(htf_resampler, dict):
+        htf_resampler = TimeframeResampler(
+            timeframes=[str(tf) for tf in htf_resampler.get("timeframes", [])],
+            strict=bool(htf_resampler.get("strict", True)),
+        )
     if isinstance(htf_resampler, TimeframeResampler):
         strategy = HTFContextStrategyAdapter(inner=strategy, resampler=htf_resampler)
 
+    risk_cfg = config.get("risk", {}) if isinstance(config.get("risk"), dict) else {}
     risk = RiskEngine(
-        max_positions=int(config.get("max_positions", 5)),
-        risk_per_trade_pct=float(config.get("risk_per_trade_pct", 0.01)),
+        max_positions=int(risk_cfg.get("max_positions", 5)),
+        risk_per_trade_pct=float(risk_cfg.get("risk_per_trade_pct", 0.01)),
         max_notional_per_symbol=config.get("max_notional_per_symbol"),
     )
 
@@ -121,6 +101,7 @@ def run_backtest(
     config_path: str,
     data_path: str,
     out_dir: str,
+    override_paths: Optional[list[str]] = None,
     run_name: Optional[str] = None,
 ) -> str:
     """
@@ -130,25 +111,14 @@ def run_backtest(
     from bt.logging.trades import make_run_id, prepare_run_dir, write_config_used, write_data_scope
     from bt.metrics.performance import compute_performance, write_performance_artifacts
 
-    config_file = Path(config_path)
-    base_config = _load_yaml_mapping(
-        config_file,
-        missing_message="Config path not found",
-        parse_message="Failed to parse YAML config",
-    )
-    fees_config = _load_yaml_mapping(
-        Path("configs/fees.yaml"),
-        missing_message="Config path not found",
-        parse_message="Failed to parse YAML config",
-    )
-    slippage_config = _load_yaml_mapping(
-        Path("configs/slippage.yaml"),
-        missing_message="Config path not found",
-        parse_message="Failed to parse YAML config",
-    )
-
-    config = _merge_config(base_config, fees_config)
-    config = _merge_config(config, slippage_config)
+    base_config = load_yaml(config_path)
+    fees_config = load_yaml("configs/fees.yaml")
+    slippage_config = load_yaml("configs/slippage.yaml")
+    config = deep_merge(base_config, fees_config)
+    config = deep_merge(config, slippage_config)
+    for override_path in resolve_paths_relative_to(Path(config_path).parent, override_paths):
+        config = deep_merge(config, load_yaml(override_path))
+    config = resolve_config(config)
 
     resolved_run_name = run_name or make_run_id()
     run_dir = prepare_run_dir(Path(out_dir), resolved_run_name)
@@ -175,35 +145,30 @@ def run_grid(
     experiment_path: str,
     data_path: str,
     out_dir: str,
+    override_paths: Optional[list[str]] = None,
     experiment_name: Optional[str] = None,
 ) -> str:
     """
     Runs an experiment grid and returns the created experiment directory path.
     """
-    config_file = Path(config_path)
-    experiment_file = Path(experiment_path)
+    from bt.experiments.grid_runner import run_grid as run_grid_library
 
-    _load_yaml_mapping(
-        config_file,
-        missing_message="Config path not found",
-        parse_message="Failed to parse YAML config",
-    )
-    experiment_cfg = _load_yaml_mapping(
-        experiment_file,
-        missing_message="Experiment path not found",
-        parse_message="Failed to parse YAML config",
-    )
+    base = load_yaml(config_path)
+    fees = load_yaml("configs/fees.yaml")
+    slippage = load_yaml("configs/slippage.yaml")
+    config = deep_merge(base, fees)
+    config = deep_merge(config, slippage)
 
-    try:
-        from scripts.run_experiment_grid import run_grid as run_grid_script
-    except Exception as exc:  # pragma: no cover - only if packaging/layout changes
-        raise NotImplementedError("Grid runner script is not importable in this environment") from exc
+    for override_path in resolve_paths_relative_to(Path(config_path).parent, override_paths):
+        config = deep_merge(config, load_yaml(override_path))
 
+    experiment_cfg = load_yaml(experiment_path)
     resolved_experiment_name = experiment_name or str(experiment_cfg.get("name") or "experiment")
     experiment_dir = Path(out_dir) / resolved_experiment_name
-    run_grid_script(
-        config_path=config_file,
-        experiment_path=experiment_file,
+
+    run_grid_library(
+        config=config,
+        experiment_cfg=experiment_cfg,
         data_path=data_path,
         out_path=experiment_dir,
         force=False,

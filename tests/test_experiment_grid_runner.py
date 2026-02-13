@@ -7,19 +7,8 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-import importlib.util
-
-
-def _load_run_grid():
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "run_experiment_grid.py"
-    spec = importlib.util.spec_from_file_location("run_experiment_grid", module_path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.run_grid
-
-
-run_grid = _load_run_grid()
+from bt.experiments.grid_runner import run_grid
+from bt.config import deep_merge, load_yaml
 
 
 def _write_manifest_dataset(dataset_dir: Path) -> Path:
@@ -60,12 +49,11 @@ def test_experiment_grid_runner_deterministic_outputs(tmp_path: Path) -> None:
         "signal_delay_bars": 1,
         "initial_cash": 100000.0,
         "max_leverage": 10.0,
-        "max_positions": 1,
-        "risk_per_trade_pct": 0.0001,
+        "risk": {"max_positions": 1, "risk_per_trade_pct": 0.0001},
         "maker_fee_bps": 1.0,
         "taker_fee_bps": 2.0,
         "slippage_k": 0.01,
-        "htf_timeframes": ["15m"],
+        "htf_resampler": {"timeframes": ["15m"], "strict": True},
         "strategy": {
             "name": "coinflip",
             "seed": 7,
@@ -97,7 +85,10 @@ def test_experiment_grid_runner_deterministic_outputs(tmp_path: Path) -> None:
         yaml.safe_dump(experiment_cfg, handle, sort_keys=False)
 
     out_dir = tmp_path / "out"
-    run_grid(base_cfg_path, exp_path, str(bars_path), out_dir)
+    base_cfg = deep_merge(load_yaml(base_cfg_path), load_yaml("configs/fees.yaml"))
+    base_cfg = deep_merge(base_cfg, load_yaml("configs/slippage.yaml"))
+    experiment_cfg = load_yaml(exp_path)
+    run_grid(config=base_cfg, experiment_cfg=experiment_cfg, data_path=str(bars_path), out_path=out_dir)
 
     run_dirs = sorted((out_dir / "runs").iterdir())
     assert len(run_dirs) == 15
