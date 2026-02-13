@@ -1,11 +1,28 @@
-from __future__ import annotations
+import pytest
 
-import sys
-from pathlib import Path
+def _ensure_pyarrow_parquet_attr():
+    """
+    Pandas' PyArrow parquet backend calls `pyarrow.parquet.*` via the
+    `pyarrow` module attribute (pa.parquet). In some environments the
+    submodule can be importable but not attached as an attribute, and
+    in a full test suite something may reset it (reload/monkeypatch).
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    pa.parquet = pq  # force attach every time
 
-# Ensure 'src' is on sys.path so `import bt` works when running pytest
-# without installing the package (common in CI/Codex containers).
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+def pytest_configure(config):
+    # Run as early as possible (before collection finishes / plugins run)
+    try:
+        _ensure_pyarrow_parquet_attr()
+    except Exception:
+        pass
+
+@pytest.fixture(autouse=True)
+def _fix_pyarrow_parquet_attr():
+    # Re-attach before every test in case earlier tests reset pyarrow
+    try:
+        _ensure_pyarrow_parquet_attr()
+    except Exception:
+        pass
+    yield
