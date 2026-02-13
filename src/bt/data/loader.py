@@ -13,7 +13,7 @@ from bt.data.validation import validate_bars_df
 
 
 def _ensure_utc(ts: pd.Series) -> None:
-    if pd.api.types.is_datetime64tz_dtype(ts):
+    if isinstance(ts.dtype, pd.DatetimeTZDtype):
         if str(ts.dt.tz) != "UTC":
             raise ValueError("ts must be in UTC")
         return
