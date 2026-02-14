@@ -11,7 +11,6 @@ from bt.core.enums import OrderType, Side
 from bt.core.types import Bar, OrderIntent, Signal
 from bt.risk.spec import parse_risk_spec
 from bt.risk.stop_distance import resolve_stop_distance
-from bt.risk.stop_resolution import STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY
 
 
 class RiskEngine:
@@ -113,8 +112,7 @@ class RiskEngine:
             "stop_distance": stop_distance,
             "stop_source": stop_result.source,
             "stop_details": stop_result.details,
-            "used_legacy_stop_proxy": False,
-            "r_metrics_valid": stop_result.source in {"explicit_stop_price", "atr_multiple"},
+            "r_metrics_valid": bool(stop_result.source) and stop_distance > 0,
         }
 
     def estimate_required_margin(
@@ -205,23 +203,11 @@ class RiskEngine:
                 equity=equity,
             )
         except ValueError as exc:
-            message = str(exc)
-            if "stop distance cannot be resolved" in message:
-                fallback_stop_distance = max(bar.high - bar.low, self.eps)
-                desired_qty = (equity * self._risk_spec.r_per_trade) / fallback_stop_distance
-                risk_meta = {
-                    "risk_amount": None,
-                    "stop_distance": None,
-                    "stop_source": STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY,
-                    "stop_details": {"fallback_stop_distance": fallback_stop_distance},
-                    "used_legacy_stop_proxy": True,
-                    "r_metrics_valid": False,
-                }
-            else:
-                return None, f"risk_rejected:invalid_stop:{exc}"
+            if "stop distance cannot be resolved" in str(exc):
+                return None, "risk_rejected:stop_unresolvable"
+            return None, f"risk_rejected:invalid_stop:{exc}"
 
-        risk_meta.setdefault("used_legacy_stop_proxy", risk_meta.get("stop_source") == STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY)
-        risk_meta.setdefault("r_metrics_valid", bool(risk_meta.get("stop_source") in {"explicit_stop_price", "atr_multiple"}))
+        risk_meta["r_metrics_valid"] = bool(risk_meta.get("stop_source")) and float(risk_meta.get("stop_distance", 0.0)) > 0
 
         risk_budget = risk_meta["risk_amount"]
         stop_dist = risk_meta["stop_distance"]
@@ -250,14 +236,49 @@ class RiskEngine:
 
         notional = abs(order_qty) * bar.close
         fee_buffer, slippage_buffer = self._estimate_buffers(notional)
+        adverse_move_buffer = 0.0
+        if signal.side == Side.BUY:
+            adverse_move_buffer = abs(order_qty) * max(bar.high - bar.close, 0.0)
+        elif signal.side == Side.SELL:
+            adverse_move_buffer = abs(order_qty) * max(bar.close - bar.low, 0.0)
         margin_required = self.estimate_required_margin(
             notional=notional,
             max_leverage=max_leverage,
-            fee_buffer=fee_buffer,
+            fee_buffer=fee_buffer + adverse_move_buffer,
             slippage_buffer=slippage_buffer,
         )
+        scaled_by_margin = False
         if margin_required > free_margin:
-            return None, "risk_rejected:insufficient_free_margin"
+            safe_free_margin = free_margin - fee_buffer - slippage_buffer - adverse_move_buffer
+            max_affordable_notional = safe_free_margin * max_leverage
+            if max_affordable_notional <= 0:
+                return None, "risk_rejected:insufficient_free_margin"
+
+            max_affordable_qty = max_affordable_notional / bar.close
+            if max_affordable_qty <= 0:
+                return None, "risk_rejected:insufficient_free_margin"
+
+            if abs(order_qty) > max_affordable_qty:
+                order_qty = math.copysign(max_affordable_qty, order_qty)
+                scaled_by_margin = True
+                if abs(order_qty) <= 0:
+                    return None, "risk_rejected:insufficient_free_margin"
+                notional = abs(order_qty) * bar.close
+                fee_buffer, slippage_buffer = self._estimate_buffers(notional)
+                adverse_move_buffer = 0.0
+                if signal.side == Side.BUY:
+                    adverse_move_buffer = abs(order_qty) * max(bar.high - bar.close, 0.0)
+                elif signal.side == Side.SELL:
+                    adverse_move_buffer = abs(order_qty) * max(bar.close - bar.low, 0.0)
+                margin_required = self.estimate_required_margin(
+                    notional=notional,
+                    max_leverage=max_leverage,
+                    fee_buffer=fee_buffer + adverse_move_buffer,
+                    slippage_buffer=slippage_buffer,
+                )
+
+            if abs(order_qty) <= 0 or margin_required > free_margin:
+                return None, "risk_rejected:insufficient_free_margin"
 
         reason = "risk_approved"
         metadata = dict(signal.metadata)
@@ -269,7 +290,6 @@ class RiskEngine:
                 "stop_distance": risk_meta["stop_distance"],
                 "stop_source": risk_meta["stop_source"],
                 "stop_details": risk_meta["stop_details"],
-                "used_legacy_stop_proxy": risk_meta["used_legacy_stop_proxy"],
                 "r_metrics_valid": risk_meta["r_metrics_valid"],
                 "current_qty": cur_qty,
                 "desired_qty": desired_qty,
@@ -279,9 +299,10 @@ class RiskEngine:
                 "margin_required": margin_required,
                 "margin_fee_buffer": fee_buffer,
                 "margin_slippage_buffer": slippage_buffer,
+                "margin_adverse_move_buffer": adverse_move_buffer,
                 "free_margin": free_margin,
                 "max_leverage": max_leverage,
-                "scaled_by_margin": False,
+                "scaled_by_margin": scaled_by_margin,
                 "reason": reason,
             }
         )

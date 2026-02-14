@@ -29,8 +29,8 @@ class DualSignalStrategy(Strategy):
             return []
         self._emitted = True
         return [
-            Signal(ts=ts, symbol="BTC", side=Side.BUY, signal_type="unit", confidence=1.0, metadata={}),
-            Signal(ts=ts, symbol="ETH", side=Side.BUY, signal_type="unit", confidence=1.0, metadata={}),
+            Signal(ts=ts, symbol="BTC", side=Side.BUY, signal_type="unit", confidence=1.0, metadata={"stop_price": 99.0}),
+            Signal(ts=ts, symbol="ETH", side=Side.BUY, signal_type="unit", confidence=1.0, metadata={"stop_price": 99.0}),
         ]
 
 

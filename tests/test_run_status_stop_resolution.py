@@ -112,12 +112,11 @@ def _run_single(tmp_path: Path, *, strategy_name: str, out_name: str) -> dict:
     return json.loads(status_path.read_text(encoding="utf-8"))
 
 
-def test_run_status_records_legacy_proxy(tmp_path: Path) -> None:
+def test_run_status_records_unresolved_when_no_stop(tmp_path: Path) -> None:
     payload = _run_single(tmp_path, strategy_name="test_no_stop_signal", out_name="legacy")
-    assert payload["stop_resolution"] == "legacy_high_low_proxy"
-    assert payload["used_legacy_stop_proxy"] is True
+    assert payload["stop_resolution"] == "unresolved"
+    assert payload["used_legacy_stop_proxy"] is False
     assert payload["r_metrics_valid"] is False
-    assert any("Legacy stop proxy used" in note for note in payload["notes"])
 
 
 def test_run_status_records_explicit_stop(tmp_path: Path) -> None:
