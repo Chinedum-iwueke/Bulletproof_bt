@@ -62,6 +62,26 @@ class RiskEngine:
             return round(qty, 8)
         raise ValueError(f"Invalid risk.qty_rounding={rounding!r}")
 
+    def _stop_resolution_mode(self) -> str:
+        risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
+        mode = risk_cfg.get("stop_resolution", "strict") if isinstance(risk_cfg, dict) else "strict"
+        return str(mode)
+
+    @staticmethod
+    def _qty_sign_invariant_ok(*, signal_side: Side, current_qty: float, flip: bool, order_qty: float, close_only: bool) -> bool:
+        if close_only:
+            return order_qty == -current_qty
+        if signal_side == Side.BUY and current_qty >= 0 and order_qty <= 0:
+            return False
+        if signal_side == Side.SELL and current_qty <= 0 and order_qty >= 0:
+            return False
+        if current_qty != 0 and flip:
+            if current_qty > 0 and signal_side == Side.SELL and order_qty >= 0:
+                return False
+            if current_qty < 0 and signal_side == Side.BUY and order_qty <= 0:
+                return False
+        return True
+
     def compute_position_size_r(
         self,
         *,
@@ -160,11 +180,57 @@ class RiskEngine:
         if equity <= 0:
             return None, "risk_rejected:no_equity"
         cur_qty = current_qty
+        close_only = bool(signal.metadata.get("close_only"))
+        if close_only and cur_qty == 0:
+            return None, "risk_rejected:close_only_no_position"
         cur_side = None
         if cur_qty > 0:
             cur_side = Side.BUY
         elif cur_qty < 0:
             cur_side = Side.SELL
+
+        if close_only and cur_qty != 0:
+            order_qty = -cur_qty
+            if not self._qty_sign_invariant_ok(
+                signal_side=signal.side,
+                current_qty=cur_qty,
+                flip=(cur_qty != 0 and signal.side != cur_side),
+                order_qty=order_qty,
+                close_only=True,
+            ):
+                return None, f"risk_rejected:qty_sign_invariant_failed:current_qty={cur_qty}:signal_side={signal.side.value}:flip={cur_qty != 0 and signal.side != cur_side}:order_qty={order_qty}"
+            reason = "risk_approved:close_only"
+            metadata = dict(signal.metadata)
+            metadata.update(
+                {
+                    "current_qty": cur_qty,
+                    "desired_qty": 0.0,
+                    "flip": False,
+                    "close_only": True,
+                    "notional_est": abs(order_qty) * bar.close,
+                    "cap_applied": False,
+                    "margin_required": 0.0,
+                    "margin_fee_buffer": 0.0,
+                    "margin_slippage_buffer": 0.0,
+                    "margin_adverse_move_buffer": 0.0,
+                    "free_margin": free_margin,
+                    "max_leverage": max_leverage,
+                    "scaled_by_margin": False,
+                    "reason": reason,
+                }
+            )
+            signal_with_metadata = replace(signal, metadata=metadata)
+            order_intent = OrderIntent(
+                ts=ts,
+                symbol=signal.symbol,
+                side=signal.side,
+                qty=order_qty,
+                order_type=OrderType.MARKET,
+                limit_price=None,
+                reason=reason,
+                metadata=signal_with_metadata.metadata,
+            )
+            return order_intent, reason
 
         if cur_qty != 0 and signal.side == cur_side:
             return None, "risk_rejected:already_in_position"
@@ -187,6 +253,7 @@ class RiskEngine:
 
         if self._risk_spec.mode not in {"r_fixed", "equity_pct"}:
             raise NotImplementedError(f"Unsupported risk mode: {self._risk_spec.mode}")
+        stop_resolution_mode = self._stop_resolution_mode()
         try:
             desired_qty, risk_meta = self.compute_position_size_r(
                 symbol=signal.symbol,
@@ -199,10 +266,47 @@ class RiskEngine:
             )
         except ValueError as exc:
             if "stop distance cannot be resolved" in str(exc):
-                return None, "risk_rejected:stop_unresolvable"
-            return None, f"risk_rejected:invalid_stop:{exc}"
+                if stop_resolution_mode == "strict":
+                    return None, "risk_rejected:stop_unresolvable:strict"
+                if stop_resolution_mode == "allow_legacy_proxy":
+                    legacy_cfg = {"risk": dict(self._config.get("risk", {}))}
+                    legacy_stop_cfg = dict(legacy_cfg["risk"].get("stop", {}))
+                    legacy_stop_cfg["mode"] = "legacy_proxy"
+                    legacy_cfg["risk"]["stop"] = legacy_stop_cfg
+                    try:
+                        risk_amount = equity * self._risk_spec.r_per_trade
+                        stop_result = resolve_stop_distance(
+                            symbol=signal.symbol,
+                            side=side,
+                            entry_price=bar.close,
+                            signal=signal_payload,
+                            bars_by_symbol=bars_payload,
+                            ctx=ctx_payload,
+                            config=legacy_cfg,
+                        )
+                        stop_distance = float(stop_result.stop_distance)
+                        min_stop_distance = self._risk_spec.min_stop_distance
+                        if min_stop_distance is not None:
+                            stop_distance = max(stop_distance, min_stop_distance)
+                        desired_qty = self._round_qty(risk_amount / stop_distance, str(self._config.get("risk", {}).get("qty_rounding", "none")))
+                        if not math.isfinite(desired_qty) or desired_qty <= 0:
+                            raise ValueError(f"{signal.symbol}: invalid qty computed: {desired_qty}")
+                        risk_meta = {
+                            "risk_amount": risk_amount,
+                            "stop_distance": stop_distance,
+                            "stop_source": "legacy_high_low_proxy",
+                            "stop_details": stop_result.details,
+                            "used_legacy_stop_proxy": True,
+                            "r_metrics_valid": False,
+                        }
+                    except ValueError as legacy_exc:
+                        return None, f"risk_rejected:invalid_stop:{legacy_exc}"
+                else:
+                    return None, f"risk_rejected:invalid_stop_resolution_mode:{stop_resolution_mode}"
+            else:
+                return None, f"risk_rejected:invalid_stop:{exc}"
 
-        risk_meta["r_metrics_valid"] = bool(risk_meta.get("stop_source")) and float(risk_meta.get("stop_distance", 0.0)) > 0
+        risk_meta["r_metrics_valid"] = bool(risk_meta.get("r_metrics_valid", True)) and bool(risk_meta.get("stop_source")) and float(risk_meta.get("stop_distance", 0.0)) > 0
 
         risk_budget = risk_meta["risk_amount"]
         stop_dist = risk_meta["stop_distance"]
@@ -225,6 +329,15 @@ class RiskEngine:
                 return None, "risk_rejected:invalid_flip"
         else:
             order_qty = desired_qty if signal.side == Side.BUY else -desired_qty
+
+        if not self._qty_sign_invariant_ok(
+            signal_side=signal.side,
+            current_qty=cur_qty,
+            flip=flip,
+            order_qty=order_qty,
+            close_only=False,
+        ):
+            return None, f"risk_rejected:qty_sign_invariant_failed:current_qty={cur_qty}:signal_side={signal.side.value}:flip={flip}:order_qty={order_qty}"
 
         if free_margin <= 0:
             return None, "risk_rejected:insufficient_free_margin"
@@ -286,6 +399,8 @@ class RiskEngine:
                 "stop_source": risk_meta["stop_source"],
                 "stop_details": risk_meta["stop_details"],
                 "r_metrics_valid": risk_meta["r_metrics_valid"],
+                "used_legacy_stop_proxy": bool(risk_meta.get("used_legacy_stop_proxy", False)),
+                "stop_resolution_mode": stop_resolution_mode,
                 "current_qty": cur_qty,
                 "desired_qty": desired_qty,
                 "flip": flip,

@@ -83,6 +83,7 @@ class CoinFlipStrategy(Strategy):
                                 "cooldown_bars": self._cooldown_bars,
                                 "max_hold_bars": self._max_hold_bars,
                                 "exit_reason": "max_hold_bars",
+                                "close_only": True,
                             },
                         )
                     )
@@ -121,7 +122,6 @@ class CoinFlipStrategy(Strategy):
                         "stop_atr_multiple": self._stop_atr_multiple,
                         "max_hold_bars": self._max_hold_bars,
                         "stop_price": stop_price,
-                        "stop_source": "bar_range",
                         "stop_distance": stop_distance,
                     },
                 )

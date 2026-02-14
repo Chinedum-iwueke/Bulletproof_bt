@@ -27,3 +27,9 @@ def test_parse_risk_spec_rejects_missing_risk_fraction() -> None:
 
     with pytest.raises(ValueError, match=r"risk\.mode and risk\.r_per_trade are required"):
         parse_risk_spec(resolved)
+
+
+def test_resolve_config_injects_default_stop_resolution() -> None:
+    resolved = resolve_config({"risk": {"mode": "r_fixed", "r_per_trade": 0.01}})
+
+    assert resolved["risk"]["stop_resolution"] == "strict"

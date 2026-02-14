@@ -29,3 +29,5 @@ def test_coinflip_emits_exit_after_max_hold() -> None:
     assert exit_signals[0].signal_type == "coinflip_exit"
     assert exit_signals[0].side == (Side.SELL if entry_side == Side.BUY else Side.BUY)
     assert "stop_price" not in exit_signals[0].metadata
+    assert exit_signals[0].metadata["close_only"] is True
+    assert exit_signals[0].metadata["exit_reason"] == "max_hold_bars"

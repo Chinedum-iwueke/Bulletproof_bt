@@ -94,3 +94,29 @@ def test_resolve_stop_distance_missing_rules_actionable_error() -> None:
             ctx={},
             config={},
         )
+
+
+def test_resolve_stop_distance_sources_are_non_empty_allowed_values() -> None:
+    explicit = resolve_stop_distance(
+        symbol="AAPL",
+        side="long",
+        entry_price=100.0,
+        signal={"stop_price": 99.0},
+        bars_by_symbol={},
+        ctx={},
+        config={},
+    )
+    atr = resolve_stop_distance(
+        symbol="AAPL",
+        side="short",
+        entry_price=100.0,
+        signal={},
+        bars_by_symbol={},
+        ctx={"indicators": {"AAPL": {"atr": IndicatorStub(is_ready=True, value=1.0)}}},
+        config={"risk": {"stop": {"mode": "atr", "atr_multiple": 2.0}}},
+    )
+    allowed = {"explicit_stop_price", "atr_multiple", "legacy_high_low_proxy"}
+    assert explicit.source in allowed
+    assert atr.source in allowed
+    assert explicit.source
+    assert atr.source
