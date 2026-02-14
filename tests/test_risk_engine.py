@@ -20,14 +20,17 @@ def _bar(*, ts: pd.Timestamp, symbol: str, high: float, low: float, close: float
     )
 
 
-def _signal(*, ts: pd.Timestamp, symbol: str, side: Side | None) -> Signal:
+def _signal(*, ts: pd.Timestamp, symbol: str, side: Side | None, stop_price: float | None = None) -> Signal:
+    metadata: dict[str, float] = {}
+    if stop_price is not None:
+        metadata["stop_price"] = stop_price
     return Signal(
         ts=ts,
         symbol=symbol,
         side=side,
         signal_type="unit",
         confidence=1.0,
-        metadata={},
+        metadata=metadata,
     )
 
 
@@ -42,7 +45,7 @@ def test_signal_to_order_intent_approves_and_sizes() -> None:
     engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
-    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
 
     order_intent, reason = engine.signal_to_order_intent(
         ts=ts,
@@ -71,7 +74,7 @@ def test_signal_to_order_intent_rejects_max_positions() -> None:
     engine = RiskEngine(max_positions=1, risk_per_trade_pct=0.01, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
-    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
 
     order_intent, reason = engine.signal_to_order_intent(
         ts=ts,
@@ -92,7 +95,7 @@ def test_signal_to_order_intent_applies_notional_cap() -> None:
     engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.5, max_notional_per_symbol=500, config=_risk_config(r_per_trade=0.5))
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
-    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
 
     order_intent, reason = engine.signal_to_order_intent(
         ts=ts,
@@ -132,11 +135,11 @@ def test_signal_to_order_intent_rejects_no_side() -> None:
     assert "no_side" in reason
 
 
-def test_signal_to_order_intent_rejects_when_margin_insufficient() -> None:
+def test_signal_to_order_intent_scales_when_margin_insufficient() -> None:
     engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=100.5, low=100.0, close=100.0)
-    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
 
     order_intent, reason = engine.signal_to_order_intent(
         ts=ts,
@@ -149,15 +152,16 @@ def test_signal_to_order_intent_rejects_when_margin_insufficient() -> None:
         current_qty=0.0,
     )
 
-    assert order_intent is None
-    assert reason == "risk_rejected:insufficient_free_margin"
+    assert order_intent is not None
+    assert reason == "risk_approved"
+    assert order_intent.metadata["scaled_by_margin"] is True
 
 
 def test_signal_to_order_intent_allows_when_margin_sufficient() -> None:
     engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
-    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
 
     order_intent, reason = engine.signal_to_order_intent(
         ts=ts,
@@ -175,7 +179,7 @@ def test_signal_to_order_intent_rejects_pyramiding() -> None:
     engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
-    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
 
     order_intent, reason = engine.signal_to_order_intent(
         ts=ts,
@@ -196,7 +200,7 @@ def test_signal_to_order_intent_flip_generates_net_sell_order() -> None:
     engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
-    signal = _signal(ts=ts, symbol="BTC", side=Side.SELL)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.SELL, stop_price=110.0)
 
     order_intent, reason = engine.signal_to_order_intent(
         ts=ts,
@@ -215,11 +219,11 @@ def test_signal_to_order_intent_flip_generates_net_sell_order() -> None:
     assert abs(order_intent.qty) > 5.0
 
 
-def test_signal_to_order_intent_flip_rejects_for_margin() -> None:
+def test_signal_to_order_intent_flip_scales_for_margin() -> None:
     engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=100)
-    signal = _signal(ts=ts, symbol="BTC", side=Side.SELL)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.SELL, stop_price=110.0)
 
     order_intent, reason = engine.signal_to_order_intent(
         ts=ts,
@@ -232,5 +236,6 @@ def test_signal_to_order_intent_flip_rejects_for_margin() -> None:
         current_qty=5.0,
     )
 
-    assert order_intent is None
-    assert reason == "risk_rejected:insufficient_free_margin"
+    assert order_intent is not None
+    assert reason == "risk_approved"
+    assert order_intent.metadata["scaled_by_margin"] is True

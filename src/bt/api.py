@@ -70,6 +70,9 @@ def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
         max_positions=int(risk_cfg.get("max_positions", 5)),
         risk_per_trade_pct=risk_spec.r_per_trade,
         max_notional_per_symbol=config.get("max_notional_per_symbol"),
+        margin_buffer_tier=int(risk_cfg.get("margin_buffer_tier", 2)),
+        taker_fee_bps=float(config.get("taker_fee_bps", 0.0)),
+        slippage_k_proxy=float(config.get("slippage_k", 1.0)),
         config={"risk": risk_cfg_for_spec},
     )
 

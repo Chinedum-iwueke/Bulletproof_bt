@@ -199,11 +199,12 @@ class BacktestEngine:
 
                     notional_est = float(order_intent.metadata.get("notional_est", abs(order_intent.qty) * bar.close))
                     fee_buffer = float(order_intent.metadata.get("margin_fee_buffer", 0.0))
+                    adverse_move_buffer = float(order_intent.metadata.get("margin_adverse_move_buffer", 0.0))
                     slippage_buffer = float(order_intent.metadata.get("margin_slippage_buffer", 0.0))
                     reserved_margin = self._risk.estimate_required_margin(
                         notional=notional_est,
                         max_leverage=self._portfolio.max_leverage,
-                        fee_buffer=fee_buffer,
+                        fee_buffer=fee_buffer + adverse_move_buffer,
                         slippage_buffer=slippage_buffer,
                     )
                     reserved_free_margin = max(reserved_free_margin - reserved_margin, 0.0)
