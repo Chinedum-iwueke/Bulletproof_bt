@@ -18,7 +18,6 @@ class RiskEngine:
         self,
         *,
         max_positions: int,
-        risk_per_trade_pct: float,
         max_notional_per_symbol: float | None = None,
         margin_buffer_tier: int = 1,
         taker_fee_bps: float = 0.0,
@@ -27,7 +26,6 @@ class RiskEngine:
         config: dict[str, Any] | None = None,
     ) -> None:
         self.max_positions = max_positions
-        self.risk_per_trade_pct = risk_per_trade_pct
         self.max_notional_per_symbol = max_notional_per_symbol
         self.margin_buffer_tier = int(margin_buffer_tier)
         self.taker_fee_bps = float(taker_fee_bps)
@@ -161,9 +159,6 @@ class RiskEngine:
             return None, "risk_rejected:max_positions"
         if equity <= 0:
             return None, "risk_rejected:no_equity"
-        if self.risk_per_trade_pct <= 0:
-            return None, "risk_rejected:invalid_risk_pct"
-
         cur_qty = current_qty
         cur_side = None
         if cur_qty > 0:

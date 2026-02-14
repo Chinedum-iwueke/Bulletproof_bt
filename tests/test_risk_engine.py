@@ -42,7 +42,7 @@ def _risk_config(*, mode: str = "r_fixed", r_per_trade: float = 0.01, qty_roundi
 
 
 def test_signal_to_order_intent_approves_and_sizes() -> None:
-    engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
+    engine = RiskEngine(max_positions=5, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
     signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
@@ -71,7 +71,7 @@ def test_signal_to_order_intent_approves_and_sizes() -> None:
 
 
 def test_signal_to_order_intent_rejects_max_positions() -> None:
-    engine = RiskEngine(max_positions=1, risk_per_trade_pct=0.01, config=_risk_config())
+    engine = RiskEngine(max_positions=1, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
     signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
@@ -92,7 +92,7 @@ def test_signal_to_order_intent_rejects_max_positions() -> None:
 
 
 def test_signal_to_order_intent_applies_notional_cap() -> None:
-    engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.5, max_notional_per_symbol=500, config=_risk_config(r_per_trade=0.5))
+    engine = RiskEngine(max_positions=5, max_notional_per_symbol=500, config=_risk_config(r_per_trade=0.5))
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
     signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
@@ -115,7 +115,7 @@ def test_signal_to_order_intent_applies_notional_cap() -> None:
 
 
 def test_signal_to_order_intent_rejects_no_side() -> None:
-    engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
+    engine = RiskEngine(max_positions=5, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
     signal = _signal(ts=ts, symbol="BTC", side=None)
@@ -136,7 +136,7 @@ def test_signal_to_order_intent_rejects_no_side() -> None:
 
 
 def test_signal_to_order_intent_scales_when_margin_insufficient() -> None:
-    engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
+    engine = RiskEngine(max_positions=5, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=100.5, low=100.0, close=100.0)
     signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
@@ -158,7 +158,7 @@ def test_signal_to_order_intent_scales_when_margin_insufficient() -> None:
 
 
 def test_signal_to_order_intent_allows_when_margin_sufficient() -> None:
-    engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
+    engine = RiskEngine(max_positions=5, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
     signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
@@ -176,7 +176,7 @@ def test_signal_to_order_intent_allows_when_margin_sufficient() -> None:
 
 
 def test_signal_to_order_intent_rejects_pyramiding() -> None:
-    engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
+    engine = RiskEngine(max_positions=5, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
     signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
@@ -197,7 +197,7 @@ def test_signal_to_order_intent_rejects_pyramiding() -> None:
 
 
 def test_signal_to_order_intent_flip_generates_net_sell_order() -> None:
-    engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
+    engine = RiskEngine(max_positions=5, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
     signal = _signal(ts=ts, symbol="BTC", side=Side.SELL, stop_price=110.0)
@@ -220,7 +220,7 @@ def test_signal_to_order_intent_flip_generates_net_sell_order() -> None:
 
 
 def test_signal_to_order_intent_flip_scales_for_margin() -> None:
-    engine = RiskEngine(max_positions=5, risk_per_trade_pct=0.01, config=_risk_config())
+    engine = RiskEngine(max_positions=5, config=_risk_config())
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=100)
     signal = _signal(ts=ts, symbol="BTC", side=Side.SELL, stop_price=110.0)

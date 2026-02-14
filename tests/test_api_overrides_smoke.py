@@ -57,3 +57,19 @@ def test_run_grid_override_and_outputs(tmp_path: Path) -> None:
     assert (exp_dir / "summary.csv").exists()
     assert (exp_dir / "summary.json").exists()
     assert any((exp_dir / "runs").iterdir())
+
+
+def test_run_backtest_config_used_omits_legacy_risk_key_when_not_explicit(tmp_path: Path) -> None:
+    run_dir = Path(
+        run_backtest(
+            config_path="configs/engine.yaml",
+            data_path="data/curated/sample.csv",
+            out_dir=str(tmp_path / "runs"),
+            run_name="canonical_risk_smoke",
+        )
+    )
+
+    cfg = yaml.safe_load((run_dir / "config_used.yaml").read_text(encoding="utf-8"))
+    assert cfg["risk"]["r_per_trade"] == 0.005
+    assert "risk_per_trade_pct" not in cfg["risk"]
+    assert "risk_per_trade_pct" not in cfg

@@ -56,7 +56,7 @@ def test_reservation_blocks_second_signal_same_timestamp(tmp_path: Path) -> None
         datafeed=datafeed,
         universe=UniverseEngine(min_history_bars=1, lookback_bars=1, min_avg_volume=0.0, lag_bars=0),
         strategy=DualSignalStrategy(),
-        risk=RiskEngine(max_positions=1, risk_per_trade_pct=0.01, config={"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "stop": {}}}),
+        risk=RiskEngine(max_positions=1, config={"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "stop": {}}}),
         execution=ExecutionModel(
             fee_model=FeeModel(maker_fee_bps=0.0, taker_fee_bps=0.0),
             slippage_model=SlippageModel(k=0.0),

@@ -53,6 +53,48 @@ def _resolve_risk_value(
     resolved["risk"] = risk_cfg
 
 
+def _resolve_r_per_trade_alias(resolved: dict[str, Any]) -> None:
+    """Normalize legacy risk aliases to canonical ``risk.r_per_trade``.
+
+    ``risk.risk_per_trade_pct`` and top-level ``risk_per_trade_pct`` are treated
+    as input aliases only. They are never injected by default.
+    """
+    risk_cfg = _ensure_mapping(resolved.get("risk"), name="risk")
+    canonical_present = "r_per_trade" in risk_cfg
+    nested_legacy_present = "risk_per_trade_pct" in risk_cfg
+    top_legacy_present = "risk_per_trade_pct" in resolved
+
+    canonical_value = risk_cfg.get("r_per_trade")
+    nested_legacy_value = risk_cfg.get("risk_per_trade_pct")
+    top_legacy_value = resolved.get("risk_per_trade_pct")
+
+    if canonical_present and nested_legacy_present and canonical_value != nested_legacy_value:
+        raise ConfigError(
+            "Conflicting config values for 'risk.r_per_trade' "
+            f"({canonical_value!r}) and 'risk.risk_per_trade_pct' ({nested_legacy_value!r})."
+        )
+
+    if canonical_present and top_legacy_present and canonical_value != top_legacy_value:
+        raise ConfigError(
+            "Conflicting config values for 'risk.r_per_trade' "
+            f"({canonical_value!r}) and 'risk_per_trade_pct' ({top_legacy_value!r})."
+        )
+
+    if nested_legacy_present and top_legacy_present and nested_legacy_value != top_legacy_value:
+        raise ConfigError(
+            "Conflicting config values for 'risk.risk_per_trade_pct' "
+            f"({nested_legacy_value!r}) and 'risk_per_trade_pct' ({top_legacy_value!r})."
+        )
+
+    if not canonical_present:
+        if nested_legacy_present:
+            risk_cfg["r_per_trade"] = nested_legacy_value
+        elif top_legacy_present:
+            risk_cfg["r_per_trade"] = top_legacy_value
+
+    resolved["risk"] = risk_cfg
+
+
 def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     """
     Normalize config into one authoritative shape.
@@ -70,11 +112,6 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
         nested_key="max_positions",
         default=1,
     )
-    _resolve_risk_value(
-        resolved=resolved,
-        top_key="risk_per_trade_pct",
-        nested_key="risk_per_trade_pct",
-        default=0.01,
-    )
+    _resolve_r_per_trade_alias(resolved)
 
     return resolved

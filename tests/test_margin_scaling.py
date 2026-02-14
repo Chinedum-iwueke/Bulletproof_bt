@@ -11,8 +11,7 @@ from bt.risk.risk_engine import RiskEngine
 def test_margin_scaling_applies_and_approves() -> None:
     engine = RiskEngine(
         max_positions=5,
-        risk_per_trade_pct=0.01,
-        taker_fee_bps=10.0,
+                taker_fee_bps=10.0,
         slippage_k_proxy=0.001,
         margin_buffer_tier=2,
         config={"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "qty_rounding": "none", "stop": {}}},
