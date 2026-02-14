@@ -112,6 +112,19 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
         nested_key="max_positions",
         default=1,
     )
+    _resolve_risk_value(
+        resolved=resolved,
+        top_key="stop_resolution",
+        nested_key="stop_resolution",
+        default="strict",
+    )
     _resolve_r_per_trade_alias(resolved)
+
+    stop_resolution = resolved.get("risk", {}).get("stop_resolution")
+    if stop_resolution not in {"strict", "allow_legacy_proxy"}:
+        raise ConfigError(
+            "Invalid risk.stop_resolution: expected 'strict' or 'allow_legacy_proxy' "
+            f"got {stop_resolution!r}"
+        )
 
     return resolved

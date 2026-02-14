@@ -28,4 +28,4 @@ def test_stop_unresolvable_signal_is_rejected() -> None:
     )
 
     assert order_intent is None
-    assert reason == "risk_rejected:stop_unresolvable"
+    assert reason == "risk_rejected:stop_unresolvable:strict"

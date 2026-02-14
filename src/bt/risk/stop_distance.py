@@ -7,6 +7,7 @@ from typing import Any
 from bt.risk.stop_resolution import (
     STOP_RESOLUTION_ATR_MULTIPLE,
     STOP_RESOLUTION_EXPLICIT_STOP_PRICE,
+    STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY,
 )
 
 
@@ -15,6 +16,12 @@ class StopDistanceResult:
     stop_distance: float
     source: str
     details: dict[str, Any]
+
+
+def _build_stop_result(*, stop_distance: float, source: str, details: dict[str, Any]) -> StopDistanceResult:
+    if not source:
+        raise ValueError("stop resolution source must be non-empty")
+    return StopDistanceResult(stop_distance=stop_distance, source=source, details=details)
 
 
 def _get_indicator_value(ctx: dict[str, Any], symbol: str, name: str) -> Any:
@@ -66,8 +73,6 @@ def resolve_stop_distance(
       - if explicit stop: stop must be on correct side of entry for long/short
       - ATR must be ready and positive when used
     """
-    del bars_by_symbol  # intentionally unused; kept for stable interface
-
     if entry_price <= 0:
         raise ValueError(f"{symbol}: entry_price must be > 0, got {entry_price}.")
     if side not in {"long", "short"}:
@@ -87,7 +92,7 @@ def resolve_stop_distance(
         stop_distance = abs(entry_price - stop_price)
         if stop_distance <= 0:
             raise ValueError(f"{symbol}: computed stop_distance must be > 0, got {stop_distance}.")
-        return StopDistanceResult(
+        return _build_stop_result(
             stop_distance=stop_distance,
             source=STOP_RESOLUTION_EXPLICIT_STOP_PRICE,
             details={"stop_price": stop_price},
@@ -115,10 +120,28 @@ def resolve_stop_distance(
         stop_distance = atr_multiple * atr_value
         if stop_distance <= 0:
             raise ValueError(f"{symbol}: computed stop_distance must be > 0, got {stop_distance}.")
-        return StopDistanceResult(
+        return _build_stop_result(
             stop_distance=stop_distance,
             source=STOP_RESOLUTION_ATR_MULTIPLE,
             details={"atr_multiple": atr_multiple, "atr_value": atr_value, "atr_name": atr_name},
+        )
+
+    if mode == "legacy_proxy":
+        bar = bars_by_symbol.get(symbol)
+        if bar is None:
+            raise ValueError(f"{symbol}: bars_by_symbol is missing current bar for legacy proxy stop resolution.")
+        high = float(getattr(bar, "high"))
+        low = float(getattr(bar, "low"))
+        if side == "long":
+            stop_distance = entry_price - low
+        else:
+            stop_distance = high - entry_price
+        if stop_distance <= 0:
+            raise ValueError(f"{symbol}: legacy proxy stop_distance must be > 0, got {stop_distance}.")
+        return _build_stop_result(
+            stop_distance=stop_distance,
+            source=STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY,
+            details={"proxy_high": high, "proxy_low": low},
         )
 
     raise ValueError(

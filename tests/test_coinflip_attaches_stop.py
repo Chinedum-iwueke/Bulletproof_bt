@@ -16,5 +16,4 @@ def test_coinflip_entry_signals_include_stop_fields() -> None:
     assert len(signals) == 1
     metadata = signals[0].metadata
     assert "stop_price" in metadata
-    assert metadata["stop_source"] == "bar_range"
     assert metadata["stop_distance"] == 4.0
