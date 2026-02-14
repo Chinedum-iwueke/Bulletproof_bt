@@ -62,13 +62,15 @@ def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
     risk_cfg_for_spec = dict(risk_cfg)
     if "mode" not in risk_cfg_for_spec:
         risk_cfg_for_spec["mode"] = "equity_pct"
-    if "r_per_trade" not in risk_cfg_for_spec and "risk_per_trade_pct" in risk_cfg_for_spec:
-        risk_cfg_for_spec["r_per_trade"] = risk_cfg_for_spec["risk_per_trade_pct"]
+    if "r_per_trade" not in risk_cfg_for_spec:
+        if "risk_per_trade_pct" in risk_cfg_for_spec:
+            risk_cfg_for_spec["r_per_trade"] = risk_cfg_for_spec["risk_per_trade_pct"]
+        elif "risk_per_trade_pct" in config:
+            risk_cfg_for_spec["r_per_trade"] = config["risk_per_trade_pct"]
     risk_spec = parse_risk_spec({"risk": risk_cfg_for_spec})
 
     risk = RiskEngine(
         max_positions=int(risk_cfg.get("max_positions", 5)),
-        risk_per_trade_pct=risk_spec.r_per_trade,
         max_notional_per_symbol=config.get("max_notional_per_symbol"),
         margin_buffer_tier=int(risk_cfg.get("margin_buffer_tier", 2)),
         taker_fee_bps=float(config.get("taker_fee_bps", 0.0)),

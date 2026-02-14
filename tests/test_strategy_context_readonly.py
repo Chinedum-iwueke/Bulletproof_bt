@@ -55,6 +55,7 @@ def test_existing_strategies_still_run_smoke(tmp_path: Path) -> None:
         "min_avg_volume": 0.0,
         "lag_bars": 0,
         "signal_delay_bars": 1,
+        "risk": {"mode": "r_fixed", "r_per_trade": 0.005},
         "strategy": {
             "name": "volfloor_donchian",
             "timeframe": "1h",

@@ -16,8 +16,7 @@ def _engine(*, qty_rounding: str = "none", min_stop_distance: float | None = Non
         risk_cfg["min_stop_distance"] = min_stop_distance
     return RiskEngine(
         max_positions=1,
-        risk_per_trade_pct=0.01,
-        config={"risk": risk_cfg},
+                config={"risk": risk_cfg},
     )
 
 

@@ -10,8 +10,7 @@ from bt.risk.risk_engine import RiskEngine
 def test_stop_unresolvable_signal_is_rejected() -> None:
     engine = RiskEngine(
         max_positions=5,
-        risk_per_trade_pct=0.01,
-        config={"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "qty_rounding": "none", "stop": {}}},
+                config={"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "qty_rounding": "none", "stop": {}}},
     )
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = Bar(ts=ts, symbol="BTC", open=100.0, high=110.0, low=100.0, close=105.0, volume=1.0)

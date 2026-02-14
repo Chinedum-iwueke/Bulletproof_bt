@@ -87,8 +87,7 @@ def _run(tmp_path: Path, strategy: Strategy) -> Path:
         strategy=strategy,
         risk=RiskEngine(
             max_positions=1,
-            risk_per_trade_pct=0.001,
-            margin_buffer_tier=2,
+                        margin_buffer_tier=2,
             taker_fee_bps=2.0,
             config={"risk": {"mode": "r_fixed", "r_per_trade": 0.001, "stop": {}}},
         ),
@@ -134,8 +133,7 @@ def test_risk_normalization_smoke(tmp_path: Path) -> None:
 def test_risk_normalization_requires_stop_config_or_signal_stop() -> None:
     engine = RiskEngine(
         max_positions=1,
-        risk_per_trade_pct=0.01,
-        config={"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "stop": {}}},
+                config={"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "stop": {}}},
     )
     with pytest.raises(ValueError, match="Provide signal.stop_price or configure risk.stop.mode=atr"):
         engine.compute_position_size_r(

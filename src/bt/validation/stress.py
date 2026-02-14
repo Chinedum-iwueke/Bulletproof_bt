@@ -159,16 +159,16 @@ def run_stress_suite(
         risk_cfg_for_spec = dict(risk_cfg)
         if "max_positions" not in risk_cfg_for_spec and "max_positions" in scenario_config:
             risk_cfg_for_spec["max_positions"] = scenario_config["max_positions"]
-        if "risk_per_trade_pct" not in risk_cfg_for_spec and "risk_per_trade_pct" in scenario_config:
-            risk_cfg_for_spec["risk_per_trade_pct"] = scenario_config["risk_per_trade_pct"]
         if "mode" not in risk_cfg_for_spec:
             risk_cfg_for_spec["mode"] = "equity_pct"
-        if "r_per_trade" not in risk_cfg_for_spec and "risk_per_trade_pct" in risk_cfg_for_spec:
-            risk_cfg_for_spec["r_per_trade"] = risk_cfg_for_spec["risk_per_trade_pct"]
+        if "r_per_trade" not in risk_cfg_for_spec:
+            if "risk_per_trade_pct" in risk_cfg_for_spec:
+                risk_cfg_for_spec["r_per_trade"] = risk_cfg_for_spec["risk_per_trade_pct"]
+            elif "risk_per_trade_pct" in scenario_config:
+                risk_cfg_for_spec["r_per_trade"] = scenario_config["risk_per_trade_pct"]
         risk_spec = parse_risk_spec({"risk": risk_cfg_for_spec})
         risk = RiskEngine(
             max_positions=int(risk_cfg_for_spec.get("max_positions", 5)),
-            risk_per_trade_pct=risk_spec.r_per_trade,
             max_notional_per_symbol=scenario_config.get("max_notional_per_symbol"),
             config={"risk": risk_cfg_for_spec},
         )
