@@ -5,7 +5,7 @@ from pathlib import Path
 import csv
 from typing import Any, Mapping
 
-from bt.core.enums import OrderState
+from bt.core.enums import OrderState, OrderType, Side
 from bt.core.types import Order
 from bt.data.feed import HistoricalDataFeed
 from bt.execution.execution_model import ExecutionModel
@@ -52,6 +52,101 @@ class BacktestEngine:
         self._config = config
         self._order_counter = 0
         self._indicators: dict[str, dict[str, Indicator]] = {}
+
+    def _positions_context(self) -> dict[str, dict[str, Any]]:
+        positions_ctx: dict[str, dict[str, Any]] = {}
+        for symbol, position in self._portfolio.position_book.all_positions().items():
+            qty = float(position.qty)
+            if position.side is None or qty == 0.0:
+                side: str | None = None
+                entry_price: float | None = None
+                notional = 0.0
+            else:
+                side = position.side.value
+                entry_price = float(position.avg_entry_price)
+                notional = abs(qty) * entry_price
+            positions_ctx[symbol] = {
+                "side": side,
+                "qty": qty,
+                "entry_price": entry_price,
+                "notional": float(notional),
+            }
+        return positions_ctx
+
+    def _ctx_with_positions(self, ctx: Mapping[str, Any]) -> Mapping[str, Any]:
+        if isinstance(ctx, dict):
+            next_ctx = dict(ctx)
+        else:
+            next_ctx = dict(ctx.items())
+        next_ctx["positions"] = self._positions_context()
+        return next_ctx
+
+    def _force_liquidate_open_positions(self, *, ts: Any, bars_by_symbol: dict[str, Any], writer: csv.writer) -> None:
+        liquidation_orders: list[Order] = []
+        for symbol, position in self._portfolio.position_book.all_positions().items():
+            if position.side is None or position.qty <= 0:
+                continue
+            if position.side == Side.BUY:
+                close_side = Side.SELL
+            elif position.side == Side.SELL:
+                close_side = Side.BUY
+            else:
+                continue
+            liquidation_orders.append(
+                Order(
+                    id=self._next_order_id(),
+                    ts_submitted=ts,
+                    symbol=symbol,
+                    side=close_side,
+                    qty=float(position.qty),
+                    order_type=OrderType.MARKET,
+                    limit_price=None,
+                    state=OrderState.NEW,
+                    metadata={
+                        "reason": "forced_liquidation:end_of_run",
+                        "close_only": True,
+                        "forced_liquidation": True,
+                        "delay_remaining": 0,
+                    },
+                )
+            )
+
+        if not liquidation_orders:
+            return
+
+        _, fills = self._execution.process(ts=ts, bars_by_symbol=bars_by_symbol, open_orders=liquidation_orders)
+
+        for fill in fills:
+            self._fills_writer.write(
+                {
+                    "ts": fill.ts,
+                    "symbol": fill.symbol,
+                    "order_id": fill.order_id,
+                    "side": fill.side,
+                    "qty": fill.qty,
+                    "price": fill.price,
+                    "fee": fill.fee,
+                    "slippage": fill.slippage,
+                    "metadata": fill.metadata,
+                }
+            )
+
+        trades_closed = self._portfolio.apply_fills(fills)
+        for trade in trades_closed:
+            self._trades_writer.write_trade(trade)
+
+        self._portfolio.mark_to_market(bars_by_symbol)
+        writer.writerow(
+            [
+                ts.isoformat(),
+                self._portfolio.cash,
+                self._portfolio.equity,
+                self._portfolio.realized_pnl,
+                self._portfolio.unrealized_pnl,
+                self._portfolio.used_margin,
+                self._portfolio.free_margin,
+            ]
+        )
 
     def _build_indicator_set(self) -> dict[str, Indicator]:
         return {
@@ -104,6 +199,8 @@ class BacktestEngine:
             if self._equity_path.stat().st_size == 0:
                 self._write_equity_header(writer)
 
+            last_ts = None
+            last_bars_by_symbol: dict[str, Any] = {}
             while True:
                 bars = self._datafeed.next()
                 if bars is None:
@@ -120,6 +217,8 @@ class BacktestEngine:
                     continue
 
                 ts = bars_list[0].ts
+                last_ts = ts
+                last_bars_by_symbol = bars_by_symbol
 
                 for bar in bars_list:
                     self._universe.update(bar)
@@ -139,7 +238,7 @@ class BacktestEngine:
                     "indicators": indicators_snapshot,
                     "tradeable": tradeable,
                 }
-                signals = self._strategy.on_bars(ts, bars_by_symbol, tradeable, ctx)
+                signals = self._strategy.on_bars(ts, bars_by_symbol, tradeable, self._ctx_with_positions(ctx))
 
                 reserved_open_positions = self._portfolio.position_book.open_positions_count()
                 reserved_free_margin = self._portfolio.free_margin
@@ -272,6 +371,10 @@ class BacktestEngine:
                         self._portfolio.free_margin,
                     ]
                 )
+                handle.flush()
+
+            if last_ts is not None:
+                self._force_liquidate_open_positions(ts=last_ts, bars_by_symbol=last_bars_by_symbol, writer=writer)
                 handle.flush()
 
         self._decisions_writer.close()

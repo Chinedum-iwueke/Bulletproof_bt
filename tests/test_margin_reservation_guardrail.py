@@ -75,9 +75,10 @@ def test_reservation_blocks_second_signal_same_timestamp(tmp_path: Path) -> None
     decisions = [json.loads(line) for line in (tmp_path / "decisions.jsonl").read_text(encoding="utf-8").splitlines()]
     approved = [d for d in decisions if d.get("approved")]
     rejected = [d for d in decisions if not d.get("approved")]
-    fills = (tmp_path / "fills.jsonl").read_text(encoding="utf-8").splitlines()
+    fills = [json.loads(line) for line in (tmp_path / "fills.jsonl").read_text(encoding="utf-8").splitlines()]
 
     assert len(approved) == 1
     assert len(rejected) == 1
     assert rejected[0]["reason"] == "risk_rejected:max_positions"
-    assert len(fills) == 1
+    assert len(fills) == 2
+    assert sum(1 for fill in fills if fill.get("metadata", {}).get("forced_liquidation") is True) == 1
