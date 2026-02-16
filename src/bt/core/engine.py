@@ -14,6 +14,7 @@ from bt.indicators.atr import ATR
 from bt.indicators.ema import EMA
 from bt.indicators.vwap import VWAP
 from bt.logging.jsonl import JsonlWriter
+from bt.logging.sanity import SanityCounters
 from bt.logging.trades import TradesCsvWriter
 from bt.portfolio.portfolio import Portfolio
 from bt.risk.risk_engine import RiskEngine
@@ -38,6 +39,7 @@ class BacktestEngine:
         trades_writer: TradesCsvWriter,
         equity_path: Path,
         config: dict,
+        sanity_counters: SanityCounters | None = None,
     ) -> None:
         self._datafeed = datafeed
         self._universe = universe
@@ -52,6 +54,7 @@ class BacktestEngine:
         self._config = config
         self._order_counter = 0
         self._indicators: dict[str, dict[str, Indicator]] = {}
+        self._sanity_counters = sanity_counters
 
     def _positions_context(self) -> dict[str, dict[str, Any]]:
         positions_ctx: dict[str, dict[str, Any]] = {}
@@ -130,10 +133,16 @@ class BacktestEngine:
                     "metadata": fill.metadata,
                 }
             )
+            if self._sanity_counters is not None:
+                self._sanity_counters.fills_count += 1
+                if bool((fill.metadata or {}).get("forced_liquidation")):
+                    self._sanity_counters.forced_liquidation_count += 1
 
         trades_closed = self._portfolio.apply_fills(fills)
         for trade in trades_closed:
             self._trades_writer.write_trade(trade)
+            if self._sanity_counters is not None:
+                self._sanity_counters.closed_trades_count += 1
 
         self._portfolio.mark_to_market(bars_by_symbol)
         writer.writerow(
@@ -239,6 +248,8 @@ class BacktestEngine:
                     "tradeable": tradeable,
                 }
                 signals = self._strategy.on_bars(ts, bars_by_symbol, tradeable, self._ctx_with_positions(ctx))
+                if self._sanity_counters is not None:
+                    self._sanity_counters.signals_emitted += len(signals)
 
                 reserved_open_positions = self._portfolio.position_book.open_positions_count()
                 reserved_free_margin = self._portfolio.free_margin
@@ -256,6 +267,8 @@ class BacktestEngine:
                                 "reason": decision_reason,
                             }
                         )
+                        if self._sanity_counters is not None:
+                            self._sanity_counters.record_decision(approved=False, reason=decision_reason)
                         continue
 
                     position = self._portfolio.position_book.get(signal.symbol)
@@ -281,6 +294,8 @@ class BacktestEngine:
                                 "reason": decision_reason,
                             }
                         )
+                        if self._sanity_counters is not None:
+                            self._sanity_counters.record_decision(approved=False, reason=decision_reason)
                         continue
 
                     order = Order(
@@ -322,6 +337,8 @@ class BacktestEngine:
                             "order": order,
                         }
                     )
+                    if self._sanity_counters is not None:
+                        self._sanity_counters.record_decision(approved=True, reason=decision_reason)
 
                 open_orders, fills = self._execution.process(
                     ts=ts,
@@ -353,10 +370,14 @@ class BacktestEngine:
                             "metadata": fill.metadata,
                         }
                     )
+                    if self._sanity_counters is not None:
+                        self._sanity_counters.fills_count += 1
 
                 trades_closed = self._portfolio.apply_fills(fills)
                 for trade in trades_closed:
                     self._trades_writer.write_trade(trade)
+                    if self._sanity_counters is not None:
+                        self._sanity_counters.closed_trades_count += 1
 
                 self._portfolio.mark_to_market(bars_by_symbol)
 

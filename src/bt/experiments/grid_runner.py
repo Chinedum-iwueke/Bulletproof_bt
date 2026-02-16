@@ -31,8 +31,10 @@ from bt.config import deep_merge
 from bt.core.config_resolver import resolve_config
 from bt.data.dataset import load_dataset_manifest
 from bt.data.load_feed import load_feed
+from bt.logging.sanity import SanityCounters, write_sanity_json
 from bt.logging.trades import write_data_scope
 from bt.metrics.performance import compute_performance, write_performance_artifacts
+from bt.validation.config_completeness import validate_resolved_config_completeness
 
 
 _TEMPLATE_PATTERN = re.compile(r"{([^{}]+)}")
@@ -302,12 +304,14 @@ def run_grid(
         run_name = f"{run_prefix}__{run_suffix}"
         run_dir = runs_dir / run_name
         run_dir.mkdir(parents=True, exist_ok=False)
+        sanity_counters = SanityCounters(run_id=run_name)
 
         try:
             if run_name_error is not None:
                 raise ValueError(f"Invalid run naming template for run {run_prefix}: {run_name_error}")
 
             run_cfg = resolve_config(copy.deepcopy(merged_cfg))
+            validate_resolved_config_completeness(run_cfg)
 
             with (run_dir / "config_used.yaml").open("w", encoding="utf-8") as handle:
                 yaml.safe_dump(run_cfg, handle, sort_keys=False)
@@ -333,7 +337,7 @@ def run_grid(
             if benchmark_tracker is not None:
                 datafeed = BenchmarkTrackingFeed(inner_feed=datafeed, tracker=benchmark_tracker)
 
-            engine = _build_engine(run_cfg, datafeed, run_dir)
+            engine = _build_engine(run_cfg, datafeed, run_dir, sanity_counters=sanity_counters)
             engine.run()
 
             benchmark_metrics: dict[str, Any] | None = None
@@ -406,6 +410,22 @@ def run_grid(
                     error_message=str(exc),
                 )
             )
+        finally:
+            data_scope_payload: dict[str, Any] | None = None
+            data_scope_path = run_dir / "data_scope.json"
+            if data_scope_path.exists():
+                try:
+                    raw_data_scope = json.loads(data_scope_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    raw_data_scope = None
+                if isinstance(raw_data_scope, dict):
+                    date_range = raw_data_scope.get("date_range")
+                    if isinstance(date_range, dict):
+                        data_scope_payload = {
+                            "data_start_ts": date_range.get("start"),
+                            "data_end_ts": date_range.get("end"),
+                        }
+            write_sanity_json(run_dir, sanity_counters, data_scope=data_scope_payload)
 
     with (out_path / "summary.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=_SUMMARY_COLUMNS)

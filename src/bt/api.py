@@ -8,9 +8,16 @@ from typing import Any, Optional
 
 from bt.config import deep_merge, load_yaml, resolve_paths_relative_to
 from bt.core.config_resolver import resolve_config
+from bt.logging.sanity import SanityCounters, write_sanity_json
+from bt.validation.config_completeness import validate_resolved_config_completeness
 
 
-def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
+def _build_engine(
+    config: dict[str, Any],
+    datafeed: Any,
+    run_dir: Path,
+    sanity_counters: SanityCounters | None = None,
+):
     from bt.core.engine import BacktestEngine
     from bt.data.resample import TimeframeResampler
     from bt.execution.execution_model import ExecutionModel
@@ -116,7 +123,28 @@ def _build_engine(config: dict[str, Any], datafeed: Any, run_dir: Path):
         trades_writer=TradesCsvWriter(run_dir / "trades.csv"),
         equity_path=run_dir / "equity.csv",
         config=config,
+        sanity_counters=sanity_counters,
     )
+
+
+def _read_data_scope_for_sanity(run_dir: Path) -> dict[str, Any] | None:
+    data_scope_path = run_dir / "data_scope.json"
+    if not data_scope_path.exists():
+        return None
+    try:
+        payload = json.loads(data_scope_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    date_range = payload.get("date_range")
+    if isinstance(date_range, dict):
+        return {
+            "data_start_ts": date_range.get("start"),
+            "data_end_ts": date_range.get("end"),
+        }
+    return None
 
 
 def run_backtest(
@@ -147,65 +175,75 @@ def run_backtest(
     for override_path in resolve_paths_relative_to(Path(config_path).parent, override_paths):
         config = deep_merge(config, load_yaml(override_path))
     config = resolve_config(config)
+    validate_resolved_config_completeness(config)
 
     resolved_run_name = run_name or make_run_id()
     run_dir = prepare_run_dir(Path(out_dir), resolved_run_name)
-    write_config_used(run_dir, config)
-    write_data_scope(
-        run_dir,
-        config=config,
-        dataset_dir=data_path if Path(data_path).is_dir() else None,
-    )
+    sanity_counters = SanityCounters(run_id=resolved_run_name)
 
-    benchmark_spec = parse_benchmark_spec(config)
-    benchmark_tracker: BenchmarkTracker | None = None
-    if benchmark_spec.enabled:
-        benchmark_symbol = benchmark_spec.symbol
-        if Path(data_path).is_dir():
-            manifest = load_dataset_manifest(data_path, config)
-            if benchmark_symbol not in manifest.symbols:
-                raise ValueError(
-                    f"benchmark.symbol={benchmark_symbol} not found in dataset scope for dataset_dir={data_path}"
-                )
-        benchmark_tracker = BenchmarkTracker(benchmark_spec)
-
-    datafeed = load_feed(data_path, config)
-    benchmark_metrics: dict[str, Any] | None = None
-    if benchmark_tracker is not None:
-        datafeed = BenchmarkTrackingFeed(inner_feed=datafeed, tracker=benchmark_tracker)
-
-    engine = _build_engine(config, datafeed, run_dir)
-    engine.run()
-
-    if benchmark_tracker is not None:
-        benchmark_initial_equity = (
-            benchmark_spec.initial_equity
-            if benchmark_spec.initial_equity is not None
-            else float(config.get("initial_cash", 100000.0))
-        )
-        benchmark_points = benchmark_tracker.finalize(initial_equity=benchmark_initial_equity)
-        write_benchmark_equity_csv(benchmark_points, run_dir / "benchmark_equity.csv")
-        benchmark_metrics = compute_benchmark_metrics(equity_points=benchmark_points)
-        (run_dir / "benchmark_metrics.json").write_text(
-            json.dumps(benchmark_metrics, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+    try:
+        write_config_used(run_dir, config)
+        write_data_scope(
+            run_dir,
+            config=config,
+            dataset_dir=data_path if Path(data_path).is_dir() else None,
         )
 
-    report = compute_performance(run_dir)
-    write_performance_artifacts(report, run_dir)
+        benchmark_spec = parse_benchmark_spec(config)
+        benchmark_tracker: BenchmarkTracker | None = None
+        if benchmark_spec.enabled:
+            benchmark_symbol = benchmark_spec.symbol
+            if Path(data_path).is_dir():
+                manifest = load_dataset_manifest(data_path, config)
+                if benchmark_symbol not in manifest.symbols:
+                    raise ValueError(
+                        f"benchmark.symbol={benchmark_symbol} not found in dataset scope for dataset_dir={data_path}"
+                    )
+            benchmark_tracker = BenchmarkTracker(benchmark_spec)
 
-    if benchmark_spec.enabled:
-        if benchmark_metrics is None:
-            raise ValueError(
-                f"benchmark enabled but benchmark_metrics.json was not produced for run_dir={run_dir}"
+        datafeed = load_feed(data_path, config)
+        benchmark_metrics: dict[str, Any] | None = None
+        if benchmark_tracker is not None:
+            datafeed = BenchmarkTrackingFeed(inner_feed=datafeed, tracker=benchmark_tracker)
+
+        engine = _build_engine(config, datafeed, run_dir, sanity_counters=sanity_counters)
+        engine.run()
+
+        if benchmark_tracker is not None:
+            benchmark_initial_equity = (
+                benchmark_spec.initial_equity
+                if benchmark_spec.initial_equity is not None
+                else float(config.get("initial_cash", 100000.0))
             )
-        comparison_summary = compare_strategy_vs_benchmark(
-            strategy_perf=asdict(report),
-            bench_metrics=benchmark_metrics,
-        )
-        (run_dir / "comparison_summary.json").write_text(
-            json.dumps(comparison_summary, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+            benchmark_points = benchmark_tracker.finalize(initial_equity=benchmark_initial_equity)
+            write_benchmark_equity_csv(benchmark_points, run_dir / "benchmark_equity.csv")
+            benchmark_metrics = compute_benchmark_metrics(equity_points=benchmark_points)
+            (run_dir / "benchmark_metrics.json").write_text(
+                json.dumps(benchmark_metrics, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+        report = compute_performance(run_dir)
+        write_performance_artifacts(report, run_dir)
+
+        if benchmark_spec.enabled:
+            if benchmark_metrics is None:
+                raise ValueError(
+                    f"benchmark enabled but benchmark_metrics.json was not produced for run_dir={run_dir}"
+                )
+            comparison_summary = compare_strategy_vs_benchmark(
+                strategy_perf=asdict(report),
+                bench_metrics=benchmark_metrics,
+            )
+            (run_dir / "comparison_summary.json").write_text(
+                json.dumps(comparison_summary, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+    finally:
+        write_sanity_json(
+            run_dir,
+            sanity_counters,
+            data_scope=_read_data_scope_for_sanity(run_dir),
         )
 
     return str(run_dir)
@@ -233,6 +271,9 @@ def run_grid(
 
     for override_path in resolve_paths_relative_to(Path(config_path).parent, override_paths):
         config = deep_merge(config, load_yaml(override_path))
+
+    config = resolve_config(config)
+    validate_resolved_config_completeness(config)
 
     experiment_cfg = load_yaml(experiment_path)
     resolved_experiment_name = experiment_name or str(experiment_cfg.get("name") or "experiment")
