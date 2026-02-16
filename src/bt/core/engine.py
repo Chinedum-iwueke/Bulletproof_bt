@@ -84,41 +84,7 @@ class BacktestEngine:
         next_ctx["positions"] = self._positions_context()
         return next_ctx
 
-    def _force_liquidate_open_positions(self, *, ts: Any, bars_by_symbol: dict[str, Any], writer: csv.writer) -> None:
-        liquidation_orders: list[Order] = []
-        for symbol, position in self._portfolio.position_book.all_positions().items():
-            if position.side is None or position.qty <= 0:
-                continue
-            if position.side == Side.BUY:
-                close_side = Side.SELL
-            elif position.side == Side.SELL:
-                close_side = Side.BUY
-            else:
-                continue
-            liquidation_orders.append(
-                Order(
-                    id=self._next_order_id(),
-                    ts_submitted=ts,
-                    symbol=symbol,
-                    side=close_side,
-                    qty=float(position.qty),
-                    order_type=OrderType.MARKET,
-                    limit_price=None,
-                    state=OrderState.NEW,
-                    metadata={
-                        "reason": "forced_liquidation:end_of_run",
-                        "close_only": True,
-                        "forced_liquidation": True,
-                        "delay_remaining": 0,
-                    },
-                )
-            )
-
-        if not liquidation_orders:
-            return
-
-        _, fills = self._execution.process(ts=ts, bars_by_symbol=bars_by_symbol, open_orders=liquidation_orders)
-
+    def _handle_fills(self, fills: list[Any]) -> None:
         for fill in fills:
             self._fills_writer.write(
                 {
@@ -143,6 +109,52 @@ class BacktestEngine:
             self._trades_writer.write_trade(trade)
             if self._sanity_counters is not None:
                 self._sanity_counters.closed_trades += 1
+
+    def _force_liquidate_open_positions(
+        self,
+        *,
+        ts: Any,
+        bars_by_symbol: dict[str, Any],
+        writer: csv.writer,
+        liquidation_reason: str,
+    ) -> None:
+        liquidation_orders: list[Order] = []
+        for symbol, position in self._portfolio.position_book.all_positions().items():
+            if position.side is None or position.qty == 0:
+                continue
+            if position.side == Side.BUY:
+                close_side = Side.SELL
+            elif position.side == Side.SELL:
+                close_side = Side.BUY
+            else:
+                continue
+            liquidation_orders.append(
+                Order(
+                    id=self._next_order_id(),
+                    ts_submitted=ts,
+                    symbol=symbol,
+                    side=close_side,
+                    qty=float(position.qty),
+                    order_type=OrderType.MARKET,
+                    limit_price=None,
+                    state=OrderState.NEW,
+                    metadata={
+                        "reason": "forced_liquidation",
+                        "close_only": True,
+                        "forced_liquidation": True,
+                        "exit_reason": "forced_liquidation",
+                        "liquidation_reason": liquidation_reason,
+                        "delay_remaining": 0,
+                    },
+                )
+            )
+
+        if not liquidation_orders:
+            return
+
+        _, fills = self._execution.process(ts=ts, bars_by_symbol=bars_by_symbol, open_orders=liquidation_orders)
+
+        self._handle_fills(fills)
 
         self._portfolio.mark_to_market(bars_by_symbol)
         writer.writerow(
@@ -356,30 +368,22 @@ class BacktestEngine:
                     }
                 ]
 
-                for fill in fills:
-                    self._fills_writer.write(
-                        {
-                            "ts": fill.ts,
-                            "symbol": fill.symbol,
-                            "order_id": fill.order_id,
-                            "side": fill.side,
-                            "qty": fill.qty,
-                            "price": fill.price,
-                            "fee": fill.fee,
-                            "slippage": fill.slippage,
-                            "metadata": fill.metadata,
-                        }
-                    )
-                    if self._sanity_counters is not None:
-                        self._sanity_counters.fills += 1
-
-                trades_closed = self._portfolio.apply_fills(fills)
-                for trade in trades_closed:
-                    self._trades_writer.write_trade(trade)
-                    if self._sanity_counters is not None:
-                        self._sanity_counters.closed_trades += 1
+                self._handle_fills(fills)
 
                 self._portfolio.mark_to_market(bars_by_symbol)
+                forced_liquidated = False
+                if self._portfolio.free_margin < 0:
+                    self._force_liquidate_open_positions(
+                        ts=ts,
+                        bars_by_symbol=bars_by_symbol,
+                        writer=writer,
+                        liquidation_reason="negative_free_margin",
+                    )
+                    forced_liquidated = True
+
+                if forced_liquidated:
+                    handle.flush()
+                    continue
 
                 writer.writerow(
                     [
@@ -395,7 +399,12 @@ class BacktestEngine:
                 handle.flush()
 
             if last_ts is not None:
-                self._force_liquidate_open_positions(ts=last_ts, bars_by_symbol=last_bars_by_symbol, writer=writer)
+                self._force_liquidate_open_positions(
+                    ts=last_ts,
+                    bars_by_symbol=last_bars_by_symbol,
+                    writer=writer,
+                    liquidation_reason="end_of_run",
+                )
                 handle.flush()
 
         self._decisions_writer.close()

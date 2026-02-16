@@ -26,6 +26,7 @@ risk:
   r_per_trade: 0.005
   max_positions: 5
   max_leverage: 1.5
+  maintenance_free_margin_pct: 0.01
 
 # Keep legacy HTF keys for compatibility with existing overlays.
 htf_timeframes: ["5m", "15m", "1h"]

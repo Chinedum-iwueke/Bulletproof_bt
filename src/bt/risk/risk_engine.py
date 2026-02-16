@@ -81,6 +81,9 @@ class RiskEngine:
             return 1.0
         return float(risk_cfg.get("max_notional_pct_equity", 1.0))
 
+
+    def _maintenance_free_margin_pct(self) -> float:
+        return float(self._risk_spec.maintenance_free_margin_pct)
     @staticmethod
     def _qty_sign_invariant_ok(*, signal_side: Side, current_qty: float, flip: bool, order_qty: float, close_only: bool) -> bool:
         if close_only:
@@ -403,8 +406,10 @@ class RiskEngine:
             slippage_buffer=0.0,
         )
         total_required = margin_required + fee_buffer + slippage_buffer + adverse_move_buffer
+        maintenance_free_margin_pct = self._maintenance_free_margin_pct()
+        max_total_required = free_margin * (1.0 - maintenance_free_margin_pct)
         scaled_by_margin = False
-        if total_required > free_margin:
+        if total_required > max_total_required:
             adverse_move_per_notional = 0.0
             if bar.close > 0:
                 adverse_move_per_notional = adverse_move_buffer / notional if notional > 0 else 0.0
@@ -415,7 +420,7 @@ class RiskEngine:
                 + (slippage_buffer / notional if notional > 0 else 0.0)
                 + adverse_move_per_notional
             )
-            max_affordable_notional = free_margin / max(total_required_per_notional, self.eps)
+            max_affordable_notional = max_total_required / max(total_required_per_notional, self.eps)
             if max_affordable_notional <= 0:
                 return None, "risk_rejected:insufficient_free_margin"
 
@@ -443,7 +448,7 @@ class RiskEngine:
                 )
                 total_required = margin_required + fee_buffer + slippage_buffer + adverse_move_buffer
 
-            if abs(order_qty) <= 0 or total_required > free_margin:
+            if abs(order_qty) <= 0 or total_required > max_total_required:
                 return None, "risk_rejected:insufficient_free_margin"
 
         reason = "risk_approved"
@@ -473,6 +478,9 @@ class RiskEngine:
                 "free_margin": free_margin,
                 "max_leverage": max_leverage,
                 "scaled_by_margin": scaled_by_margin,
+                "maintenance_free_margin_pct": maintenance_free_margin_pct,
+                "max_total_required": max_total_required,
+                "total_required": total_required,
                 "reason": reason,
             }
         )

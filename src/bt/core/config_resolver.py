@@ -178,6 +178,12 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
         nested_key="max_notional_pct_equity",
         default=1.0,
     )
+    _resolve_risk_value(
+        resolved=resolved,
+        top_key="maintenance_free_margin_pct",
+        nested_key="maintenance_free_margin_pct",
+        default=0.01,
+    )
     _resolve_r_per_trade_alias(resolved)
 
     risk_cfg = resolved.get("risk", {})
@@ -248,6 +254,21 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
             "Set it to 1.0 for a 100% of equity cap or increase up to 5.0 when needed."
         )
     risk_cfg["max_notional_pct_equity"] = max_notional_pct_equity
+
+    try:
+        maintenance_free_margin_pct = float(risk_cfg.get("maintenance_free_margin_pct"))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(
+            "Invalid risk.maintenance_free_margin_pct: expected a float in [0.0, 0.20]; "
+            f"got {risk_cfg.get('maintenance_free_margin_pct')!r}."
+        ) from exc
+    if not (0.0 <= maintenance_free_margin_pct <= 0.20):
+        raise ConfigError(
+            "Invalid risk.maintenance_free_margin_pct: expected a float in [0.0, 0.20] "
+            f"got {maintenance_free_margin_pct!r}. "
+            "Set it to 0.01 for a 1% maintenance free-margin floor."
+        )
+    risk_cfg["maintenance_free_margin_pct"] = maintenance_free_margin_pct
 
     resolved["risk"] = risk_cfg
 

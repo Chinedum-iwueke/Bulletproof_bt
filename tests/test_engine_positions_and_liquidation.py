@@ -116,9 +116,94 @@ def test_engine_forced_liquidation_at_end_of_run(tmp_path: Path) -> None:
         isinstance(row.get("metadata"), dict)
         and row["metadata"].get("forced_liquidation") is True
         and row["metadata"].get("close_only") is True
-        and row["metadata"].get("reason") == "forced_liquidation:end_of_run"
+        and row["metadata"].get("reason") == "forced_liquidation"
+        and row["metadata"].get("liquidation_reason") == "end_of_run"
         for row in fill_rows
     )
 
     trades_lines = trades_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(trades_lines) >= 2
+
+
+class StressLongStrategy(Strategy):
+    def __init__(self) -> None:
+        self._entered = False
+
+    def on_bars(self, ts: pd.Timestamp, bars_by_symbol: dict[str, Bar], tradeable: set[str], ctx: dict) -> list[Signal]:
+        if self._entered:
+            return []
+        self._entered = True
+        return [Signal(ts=ts, symbol="AAA", side=Side.BUY, signal_type="entry", confidence=1.0, metadata={"stop_price": 99.0})]
+
+
+def test_engine_forced_liquidation_on_negative_free_margin(tmp_path: Path) -> None:
+    from bt.logging.sanity import SanityCounters, write_sanity_json
+
+    ts_index = pd.date_range("2024-01-01", periods=2, freq="D", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "ts": ts_index,
+            "symbol": ["AAA", "AAA"],
+            "open": [100.0, 100.0],
+            "high": [100.0, 100.0],
+            "low": [100.0, 90.0],
+            "close": [100.0, 90.0],
+            "volume": [1000.0, 1000.0],
+        }
+    )
+
+    datafeed = HistoricalDataFeed(df)
+    universe = UniverseEngine(min_history_bars=1, lookback_bars=1, min_avg_volume=0.0, lag_bars=0)
+    risk = RiskEngine(
+        max_positions=1,
+        config={
+            "risk": {
+                "mode": "r_fixed",
+                "r_per_trade": 2.0,
+                "stop": {},
+                "max_notional_pct_equity": 5.0,
+                "maintenance_free_margin_pct": 0.0,
+            }
+        },
+    )
+    execution = ExecutionModel(
+        fee_model=FeeModel(maker_fee_bps=0.0, taker_fee_bps=0.0),
+        slippage_model=SlippageModel(k=0.0),
+        delay_bars=0,
+    )
+    portfolio = Portfolio(initial_cash=100000.0, max_leverage=2.0)
+    counters = SanityCounters(run_id="forced-liquidation")
+
+    fills_path = tmp_path / "fills.jsonl"
+    engine = BacktestEngine(
+        datafeed=datafeed,
+        universe=universe,
+        strategy=StressLongStrategy(),
+        risk=risk,
+        execution=execution,
+        portfolio=portfolio,
+        decisions_writer=JsonlWriter(tmp_path / "decisions.jsonl"),
+        fills_writer=JsonlWriter(fills_path),
+        trades_writer=TradesCsvWriter(tmp_path / "trades.csv"),
+        equity_path=tmp_path / "equity.csv",
+        config={},
+        sanity_counters=counters,
+    )
+
+    engine.run()
+
+    final_position = engine._portfolio.position_book.get("AAA")
+    assert final_position.qty == 0.0
+
+    fill_rows = [json.loads(line) for line in fills_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(
+        isinstance(row.get("metadata"), dict)
+        and row["metadata"].get("forced_liquidation") is True
+        and row["metadata"].get("exit_reason") == "forced_liquidation"
+        and row["metadata"].get("liquidation_reason") == "negative_free_margin"
+        for row in fill_rows
+    )
+
+    write_sanity_json(tmp_path, counters)
+    sanity = json.loads((tmp_path / "sanity.json").read_text(encoding="utf-8"))
+    assert int(sanity.get("forced_liquidations", 0)) >= 1

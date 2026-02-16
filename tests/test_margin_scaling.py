@@ -42,6 +42,53 @@ def test_margin_scaling_applies_and_approves() -> None:
     assert reason == "risk_approved"
     assert order_intent.metadata["scaled_by_margin"] is True
 
-    expected_max_affordable_qty = 150.0 / (100.0 * (0.5 + 0.001 + 0.001 + 0.01))
+    expected_max_affordable_qty = (150.0 * 0.99) / (100.0 * (0.5 + 0.001 + 0.001 + 0.01))
     assert abs(order_intent.qty) == pytest.approx(expected_max_affordable_qty)
     assert order_intent.metadata["margin_required"] <= 150.0
+
+
+def test_margin_scaling_reserves_maintenance_headroom() -> None:
+    engine = RiskEngine(
+        max_positions=5,
+        taker_fee_bps=0.0,
+        slippage_k_proxy=0.0,
+        margin_buffer_tier=1,
+        config={
+            "risk": {
+                "mode": "r_fixed",
+                "r_per_trade": 1.0,
+                "qty_rounding": "none",
+                "stop": {},
+                "maintenance_free_margin_pct": 0.01,
+                "max_notional_pct_equity": 100.0,
+            }
+        },
+    )
+    ts = pd.Timestamp("2024-01-01T00:00:00Z")
+    bar = Bar(ts=ts, symbol="BTC", open=100.0, high=100.0, low=100.0, close=100.0, volume=1.0)
+    signal = Signal(
+        ts=ts,
+        symbol="BTC",
+        side=Side.BUY,
+        signal_type="unit",
+        confidence=1.0,
+        metadata={"stop_price": 99.0},
+    )
+
+    order_intent, reason = engine.signal_to_order_intent(
+        ts=ts,
+        signal=signal,
+        bar=bar,
+        equity=100_000.0,
+        free_margin=100_000.0,
+        open_positions=0,
+        max_leverage=1.0,
+        current_qty=0.0,
+    )
+
+    assert order_intent is not None
+    assert reason == "risk_approved"
+    assert order_intent.metadata["scaled_by_margin"] is True
+    assert order_intent.metadata["maintenance_free_margin_pct"] == pytest.approx(0.01)
+    assert order_intent.metadata["max_total_required"] == pytest.approx(99_000.0)
+    assert order_intent.metadata["total_required"] <= order_intent.metadata["max_total_required"]
