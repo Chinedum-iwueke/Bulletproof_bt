@@ -42,6 +42,6 @@ def test_margin_scaling_applies_and_approves() -> None:
     assert reason == "risk_approved"
     assert order_intent.metadata["scaled_by_margin"] is True
 
-    expected_max_affordable_qty = 0.6
+    expected_max_affordable_qty = 150.0 / (100.0 * (0.5 + 0.001 + 0.001 + 0.01))
     assert abs(order_intent.qty) == pytest.approx(expected_max_affordable_qty)
     assert order_intent.metadata["margin_required"] <= 150.0

@@ -20,6 +20,7 @@ class RiskEngine:
         max_positions: int,
         max_notional_per_symbol: float | None = None,
         margin_buffer_tier: int = 1,
+        maker_fee_bps: float = 0.0,
         taker_fee_bps: float = 0.0,
         slippage_k_proxy: float = 0.0,
         eps: float = 1e-12,
@@ -28,6 +29,7 @@ class RiskEngine:
         self.max_positions = max_positions
         self.max_notional_per_symbol = max_notional_per_symbol
         self.margin_buffer_tier = int(margin_buffer_tier)
+        self.maker_fee_bps = float(maker_fee_bps)
         self.taker_fee_bps = float(taker_fee_bps)
         self.slippage_k_proxy = float(slippage_k_proxy)
         self.eps = eps
@@ -157,13 +159,28 @@ class RiskEngine:
         return (notional / leverage_for_margin) + fee_buffer + slippage_buffer
 
     def _estimate_buffers(self, notional: float) -> tuple[float, float]:
-        if self.margin_buffer_tier <= 1:
-            return 0.0, 0.0
-        fee_buffer = notional * (self.taker_fee_bps / 1e4)
-        slippage_buffer = notional * self.slippage_k_proxy
-        if self.margin_buffer_tier >= 3:
-            fee_buffer *= 2.0
-            slippage_buffer *= 2.0
+        fee_bps = max(self.maker_fee_bps, self.taker_fee_bps)
+        fee_buffer = notional * (fee_bps / 1e4)
+
+        slippage_model = ""
+        fixed_bps: float | None = None
+        if isinstance(self._config, dict):
+            model_value = self._config.get("model")
+            fixed_bps_value = self._config.get("fixed_bps")
+            slippage_cfg = self._config.get("slippage")
+            if isinstance(slippage_cfg, dict):
+                if model_value is None:
+                    model_value = slippage_cfg.get("model")
+                if fixed_bps_value is None:
+                    fixed_bps_value = slippage_cfg.get("fixed_bps")
+            slippage_model = str(model_value or "")
+            if fixed_bps_value is not None:
+                fixed_bps = float(fixed_bps_value)
+
+        if slippage_model == "fixed_bps" and fixed_bps is not None:
+            slippage_buffer = notional * (fixed_bps / 1e4)
+        else:
+            slippage_buffer = notional * self.slippage_k_proxy
         return fee_buffer, slippage_buffer
 
     def signal_to_order_intent(
@@ -382,13 +399,23 @@ class RiskEngine:
         margin_required = self.estimate_required_margin(
             notional=notional,
             max_leverage=max_leverage,
-            fee_buffer=fee_buffer + adverse_move_buffer,
-            slippage_buffer=slippage_buffer,
+            fee_buffer=0.0,
+            slippage_buffer=0.0,
         )
+        total_required = margin_required + fee_buffer + slippage_buffer + adverse_move_buffer
         scaled_by_margin = False
-        if margin_required > free_margin:
-            safe_free_margin = free_margin - fee_buffer - slippage_buffer - adverse_move_buffer
-            max_affordable_notional = safe_free_margin * max_leverage
+        if total_required > free_margin:
+            adverse_move_per_notional = 0.0
+            if bar.close > 0:
+                adverse_move_per_notional = adverse_move_buffer / notional if notional > 0 else 0.0
+
+            total_required_per_notional = (
+                (1.0 / max(max_leverage, self.eps))
+                + (fee_buffer / notional if notional > 0 else 0.0)
+                + (slippage_buffer / notional if notional > 0 else 0.0)
+                + adverse_move_per_notional
+            )
+            max_affordable_notional = free_margin / max(total_required_per_notional, self.eps)
             if max_affordable_notional <= 0:
                 return None, "risk_rejected:insufficient_free_margin"
 
@@ -411,11 +438,12 @@ class RiskEngine:
                 margin_required = self.estimate_required_margin(
                     notional=notional,
                     max_leverage=max_leverage,
-                    fee_buffer=fee_buffer + adverse_move_buffer,
-                    slippage_buffer=slippage_buffer,
+                    fee_buffer=0.0,
+                    slippage_buffer=0.0,
                 )
+                total_required = margin_required + fee_buffer + slippage_buffer + adverse_move_buffer
 
-            if abs(order_qty) <= 0 or margin_required > free_margin:
+            if abs(order_qty) <= 0 or total_required > free_margin:
                 return None, "risk_rejected:insufficient_free_margin"
 
         reason = "risk_approved"

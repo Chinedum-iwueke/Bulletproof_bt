@@ -82,9 +82,15 @@ def _build_engine(
         max_positions=int(risk_cfg.get("max_positions", 5)),
         max_notional_per_symbol=config.get("max_notional_per_symbol"),
         margin_buffer_tier=int(risk_cfg.get("margin_buffer_tier", 1)),
+        maker_fee_bps=float(config.get("maker_fee_bps", 0.0)),
         taker_fee_bps=float(config.get("taker_fee_bps", 0.0)),
         slippage_k_proxy=float(risk_cfg.get("slippage_k_proxy", 0.0)),
-        config={"risk": risk_cfg_for_spec},
+        config={
+            "risk": risk_cfg_for_spec,
+            "model": config.get("model"),
+            "fixed_bps": config.get("fixed_bps"),
+            "slippage": config.get("slippage"),
+        },
     )
 
     fee_model = FeeModel(
