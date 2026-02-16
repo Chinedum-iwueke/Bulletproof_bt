@@ -106,11 +106,47 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(resolved, dict):
         raise ConfigError("Config root must be a mapping")
 
+    resolved.setdefault("intrabar_mode", "worst_case")
+    resolved.setdefault("signal_delay_bars", 1)
+    resolved.setdefault("initial_cash", 100000.0)
+    resolved.setdefault("model", "fixed_bps")
+    resolved.setdefault("fixed_bps", 5.0)
+
+    outputs_cfg = _ensure_mapping(resolved.get("outputs"), name="outputs")
+    outputs_cfg.setdefault("root_dir", "outputs/runs")
+    outputs_cfg.setdefault("jsonl", True)
+    resolved["outputs"] = outputs_cfg
+
+    data_cfg = _ensure_mapping(resolved.get("data"), name="data")
+    data_cfg.setdefault("mode", "streaming")
+    data_cfg.setdefault("symbols_subset", None)
+    data_cfg.setdefault("chunksize", 50000)
+    resolved["data"] = data_cfg
+
+    strategy_cfg = _ensure_mapping(resolved.get("strategy"), name="strategy")
+    strategy_cfg.setdefault("name", "coinflip")
+    resolved["strategy"] = strategy_cfg
+
+    if "htf_timeframes" in resolved or "htf_strict" in resolved:
+        htf_resampler_cfg = _ensure_mapping(resolved.get("htf_resampler"), name="htf_resampler")
+        if "htf_timeframes" in resolved:
+            htf_resampler_cfg.setdefault("timeframes", resolved.get("htf_timeframes"))
+        if "htf_strict" in resolved:
+            htf_resampler_cfg.setdefault("strict", resolved.get("htf_strict"))
+        htf_resampler_cfg.setdefault("strict", True)
+        resolved["htf_resampler"] = htf_resampler_cfg
+
     _resolve_risk_value(
         resolved=resolved,
         top_key="max_positions",
         nested_key="max_positions",
         default=1,
+    )
+    _resolve_risk_value(
+        resolved=resolved,
+        top_key="max_leverage",
+        nested_key="max_leverage",
+        default=2.0,
     )
     _resolve_risk_value(
         resolved=resolved,
@@ -133,6 +169,7 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     _resolve_r_per_trade_alias(resolved)
 
     risk_cfg = resolved.get("risk", {})
+    risk_cfg.setdefault("mode", "equity_pct")
     stop_resolution = risk_cfg.get("stop_resolution")
     if stop_resolution not in {"strict", "allow_legacy_proxy"}:
         raise ConfigError(
