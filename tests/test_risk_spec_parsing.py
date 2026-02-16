@@ -21,6 +21,7 @@ def test_parse_risk_spec_valid_config() -> None:
     assert spec.r_per_trade == 0.005
     assert spec.min_stop_distance == 0.1
     assert spec.max_leverage == 2.0
+    assert spec.maintenance_free_margin_pct == 0.01
 
 
 @pytest.mark.parametrize(
@@ -63,3 +64,4 @@ def test_parse_risk_spec_optional_defaults() -> None:
 
     assert spec.min_stop_distance is None
     assert spec.max_leverage is None
+    assert spec.maintenance_free_margin_pct == 0.01

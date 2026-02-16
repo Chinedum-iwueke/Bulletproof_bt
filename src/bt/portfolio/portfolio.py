@@ -62,24 +62,6 @@ class Portfolio:
         self.equity = self.cash + self.realized_pnl + self.unrealized_pnl
         self.used_margin = self._calculate_used_margin()
         self.free_margin = self.equity - self.used_margin
-        if self.free_margin < -1e-9:
-            fills_summary = [
-                {
-                    "symbol": fill.symbol,
-                    "qty": fill.qty,
-                    "price": fill.price,
-                    "fee": fill.fee,
-                    "slippage": fill.slippage,
-                }
-                for fill in self._last_fills
-            ]
-            raise RuntimeError(
-                "Negative free_margin after apply_fills(). "
-                f"free_margin={self.free_margin:.6f}, used_margin={self.used_margin:.6f}, "
-                f"cash={self.cash:.6f}, equity={self.equity:.6f}. "
-                "This indicates a bug in risk sizing/reservation or execution cost buffers. "
-                f"last_fills={fills_summary}"
-            )
 
     def _update_unrealized_pnl(self) -> None:
         total_unrealized = 0.0
