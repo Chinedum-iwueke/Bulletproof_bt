@@ -286,3 +286,44 @@ def test_signal_to_order_intent_caps_notional_by_pct_equity() -> None:
     assert order_intent.metadata["cap_reason"] == "max_notional_pct_equity"
     assert order_intent.metadata["max_notional"] == pytest.approx(500.0)
     assert order_intent.metadata["notional_est"] == pytest.approx(500.0)
+
+
+def test_signal_to_order_intent_uses_fixed_bps_fee_and_slippage_buffers() -> None:
+    engine = RiskEngine(
+        max_positions=5,
+        maker_fee_bps=1.0,
+        taker_fee_bps=2.0,
+        slippage_k_proxy=0.0,
+        config={
+            "model": "fixed_bps",
+            "fixed_bps": 5.0,
+            "risk": {"mode": "r_fixed", "r_per_trade": 0.01, "qty_rounding": "none", "stop": {}},
+        },
+    )
+    ts = pd.Timestamp("2024-01-01T00:00:00Z")
+    bar = _bar(ts=ts, symbol="BTC", high=100.0, low=99.0, close=100.0)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=99.0)
+
+    order_intent, reason = engine.signal_to_order_intent(
+        ts=ts,
+        signal=signal,
+        bar=bar,
+        equity=100_000.0,
+        free_margin=100_000.0,
+        open_positions=0,
+        max_leverage=1.0,
+        current_qty=0.0,
+    )
+
+    assert order_intent is not None
+    assert reason == "risk_approved"
+    assert order_intent.metadata["margin_fee_buffer"] > 0.0
+    assert order_intent.metadata["margin_slippage_buffer"] > 0.0
+
+    total_required = (
+        order_intent.metadata["margin_required"]
+        + order_intent.metadata["margin_fee_buffer"]
+        + order_intent.metadata["margin_slippage_buffer"]
+        + order_intent.metadata["margin_adverse_move_buffer"]
+    )
+    assert total_required <= order_intent.metadata["free_margin"]

@@ -109,4 +109,5 @@ def test_run_backtest_wires_resolved_risk_buffers_without_hidden_defaults(tmp_pa
     fill_lines = (run_dir / "fills.jsonl").read_text(encoding="utf-8").strip().splitlines()
     if fill_lines:
         first_fill = json.loads(fill_lines[0])
-        assert first_fill["metadata"]["margin_slippage_buffer"] == 0.0
+        assert first_fill["metadata"]["margin_fee_buffer"] > 0.0
+        assert first_fill["metadata"]["margin_slippage_buffer"] > 0.0
