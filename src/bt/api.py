@@ -128,6 +128,9 @@ def run_backtest(
     """
     Runs a single backtest and returns the created run directory path.
     """
+    from bt.benchmark.spec import parse_benchmark_spec
+    from bt.benchmark.tracker import BenchmarkTracker, BenchmarkTrackingFeed, write_benchmark_equity_csv
+    from bt.data.dataset import load_dataset_manifest
     from bt.data.load_feed import load_feed
     from bt.logging.trades import make_run_id, prepare_run_dir, write_config_used, write_data_scope
     from bt.metrics.performance import compute_performance, write_performance_artifacts
@@ -150,9 +153,33 @@ def run_backtest(
         dataset_dir=data_path if Path(data_path).is_dir() else None,
     )
 
+    benchmark_spec = parse_benchmark_spec(config)
+    benchmark_tracker: BenchmarkTracker | None = None
+    if benchmark_spec.enabled:
+        benchmark_symbol = benchmark_spec.symbol
+        if Path(data_path).is_dir():
+            manifest = load_dataset_manifest(data_path, config)
+            if benchmark_symbol not in manifest.symbols:
+                raise ValueError(
+                    f"benchmark.symbol={benchmark_symbol} not found in dataset scope for dataset_dir={data_path}"
+                )
+        benchmark_tracker = BenchmarkTracker(benchmark_spec)
+
     datafeed = load_feed(data_path, config)
+    if benchmark_tracker is not None:
+        datafeed = BenchmarkTrackingFeed(inner_feed=datafeed, tracker=benchmark_tracker)
+
     engine = _build_engine(config, datafeed, run_dir)
     engine.run()
+
+    if benchmark_tracker is not None:
+        benchmark_initial_equity = (
+            benchmark_spec.initial_equity
+            if benchmark_spec.initial_equity is not None
+            else float(config.get("initial_cash", 100000.0))
+        )
+        benchmark_points = benchmark_tracker.finalize(initial_equity=benchmark_initial_equity)
+        write_benchmark_equity_csv(benchmark_points, run_dir / "benchmark_equity.csv")
 
     report = compute_performance(run_dir)
     write_performance_artifacts(report, run_dir)
