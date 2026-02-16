@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -92,6 +93,13 @@ def test_benchmark_equity_artifact_written(tmp_path: Path) -> None:
     assert len(rows) == 3
     equities = [float(row["equity"]) for row in rows]
     assert equities == [1000.0, 1100.0, 900.0]
+
+    benchmark_metrics_path = run_dir / "benchmark_metrics.json"
+    assert benchmark_metrics_path.exists()
+    metrics = json.loads(benchmark_metrics_path.read_text(encoding="utf-8"))
+    assert metrics["n_points"] == 3
+    assert metrics["total_return"] == pytest.approx(-0.1)
+    assert metrics["max_drawdown"] == pytest.approx((1100.0 - 900.0) / 1100.0)
 
 
 def test_benchmark_missing_from_dataset_scope_raises_early(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 """Public product API for running backtests and experiment grids."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Optional
 
@@ -128,6 +129,7 @@ def run_backtest(
     """
     Runs a single backtest and returns the created run directory path.
     """
+    from bt.benchmark.metrics import compute_benchmark_metrics
     from bt.benchmark.spec import parse_benchmark_spec
     from bt.benchmark.tracker import BenchmarkTracker, BenchmarkTrackingFeed, write_benchmark_equity_csv
     from bt.data.dataset import load_dataset_manifest
@@ -180,6 +182,11 @@ def run_backtest(
         )
         benchmark_points = benchmark_tracker.finalize(initial_equity=benchmark_initial_equity)
         write_benchmark_equity_csv(benchmark_points, run_dir / "benchmark_equity.csv")
+        benchmark_metrics = compute_benchmark_metrics(equity_points=benchmark_points)
+        (run_dir / "benchmark_metrics.json").write_text(
+            json.dumps(benchmark_metrics, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     report = compute_performance(run_dir)
     write_performance_artifacts(report, run_dir)
