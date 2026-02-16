@@ -38,6 +38,8 @@ def validate_resolved_config_completeness(config: dict[str, Any]) -> None:
         "risk.stop_resolution",
         "risk.margin_buffer_tier",
         "risk.slippage_k_proxy",
+        "risk.min_stop_distance_pct",
+        "risk.max_notional_pct_equity",
     ]
     for path in required_paths:
         if not _has_key(config, path):

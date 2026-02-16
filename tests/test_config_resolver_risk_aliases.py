@@ -54,3 +54,31 @@ def test_resolve_config_rejects_invalid_margin_and_slippage_proxy_values() -> No
 
     with pytest.raises(ValueError, match=r"Invalid risk\.slippage_k_proxy"):
         resolve_config({"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "slippage_k_proxy": -1}})
+
+
+def test_resolve_config_injects_risk_guardrail_defaults() -> None:
+    resolved = resolve_config({"risk": {"mode": "r_fixed", "r_per_trade": 0.01}})
+
+    assert resolved["risk"]["min_stop_distance_pct"] == 0.001
+    assert resolved["risk"]["max_notional_pct_equity"] == 1.0
+
+
+def test_resolve_config_rejects_invalid_risk_guardrail_values() -> None:
+    with pytest.raises(ValueError, match=r"Invalid risk\.min_stop_distance_pct"):
+        resolve_config({"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "min_stop_distance_pct": 0.2}})
+
+    with pytest.raises(ValueError, match=r"Invalid risk\.max_notional_pct_equity"):
+        resolve_config({"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "max_notional_pct_equity": 0.0}})
+
+
+def test_config_used_yaml_contains_injected_risk_guardrail_defaults(tmp_path) -> None:
+    import yaml
+
+    from bt.logging.trades import write_config_used
+
+    resolved = resolve_config({"risk": {"mode": "r_fixed", "r_per_trade": 0.01}})
+    write_config_used(tmp_path, resolved)
+
+    payload = yaml.safe_load((tmp_path / "config_used.yaml").read_text(encoding="utf-8"))
+    assert payload["risk"]["min_stop_distance_pct"] == 0.001
+    assert payload["risk"]["max_notional_pct_equity"] == 1.0
