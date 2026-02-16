@@ -27,18 +27,18 @@ def test_sanity_json_written_for_successful_run(tmp_path: Path) -> None:
         "signals_emitted",
         "signals_approved",
         "signals_rejected",
-        "fills_count",
-        "closed_trades_count",
-        "forced_liquidation_count",
+        "fills",
+        "closed_trades",
+        "forced_liquidations",
     ]
     for field in int_fields:
         assert isinstance(payload[field], int)
 
-    assert payload["signals_emitted"] >= payload["signals_approved"] + payload["signals_rejected"]
-    assert payload["fills_count"] >= payload["closed_trades_count"]
+    assert payload["signals_emitted"] == payload["signals_approved"] + payload["signals_rejected"]
+    assert payload["fills"] >= payload["closed_trades"]
 
     if payload["signals_rejected"] > 0:
-        assert payload["signals_rejected_by_reason"]
+        assert payload["rejected_by_reason"]
 
 
 def test_sanity_json_written_when_run_fails_after_run_dir_created(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

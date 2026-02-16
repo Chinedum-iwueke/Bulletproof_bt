@@ -166,6 +166,18 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
         nested_key="margin_buffer_tier",
         default=1,
     )
+    _resolve_risk_value(
+        resolved=resolved,
+        top_key="min_stop_distance_pct",
+        nested_key="min_stop_distance_pct",
+        default=0.001,
+    )
+    _resolve_risk_value(
+        resolved=resolved,
+        top_key="max_notional_pct_equity",
+        nested_key="max_notional_pct_equity",
+        default=1.0,
+    )
     _resolve_r_per_trade_alias(resolved)
 
     risk_cfg = resolved.get("risk", {})
@@ -206,6 +218,37 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
             "Use 0.0 to disable the proxy buffer or a small fraction like 0.001."
         )
     risk_cfg["slippage_k_proxy"] = slippage_k_proxy
+
+    try:
+        min_stop_distance_pct = float(risk_cfg.get("min_stop_distance_pct"))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(
+            "Invalid risk.min_stop_distance_pct: expected a float in [0.0, 0.05]; "
+            f"got {risk_cfg.get('min_stop_distance_pct')!r}."
+        ) from exc
+    if not (0.0 <= min_stop_distance_pct <= 0.05):
+        raise ConfigError(
+            "Invalid risk.min_stop_distance_pct: expected a float in [0.0, 0.05] "
+            f"got {min_stop_distance_pct!r}. "
+            "Use 0.0 to disable this guardrail or a small fraction like 0.001 (0.1%)."
+        )
+    risk_cfg["min_stop_distance_pct"] = min_stop_distance_pct
+
+    try:
+        max_notional_pct_equity = float(risk_cfg.get("max_notional_pct_equity"))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(
+            "Invalid risk.max_notional_pct_equity: expected a float in (0.0, 5.0]; "
+            f"got {risk_cfg.get('max_notional_pct_equity')!r}."
+        ) from exc
+    if not (0.0 < max_notional_pct_equity <= 5.0):
+        raise ConfigError(
+            "Invalid risk.max_notional_pct_equity: expected a float in (0.0, 5.0] "
+            f"got {max_notional_pct_equity!r}. "
+            "Set it to 1.0 for a 100% of equity cap or increase up to 5.0 when needed."
+        )
+    risk_cfg["max_notional_pct_equity"] = max_notional_pct_equity
+
     resolved["risk"] = risk_cfg
 
     return resolved

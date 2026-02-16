@@ -134,15 +134,15 @@ class BacktestEngine:
                 }
             )
             if self._sanity_counters is not None:
-                self._sanity_counters.fills_count += 1
+                self._sanity_counters.fills += 1
                 if bool((fill.metadata or {}).get("forced_liquidation")):
-                    self._sanity_counters.forced_liquidation_count += 1
+                    self._sanity_counters.forced_liquidations += 1
 
         trades_closed = self._portfolio.apply_fills(fills)
         for trade in trades_closed:
             self._trades_writer.write_trade(trade)
             if self._sanity_counters is not None:
-                self._sanity_counters.closed_trades_count += 1
+                self._sanity_counters.closed_trades += 1
 
         self._portfolio.mark_to_market(bars_by_symbol)
         writer.writerow(
@@ -371,13 +371,13 @@ class BacktestEngine:
                         }
                     )
                     if self._sanity_counters is not None:
-                        self._sanity_counters.fills_count += 1
+                        self._sanity_counters.fills += 1
 
                 trades_closed = self._portfolio.apply_fills(fills)
                 for trade in trades_closed:
                     self._trades_writer.write_trade(trade)
                     if self._sanity_counters is not None:
-                        self._sanity_counters.closed_trades_count += 1
+                        self._sanity_counters.closed_trades += 1
 
                 self._portfolio.mark_to_market(bars_by_symbol)
 

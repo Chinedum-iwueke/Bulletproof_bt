@@ -34,8 +34,8 @@ def _signal(*, ts: pd.Timestamp, symbol: str, side: Side | None, stop_price: flo
     )
 
 
-def _risk_config(*, mode: str = "r_fixed", r_per_trade: float = 0.01, qty_rounding: str = "none", min_stop_distance: float | None = None) -> dict[str, object]:
-    risk_cfg: dict[str, object] = {"mode": mode, "r_per_trade": r_per_trade, "qty_rounding": qty_rounding, "stop": {}}
+def _risk_config(*, mode: str = "r_fixed", r_per_trade: float = 0.01, qty_rounding: str = "none", min_stop_distance: float | None = None, min_stop_distance_pct: float = 0.001, max_notional_pct_equity: float = 1.0) -> dict[str, object]:
+    risk_cfg: dict[str, object] = {"mode": mode, "r_per_trade": r_per_trade, "qty_rounding": qty_rounding, "stop": {}, "min_stop_distance_pct": min_stop_distance_pct, "max_notional_pct_equity": max_notional_pct_equity}
     if min_stop_distance is not None:
         risk_cfg["min_stop_distance"] = min_stop_distance
     return {"risk": risk_cfg}
@@ -239,3 +239,50 @@ def test_signal_to_order_intent_flip_scales_for_margin() -> None:
     assert order_intent is not None
     assert reason == "risk_approved"
     assert order_intent.metadata["scaled_by_margin"] is True
+
+
+def test_signal_to_order_intent_rejects_when_stop_distance_pct_too_small() -> None:
+    engine = RiskEngine(max_positions=5, config=_risk_config(min_stop_distance_pct=0.2))
+    ts = pd.Timestamp("2024-01-01T00:00:00Z")
+    bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=105)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=95.0)
+
+    order_intent, reason = engine.signal_to_order_intent(
+        ts=ts,
+        signal=signal,
+        bar=bar,
+        equity=10_000,
+        free_margin=10_000,
+        open_positions=0,
+        max_leverage=2.0,
+        current_qty=0.0,
+    )
+
+    assert order_intent is None
+    assert reason == "stop_too_small"
+
+
+def test_signal_to_order_intent_caps_notional_by_pct_equity() -> None:
+    engine = RiskEngine(max_positions=5, config=_risk_config(r_per_trade=0.5, max_notional_pct_equity=0.05))
+    ts = pd.Timestamp("2024-01-01T00:00:00Z")
+    bar = _bar(ts=ts, symbol="BTC", high=110, low=100, close=100)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.SELL, stop_price=110.0)
+
+    order_intent, reason = engine.signal_to_order_intent(
+        ts=ts,
+        signal=signal,
+        bar=bar,
+        equity=10_000,
+        free_margin=10_000,
+        open_positions=0,
+        max_leverage=3.0,
+        current_qty=0.0,
+    )
+
+    assert order_intent is not None
+    assert reason == "risk_approved"
+    assert order_intent.qty == pytest.approx(-5.0)
+    assert order_intent.metadata["cap_applied"] is True
+    assert order_intent.metadata["cap_reason"] == "max_notional_pct_equity"
+    assert order_intent.metadata["max_notional"] == pytest.approx(500.0)
+    assert order_intent.metadata["notional_est"] == pytest.approx(500.0)

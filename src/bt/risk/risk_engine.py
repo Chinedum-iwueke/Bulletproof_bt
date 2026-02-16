@@ -67,6 +67,18 @@ class RiskEngine:
         mode = risk_cfg.get("stop_resolution", "strict") if isinstance(risk_cfg, dict) else "strict"
         return str(mode)
 
+    def _min_stop_distance_pct(self) -> float:
+        risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
+        if not isinstance(risk_cfg, dict):
+            return 0.001
+        return float(risk_cfg.get("min_stop_distance_pct", 0.001))
+
+    def _max_notional_pct_equity(self) -> float:
+        risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
+        if not isinstance(risk_cfg, dict):
+            return 1.0
+        return float(risk_cfg.get("max_notional_pct_equity", 1.0))
+
     @staticmethod
     def _qty_sign_invariant_ok(*, signal_side: Side, current_qty: float, flip: bool, order_qty: float, close_only: bool) -> bool:
         if close_only:
@@ -309,15 +321,33 @@ class RiskEngine:
         risk_meta["r_metrics_valid"] = bool(risk_meta.get("r_metrics_valid", True)) and bool(risk_meta.get("stop_source")) and float(risk_meta.get("stop_distance", 0.0)) > 0
 
         risk_budget = risk_meta["risk_amount"]
-        stop_dist = risk_meta["stop_distance"]
+        stop_dist = float(risk_meta["stop_distance"])
+        min_stop_distance_pct = self._min_stop_distance_pct()
+        if bar.close > 0:
+            stop_distance_pct = stop_dist / bar.close
+            if stop_distance_pct < min_stop_distance_pct:
+                return None, "stop_too_small"
+
         desired_notional = abs(desired_qty) * bar.close
         cap_applied = False
+        cap_reason: str | None = None
+        max_notional: float | None = None
 
         if self.max_notional_per_symbol is not None and desired_notional > self.max_notional_per_symbol:
             scale = self.max_notional_per_symbol / desired_notional
             desired_qty *= scale
             desired_notional = abs(desired_qty) * bar.close
             cap_applied = True
+            cap_reason = "max_notional_per_symbol"
+            max_notional = float(self.max_notional_per_symbol)
+
+        max_notional_equity = equity * self._max_notional_pct_equity()
+        if desired_notional > max_notional_equity:
+            desired_qty = math.copysign(max_notional_equity / bar.close, desired_qty)
+            desired_notional = abs(desired_qty) * bar.close
+            cap_applied = True
+            cap_reason = "max_notional_pct_equity"
+            max_notional = max_notional_equity
 
         flip = cur_qty != 0 and signal.side != cur_side
         if flip:
@@ -406,6 +436,8 @@ class RiskEngine:
                 "flip": flip,
                 "notional_est": notional,
                 "cap_applied": cap_applied,
+                "cap_reason": cap_reason,
+                "max_notional": max_notional,
                 "margin_required": margin_required,
                 "margin_fee_buffer": fee_buffer,
                 "margin_slippage_buffer": slippage_buffer,
