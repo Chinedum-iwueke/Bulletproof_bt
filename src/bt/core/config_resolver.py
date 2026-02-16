@@ -118,13 +118,57 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
         nested_key="stop_resolution",
         default="strict",
     )
+    _resolve_risk_value(
+        resolved=resolved,
+        top_key="slippage_k",
+        nested_key="slippage_k_proxy",
+        default=0.0,
+    )
+    _resolve_risk_value(
+        resolved=resolved,
+        top_key="margin_buffer_tier",
+        nested_key="margin_buffer_tier",
+        default=1,
+    )
     _resolve_r_per_trade_alias(resolved)
 
-    stop_resolution = resolved.get("risk", {}).get("stop_resolution")
+    risk_cfg = resolved.get("risk", {})
+    stop_resolution = risk_cfg.get("stop_resolution")
     if stop_resolution not in {"strict", "allow_legacy_proxy"}:
         raise ConfigError(
             "Invalid risk.stop_resolution: expected 'strict' or 'allow_legacy_proxy' "
             f"got {stop_resolution!r}"
         )
+
+    try:
+        margin_buffer_tier = int(risk_cfg.get("margin_buffer_tier"))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(
+            "Invalid risk.margin_buffer_tier: expected one of {1, 2, 3}; "
+            f"got {risk_cfg.get('margin_buffer_tier')!r}."
+        ) from exc
+    if margin_buffer_tier not in {1, 2, 3}:
+        raise ConfigError(
+            "Invalid risk.margin_buffer_tier: expected one of {1, 2, 3} "
+            f"got {margin_buffer_tier!r}. "
+            "Set risk.margin_buffer_tier explicitly to 1 (no proxy buffer), 2, or 3."
+        )
+    risk_cfg["margin_buffer_tier"] = margin_buffer_tier
+
+    try:
+        slippage_k_proxy = float(risk_cfg.get("slippage_k_proxy"))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(
+            "Invalid risk.slippage_k_proxy: expected a value in [0.0, 0.05]; "
+            f"got {risk_cfg.get('slippage_k_proxy')!r}."
+        ) from exc
+    if not (0.0 <= slippage_k_proxy <= 0.05):
+        raise ConfigError(
+            "Invalid risk.slippage_k_proxy: expected a value in [0.0, 0.05] "
+            f"got {slippage_k_proxy!r}. "
+            "Use 0.0 to disable the proxy buffer or a small fraction like 0.001."
+        )
+    risk_cfg["slippage_k_proxy"] = slippage_k_proxy
+    resolved["risk"] = risk_cfg
 
     return resolved
