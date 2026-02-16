@@ -33,3 +33,24 @@ def test_resolve_config_injects_default_stop_resolution() -> None:
     resolved = resolve_config({"risk": {"mode": "r_fixed", "r_per_trade": 0.01}})
 
     assert resolved["risk"]["stop_resolution"] == "strict"
+
+
+def test_resolve_config_injects_safe_margin_and_slippage_proxy_defaults() -> None:
+    resolved = resolve_config({"risk": {"mode": "r_fixed", "r_per_trade": 0.01}})
+
+    assert resolved["risk"]["margin_buffer_tier"] == 1
+    assert resolved["risk"]["slippage_k_proxy"] == 0.0
+
+
+def test_resolve_config_maps_legacy_top_level_slippage_k_only_when_explicit() -> None:
+    resolved = resolve_config({"slippage_k": 0.002, "risk": {"mode": "r_fixed", "r_per_trade": 0.01}})
+
+    assert resolved["risk"]["slippage_k_proxy"] == 0.002
+
+
+def test_resolve_config_rejects_invalid_margin_and_slippage_proxy_values() -> None:
+    with pytest.raises(ValueError, match=r"Invalid risk\.margin_buffer_tier"):
+        resolve_config({"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "margin_buffer_tier": 99}})
+
+    with pytest.raises(ValueError, match=r"Invalid risk\.slippage_k_proxy"):
+        resolve_config({"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "slippage_k_proxy": -1}})

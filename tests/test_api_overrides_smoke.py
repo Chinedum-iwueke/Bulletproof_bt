@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import yaml
 
@@ -73,3 +74,39 @@ def test_run_backtest_config_used_omits_legacy_risk_key_when_not_explicit(tmp_pa
     assert cfg["risk"]["r_per_trade"] == 0.005
     assert "risk_per_trade_pct" not in cfg["risk"]
     assert "risk_per_trade_pct" not in cfg
+
+
+def test_run_backtest_wires_resolved_risk_buffers_without_hidden_defaults(tmp_path: Path, monkeypatch) -> None:
+    captured: dict[str, float | int] = {}
+
+    from bt.risk import risk_engine as risk_engine_module
+
+    original_init = risk_engine_module.RiskEngine.__init__
+
+    def _capturing_init(self, *args, **kwargs):
+        captured["margin_buffer_tier"] = kwargs["margin_buffer_tier"]
+        captured["slippage_k_proxy"] = kwargs["slippage_k_proxy"]
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(risk_engine_module.RiskEngine, "__init__", _capturing_init)
+
+    run_dir = Path(
+        run_backtest(
+            config_path="configs/engine.yaml",
+            data_path="data/curated/sample.csv",
+            out_dir=str(tmp_path / "runs"),
+            run_name="risk_buffer_defaults_smoke",
+        )
+    )
+
+    assert captured["margin_buffer_tier"] == 1
+    assert captured["slippage_k_proxy"] == 0.0
+
+    cfg = yaml.safe_load((run_dir / "config_used.yaml").read_text(encoding="utf-8"))
+    assert cfg["risk"]["margin_buffer_tier"] == 1
+    assert cfg["risk"]["slippage_k_proxy"] == 0.0
+
+    fill_lines = (run_dir / "fills.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    if fill_lines:
+        first_fill = json.loads(fill_lines[0])
+        assert first_fill["metadata"]["margin_slippage_buffer"] == 0.0
