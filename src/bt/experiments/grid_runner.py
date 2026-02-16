@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import csv
+from dataclasses import asdict
 import itertools
 import json
 import re
@@ -22,6 +23,7 @@ from bt.risk.stop_resolution import (
     STOP_RESOLUTION_UNRESOLVED,
 )
 
+from bt.benchmark.compare import compare_strategy_vs_benchmark
 from bt.benchmark.metrics import compute_benchmark_metrics
 from bt.benchmark.spec import parse_benchmark_spec
 from bt.benchmark.tracker import BenchmarkTracker, BenchmarkTrackingFeed, write_benchmark_equity_csv
@@ -334,6 +336,7 @@ def run_grid(
             engine = _build_engine(run_cfg, datafeed, run_dir)
             engine.run()
 
+            benchmark_metrics: dict[str, Any] | None = None
             if benchmark_tracker is not None:
                 benchmark_initial_equity = (
                     benchmark_spec.initial_equity
@@ -350,6 +353,20 @@ def run_grid(
 
             report = compute_performance(run_dir)
             write_performance_artifacts(report, run_dir)
+
+            if benchmark_spec.enabled:
+                if benchmark_metrics is None:
+                    raise ValueError(
+                        f"benchmark enabled but benchmark_metrics.json was not produced for run_dir={run_dir}"
+                    )
+                comparison_summary = compare_strategy_vs_benchmark(
+                    strategy_perf=asdict(report),
+                    bench_metrics=benchmark_metrics,
+                )
+                (run_dir / "comparison_summary.json").write_text(
+                    json.dumps(comparison_summary, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
 
             performance_path = run_dir / "performance.json"
             if not performance_path.exists():
