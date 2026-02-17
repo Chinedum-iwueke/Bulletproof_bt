@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from bt.config import deep_merge, load_yaml, resolve_paths_relative_to
 from bt.core.config_resolver import resolve_config
+from bt.execution.effective import build_effective_execution_snapshot
 from bt.execution.intrabar import parse_intrabar_spec
 from bt.logging.sanity import SanityCounters, write_sanity_json
 from bt.validation.config_completeness import validate_resolved_config_completeness
@@ -267,7 +268,7 @@ def run_backtest(
                 encoding="utf-8",
             )
 
-        execution_profile = resolve_execution_profile(config)
+        execution_snapshot = build_effective_execution_snapshot(config)
         _write_run_status(
             run_dir,
             {
@@ -276,28 +277,25 @@ def run_backtest(
                 "error_message": "",
                 "traceback": "",
                 "run_id": resolved_run_name,
-                "execution_profile": execution_profile.name,
-                "effective_execution": {
-                    "maker_fee": execution_profile.maker_fee,
-                    "taker_fee": execution_profile.taker_fee,
-                    "slippage_bps": execution_profile.slippage_bps,
-                    "delay_bars": execution_profile.delay_bars,
-                    "spread_bps": execution_profile.spread_bps,
-                },
-                "intrabar_mode": parse_intrabar_spec(config).mode,
+                **execution_snapshot,
             },
         )
     except Exception as exc:
+        status_payload = {
+            "status": "FAIL",
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "traceback": traceback.format_exc(),
+            "run_id": resolved_run_name,
+            "intrabar_mode": parse_intrabar_spec(config).mode,
+        }
+        try:
+            status_payload.update(build_effective_execution_snapshot(config))
+        except ValueError:
+            pass
         _write_run_status(
             run_dir,
-            {
-                "status": "FAIL",
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-                "traceback": traceback.format_exc(),
-                "run_id": resolved_run_name,
-                "intrabar_mode": parse_intrabar_spec(config).mode,
-            },
+            status_payload,
         )
         raise
     finally:
