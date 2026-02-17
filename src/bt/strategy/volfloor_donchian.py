@@ -57,6 +57,25 @@ class VolFloorDonchianStrategy(Strategy):
         self._symbols = set(symbols) if symbols is not None else None
         self._state: dict[str, _SymbolState] = {}
 
+    @classmethod
+    def smoke_config_overrides(cls) -> dict[str, Any]:
+        return {
+            "strategy": {
+                "timeframe": "15m",
+                "donchian_entry_lookback": 3,
+                "donchian_exit_lookback": 2,
+                "adx_min": 0.0,
+                "vol_floor_pct": 0.0,
+                "atr_period": 3,
+                "vol_lookback_bars": 10,
+                "stop_mode": "hybrid",
+                "atr_stop_multiple": 1.2,
+            },
+            "htf_resampler": {"timeframes": ["15m"], "strict": True},
+            "htf_timeframes": ["15m"],
+        }
+
+
     @staticmethod
     def _compute_structural_stop(side: Side, exit_high: float | None, exit_low: float | None) -> float | None:
         if side == Side.BUY:
