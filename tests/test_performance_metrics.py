@@ -44,8 +44,14 @@ def test_compute_performance_metrics(tmp_path: Path) -> None:
     assert report.max_drawdown_duration_bars == 2
     assert report.tail_loss_p95 == pytest.approx(4.85, rel=1e-6)
     assert report.tail_loss_p99 == pytest.approx(4.97, rel=1e-6)
-    assert report.fee_total == pytest.approx(-3.0, rel=1e-6)
-    assert report.slippage_total == pytest.approx(-1.1, rel=1e-6)
+    assert report.fee_total == pytest.approx(3.0, rel=1e-6)
+    assert report.slippage_total == pytest.approx(1.1, rel=1e-6)
+    assert report.spread_total == 0.0
+    assert report.gross_pnl == pytest.approx(18.1, rel=1e-6)
+    assert report.net_pnl == pytest.approx(14.0, rel=1e-6)
+    assert report.fee_drag_pct == pytest.approx(16.57458563, rel=1e-6)
+    assert report.slippage_drag_pct == pytest.approx(6.0773480663, rel=1e-6)
+    assert report.spread_drag_pct == 0.0
     assert report.ev_by_bucket == {
         "high": pytest.approx(3.0, rel=1e-6),
         "low": pytest.approx(1.6666666667, rel=1e-6),
@@ -96,5 +102,11 @@ def test_compute_performance_no_trades(tmp_path: Path) -> None:
     assert report.slippage_total == 0.0
     assert report.fee_drag_pct_of_gross is None
     assert report.slippage_drag_pct_of_gross is None
+    assert report.spread_total == 0.0
+    assert report.gross_pnl == 0.0
+    assert report.net_pnl == 0.0
+    assert report.fee_drag_pct == 0.0
+    assert report.slippage_drag_pct == 0.0
+    assert report.spread_drag_pct == 0.0
     assert report.ev_by_bucket == {"all": 0.0}
     assert report.trades_by_bucket == {"all": 0}
