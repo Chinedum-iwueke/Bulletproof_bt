@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import json
 from pathlib import Path
 
@@ -163,6 +165,7 @@ def test_engine_forced_liquidation_on_negative_free_margin(tmp_path: Path) -> No
                 "stop": {},
                 "max_notional_pct_equity": 5.0,
                 "maintenance_free_margin_pct": 0.0,
+                "may_liquidate": True,
             }
         },
     )
@@ -207,3 +210,60 @@ def test_engine_forced_liquidation_on_negative_free_margin(tmp_path: Path) -> No
     write_sanity_json(tmp_path, counters)
     sanity = json.loads((tmp_path / "sanity.json").read_text(encoding="utf-8"))
     assert int(sanity.get("forced_liquidations", 0)) >= 1
+
+
+def test_engine_strict_mode_prevents_negative_free_margin_forced_liquidation(tmp_path: Path) -> None:
+    ts_index = pd.date_range("2024-01-01", periods=2, freq="D", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "ts": ts_index,
+            "symbol": ["AAA", "AAA"],
+            "open": [100.0, 100.0],
+            "high": [100.0, 100.0],
+            "low": [100.0, 90.0],
+            "close": [100.0, 90.0],
+            "volume": [1000.0, 1000.0],
+        }
+    )
+
+    engine = BacktestEngine(
+        datafeed=HistoricalDataFeed(df),
+        universe=UniverseEngine(min_history_bars=1, lookback_bars=1, min_avg_volume=0.0, lag_bars=0),
+        strategy=StressLongStrategy(),
+        risk=RiskEngine(
+            max_positions=1,
+            config={
+                "risk": {
+                    "mode": "r_fixed",
+                    "r_per_trade": 2.0,
+                    "stop": {},
+                    "max_notional_pct_equity": 5.0,
+                    "maintenance_free_margin_pct": 0.01,
+                }
+            },
+        ),
+        execution=ExecutionModel(
+            fee_model=FeeModel(maker_fee_bps=0.0, taker_fee_bps=0.0),
+            slippage_model=SlippageModel(k=0.0),
+            delay_bars=0,
+        ),
+        portfolio=Portfolio(initial_cash=100000.0, max_leverage=2.0),
+        decisions_writer=JsonlWriter(tmp_path / "decisions.jsonl"),
+        fills_writer=JsonlWriter(tmp_path / "fills.jsonl"),
+        trades_writer=TradesCsvWriter(tmp_path / "trades.csv"),
+        equity_path=tmp_path / "equity.csv",
+        config={},
+    )
+
+    engine.run()
+
+    fill_rows = [json.loads(line) for line in (tmp_path / "fills.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert not any(
+        isinstance(row.get("metadata"), dict)
+        and row["metadata"].get("forced_liquidation") is True
+        and row["metadata"].get("liquidation_reason") == "negative_free_margin"
+        for row in fill_rows
+    )
+    entry = next(row for row in fill_rows if not row["metadata"].get("close_only"))
+    assert float(entry["metadata"]["free_margin_post"]) >= 0.0
+    assert float(entry["metadata"]["mark_price_used_for_margin"]) == pytest.approx(100.0)

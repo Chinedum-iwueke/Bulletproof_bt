@@ -9,6 +9,7 @@ import pandas as pd
 
 from bt.core.enums import OrderType, Side
 from bt.core.types import Bar, OrderIntent, Signal
+from bt.risk.margin_math import compute_snapshot, initial_margin_required
 from bt.risk.spec import parse_risk_spec
 from bt.risk.stop_distance import resolve_stop_distance
 
@@ -94,6 +95,13 @@ class RiskEngine:
 
     def _maintenance_free_margin_pct(self) -> float:
         return float(self._risk_spec.maintenance_free_margin_pct)
+
+    def allows_may_liquidate(self) -> bool:
+        risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
+        return bool(risk_cfg.get("may_liquidate", False)) if isinstance(risk_cfg, dict) else False
+
+    def _margin_adverse_move_tier_multiplier(self) -> float:
+        return {1: 1.0, 2: 2.0, 3: 3.0}.get(self.margin_buffer_tier, 1.0)
     @staticmethod
     def _qty_sign_invariant_ok(*, signal_side: Side, current_qty: float, flip: bool, order_qty: float, close_only: bool) -> bool:
         if close_only:
@@ -168,8 +176,7 @@ class RiskEngine:
         fee_buffer: float,
         slippage_buffer: float,
     ) -> float:
-        leverage_for_margin = max(max_leverage, self.eps)
-        return (notional / leverage_for_margin) + fee_buffer + slippage_buffer
+        return initial_margin_required(notional=notional, max_leverage=max_leverage, eps=self.eps) + fee_buffer + slippage_buffer
 
     def _estimate_buffers(self, notional: float) -> tuple[float, float]:
         fee_bps = max(self.maker_fee_bps, self.taker_fee_bps)
@@ -410,27 +417,38 @@ class RiskEngine:
         if free_margin <= 0:
             return None, "risk_rejected:insufficient_free_margin"
 
-        notional = abs(order_qty) * bar.close
-        fee_buffer, slippage_buffer = self._estimate_buffers(notional)
-        adverse_move_buffer = 0.0
+        mark_price_used_for_margin = bar.close
         if signal.side == Side.BUY:
-            adverse_move_buffer = abs(order_qty) * max(bar.high - bar.close, 0.0)
+            mark_price_used_for_margin = bar.high
         elif signal.side == Side.SELL:
-            adverse_move_buffer = abs(order_qty) * max(bar.close - bar.low, 0.0)
-        margin_required = self.estimate_required_margin(
+            mark_price_used_for_margin = bar.low
+
+        notional = abs(order_qty) * mark_price_used_for_margin
+        fee_buffer, slippage_buffer = self._estimate_buffers(notional)
+        adverse_move_per_unit = 0.0
+        tier_multiplier = self._margin_adverse_move_tier_multiplier()
+        if signal.side == Side.BUY:
+            adverse_move_per_unit = max(bar.high - bar.close, 0.0) * tier_multiplier
+        elif signal.side == Side.SELL:
+            adverse_move_per_unit = max(bar.close - bar.low, 0.0) * tier_multiplier
+        adverse_move_buffer = abs(order_qty) * max(adverse_move_per_unit, 0.0)
+        maintenance_free_margin_pct = self._maintenance_free_margin_pct()
+        snapshot = compute_snapshot(
+            equity=equity,
             notional=notional,
             max_leverage=max_leverage,
-            fee_buffer=0.0,
-            slippage_buffer=0.0,
+            maintenance_free_margin_pct=maintenance_free_margin_pct,
+            fee_buffer=fee_buffer,
+            slippage_buffer=slippage_buffer,
+            adverse_move_buffer=adverse_move_buffer,
+            mark_price_used_for_margin=mark_price_used_for_margin,
         )
-        total_required = margin_required + fee_buffer + slippage_buffer + adverse_move_buffer
-        maintenance_free_margin_pct = self._maintenance_free_margin_pct()
+        margin_required = snapshot.margin_locked
+        total_required = snapshot.total_required
         max_total_required = free_margin * (1.0 - maintenance_free_margin_pct)
         scaled_by_margin = False
-        if total_required > max_total_required:
-            adverse_move_per_notional = 0.0
-            if bar.close > 0:
-                adverse_move_per_notional = adverse_move_buffer / notional if notional > 0 else 0.0
+        if total_required > max_total_required + self.eps:
+            adverse_move_per_notional = adverse_move_buffer / notional if notional > 0 else 0.0
 
             total_required_per_notional = (
                 (1.0 / max(max_leverage, self.eps))
@@ -442,7 +460,7 @@ class RiskEngine:
             if max_affordable_notional <= 0:
                 return None, "risk_rejected:insufficient_free_margin"
 
-            max_affordable_qty = max_affordable_notional / bar.close
+            max_affordable_qty = max_affordable_notional / max(mark_price_used_for_margin, self.eps)
             if max_affordable_qty <= 0:
                 return None, "risk_rejected:insufficient_free_margin"
 
@@ -451,22 +469,23 @@ class RiskEngine:
                 scaled_by_margin = True
                 if abs(order_qty) <= 0:
                     return None, "risk_rejected:insufficient_free_margin"
-                notional = abs(order_qty) * bar.close
+                notional = abs(order_qty) * mark_price_used_for_margin
                 fee_buffer, slippage_buffer = self._estimate_buffers(notional)
-                adverse_move_buffer = 0.0
-                if signal.side == Side.BUY:
-                    adverse_move_buffer = abs(order_qty) * max(bar.high - bar.close, 0.0)
-                elif signal.side == Side.SELL:
-                    adverse_move_buffer = abs(order_qty) * max(bar.close - bar.low, 0.0)
-                margin_required = self.estimate_required_margin(
+                adverse_move_buffer = abs(order_qty) * max(adverse_move_per_unit, 0.0)
+                snapshot = compute_snapshot(
+                    equity=equity,
                     notional=notional,
                     max_leverage=max_leverage,
-                    fee_buffer=0.0,
-                    slippage_buffer=0.0,
+                    maintenance_free_margin_pct=maintenance_free_margin_pct,
+                    fee_buffer=fee_buffer,
+                    slippage_buffer=slippage_buffer,
+                    adverse_move_buffer=adverse_move_buffer,
+                    mark_price_used_for_margin=mark_price_used_for_margin,
                 )
-                total_required = margin_required + fee_buffer + slippage_buffer + adverse_move_buffer
+                margin_required = snapshot.margin_locked
+                total_required = snapshot.total_required
 
-            if abs(order_qty) <= 0 or total_required > max_total_required:
+            if abs(order_qty) <= 0 or total_required > max_total_required + self.eps:
                 return None, "risk_rejected:insufficient_free_margin"
 
         reason = "risk_approved"
@@ -485,7 +504,7 @@ class RiskEngine:
                 "current_qty": cur_qty,
                 "desired_qty": desired_qty,
                 "flip": flip,
-                "notional_est": notional,
+                "notional_est": abs(order_qty) * bar.close,
                 "cap_applied": cap_applied,
                 "cap_reason": cap_reason,
                 "max_notional": max_notional,
@@ -499,6 +518,10 @@ class RiskEngine:
                 "maintenance_free_margin_pct": maintenance_free_margin_pct,
                 "max_total_required": max_total_required,
                 "total_required": total_required,
+                "mark_price_used_for_margin": mark_price_used_for_margin,
+                "free_margin_post": snapshot.free_margin_post,
+                "maintenance_required": snapshot.maintenance_required,
+                "equity_used": snapshot.equity,
                 "reason": reason,
             }
         )

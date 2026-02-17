@@ -110,6 +110,29 @@ class BacktestEngine:
             if self._sanity_counters is not None:
                 self._sanity_counters.closed_trades += 1
 
+
+    def _assert_post_fill_margin_invariants(self, fills: list[Any]) -> None:
+        if self._risk.allows_may_liquidate():
+            return
+        for fill in fills:
+            metadata = fill.metadata if isinstance(fill.metadata, dict) else {}
+            if bool(metadata.get("close_only")):
+                continue
+            free_margin_post = float(metadata.get("free_margin_post", 0.0))
+            if free_margin_post < 0:
+                raise RuntimeError(
+                    "strict margin invariant violated after non-close fill: "
+                    f"symbol={fill.symbol} ts={fill.ts.isoformat()} "
+                    f"equity={metadata.get('equity_used')} "
+                    f"mark_price={metadata.get('mark_price_used_for_margin')} "
+                    f"im={metadata.get('margin_required')} "
+                    f"mm={metadata.get('maintenance_required')} "
+                    f"fee_buffer={metadata.get('margin_fee_buffer')} "
+                    f"slippage_buffer={metadata.get('margin_slippage_buffer')} "
+                    f"adverse_buffer={metadata.get('margin_adverse_move_buffer')} "
+                    f"free_margin_post={free_margin_post}"
+                )
+
     def _force_liquidate_open_positions(
         self,
         *,
@@ -323,17 +346,19 @@ class BacktestEngine:
                     )
                     open_orders.append(order)
 
-                    notional_est = float(order_intent.metadata.get("notional_est", abs(order_intent.qty) * bar.close))
-                    fee_buffer = float(order_intent.metadata.get("margin_fee_buffer", 0.0))
-                    adverse_move_buffer = float(order_intent.metadata.get("margin_adverse_move_buffer", 0.0))
-                    slippage_buffer = float(order_intent.metadata.get("margin_slippage_buffer", 0.0))
-                    reserved_margin = self._risk.estimate_required_margin(
-                        notional=notional_est,
-                        max_leverage=self._portfolio.max_leverage,
-                        fee_buffer=fee_buffer + adverse_move_buffer,
-                        slippage_buffer=slippage_buffer,
-                    )
-                    reserved_free_margin = max(reserved_free_margin - reserved_margin, 0.0)
+                    total_required = float(order_intent.metadata.get("total_required", 0.0))
+                    if total_required <= 0:
+                        notional_est = float(order_intent.metadata.get("notional_est", abs(order_intent.qty) * bar.close))
+                        fee_buffer = float(order_intent.metadata.get("margin_fee_buffer", 0.0))
+                        adverse_move_buffer = float(order_intent.metadata.get("margin_adverse_move_buffer", 0.0))
+                        slippage_buffer = float(order_intent.metadata.get("margin_slippage_buffer", 0.0))
+                        total_required = self._risk.estimate_required_margin(
+                            notional=notional_est,
+                            max_leverage=self._portfolio.max_leverage,
+                            fee_buffer=fee_buffer + adverse_move_buffer,
+                            slippage_buffer=slippage_buffer,
+                        )
+                    reserved_free_margin = max(reserved_free_margin - total_required, 0.0)
                     if current_qty == 0:
                         reserved_open_positions += 1
 
@@ -369,10 +394,11 @@ class BacktestEngine:
                 ]
 
                 self._handle_fills(fills)
+                self._assert_post_fill_margin_invariants(fills)
 
                 self._portfolio.mark_to_market(bars_by_symbol)
                 forced_liquidated = False
-                if self._portfolio.free_margin < 0:
+                if self._portfolio.free_margin < 0 and self._risk.allows_may_liquidate():
                     self._force_liquidate_open_positions(
                         ts=ts,
                         bars_by_symbol=bars_by_symbol,

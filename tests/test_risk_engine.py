@@ -327,3 +327,28 @@ def test_signal_to_order_intent_uses_fixed_bps_fee_and_slippage_buffers() -> Non
         + order_intent.metadata["margin_adverse_move_buffer"]
     )
     assert total_required <= order_intent.metadata["free_margin"]
+
+
+def test_signal_to_order_intent_includes_canonical_margin_fields_and_non_negative_post_margin() -> None:
+    engine = RiskEngine(max_positions=5, margin_buffer_tier=3, config=_risk_config(r_per_trade=2.0))
+    ts = pd.Timestamp("2024-01-01T00:00:00Z")
+    bar = _bar(ts=ts, symbol="BTC", high=105.0, low=95.0, close=100.0)
+    signal = _signal(ts=ts, symbol="BTC", side=Side.BUY, stop_price=99.0)
+
+    order_intent, reason = engine.signal_to_order_intent(
+        ts=ts,
+        signal=signal,
+        bar=bar,
+        equity=10_000.0,
+        free_margin=2_500.0,
+        open_positions=0,
+        max_leverage=2.0,
+        current_qty=0.0,
+    )
+
+    assert order_intent is not None
+    assert reason == "risk_approved"
+    assert order_intent.metadata["scaled_by_margin"] is True
+    assert order_intent.metadata["mark_price_used_for_margin"] == pytest.approx(105.0)
+    assert order_intent.metadata["maintenance_required"] == pytest.approx(order_intent.metadata["margin_required"])
+    assert order_intent.metadata["free_margin_post"] >= 0.0
