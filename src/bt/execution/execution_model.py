@@ -6,10 +6,10 @@ from typing import Optional
 
 import pandas as pd
 
-from bt.core.enums import IntrabarMode, OrderState, OrderType, Side
+from bt.core.enums import OrderState, OrderType, Side
 from bt.core.types import Bar, Fill, Order
 from bt.execution.fees import FeeModel
-from bt.execution.intrabar import worst_case_market_fill_price
+from bt.execution.intrabar import IntrabarMode, IntrabarSpec, market_fill_price
 from bt.execution.slippage import SlippageModel
 from bt.execution.spread import SpreadMode, apply_spread
 
@@ -22,7 +22,7 @@ class ExecutionModel:
         slippage_model: SlippageModel,
         spread_mode: SpreadMode = "none",
         spread_bps: float = 0.0,
-        intrabar_mode: IntrabarMode = IntrabarMode.WORST_CASE,
+        intrabar_mode: IntrabarMode = "worst_case",
         delay_bars: int = 1,
     ) -> None:
         if delay_bars < 0:
@@ -35,7 +35,7 @@ class ExecutionModel:
         self._slippage_model = slippage_model
         self._spread_mode = spread_mode
         self._spread_bps = spread_bps
-        self._intrabar_mode = intrabar_mode
+        self._intrabar_spec = IntrabarSpec(mode=intrabar_mode)
         self._delay_bars = delay_bars
 
     def process(
@@ -73,7 +73,7 @@ class ExecutionModel:
                 updated_orders.append(replace(updated_order, metadata=metadata))
                 continue
 
-            fill_price = worst_case_market_fill_price(updated_order.side, bar)
+            fill_price = market_fill_price(side=updated_order.side, bar=bar, intrabar_spec=self._intrabar_spec)
             spread_adjusted_fill_price = apply_spread(
                 mode=self._spread_mode,
                 spread_bps=self._spread_bps,
@@ -100,7 +100,7 @@ class ExecutionModel:
             fill_metadata = dict(updated_order.metadata)
             fill_metadata.update(
                 {
-                    "intrabar_mode": self._intrabar_mode.value,
+                    "intrabar_mode": self._intrabar_spec.mode,
                     "delay_bars": self._delay_bars,
                     "spread_mode": self._spread_mode,
                     "spread_bps": self._spread_bps,

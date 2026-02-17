@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import json
+import traceback
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional
 
 from bt.config import deep_merge, load_yaml, resolve_paths_relative_to
 from bt.core.config_resolver import resolve_config
+from bt.execution.intrabar import parse_intrabar_spec
 from bt.logging.sanity import SanityCounters, write_sanity_json
 from bt.validation.config_completeness import validate_resolved_config_completeness
 
@@ -114,11 +116,14 @@ def _build_engine(
     raw_spread_bps = execution_cfg.get("spread_bps", 0.0)
     spread_bps = 0.0 if raw_spread_bps is None else float(raw_spread_bps)
 
+    intrabar_spec = parse_intrabar_spec(config)
+
     execution = ExecutionModel(
         fee_model=fee_model,
         slippage_model=slippage_model,
         spread_mode=spread_mode,
         spread_bps=spread_bps,
+        intrabar_mode=intrabar_spec.mode,
         delay_bars=execution_profile.delay_bars,
     )
 
@@ -184,8 +189,10 @@ def run_backtest(
     from bt.benchmark.tracker import BenchmarkTracker, BenchmarkTrackingFeed, write_benchmark_equity_csv
     from bt.data.dataset import load_dataset_manifest
     from bt.data.load_feed import load_feed
+    from bt.experiments.grid_runner import _write_run_status
     from bt.logging.trades import make_run_id, prepare_run_dir, write_config_used, write_data_scope
     from bt.metrics.performance import compute_performance, write_performance_artifacts
+    from bt.execution.profile import resolve_execution_profile
 
     base_config = load_yaml(config_path)
     fees_config = load_yaml("configs/fees.yaml")
@@ -259,6 +266,40 @@ def run_backtest(
                 json.dumps(comparison_summary, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+
+        execution_profile = resolve_execution_profile(config)
+        _write_run_status(
+            run_dir,
+            {
+                "status": "PASS",
+                "error_type": "",
+                "error_message": "",
+                "traceback": "",
+                "run_id": resolved_run_name,
+                "execution_profile": execution_profile.name,
+                "effective_execution": {
+                    "maker_fee": execution_profile.maker_fee,
+                    "taker_fee": execution_profile.taker_fee,
+                    "slippage_bps": execution_profile.slippage_bps,
+                    "delay_bars": execution_profile.delay_bars,
+                    "spread_bps": execution_profile.spread_bps,
+                },
+                "intrabar_mode": parse_intrabar_spec(config).mode,
+            },
+        )
+    except Exception as exc:
+        _write_run_status(
+            run_dir,
+            {
+                "status": "FAIL",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "traceback": traceback.format_exc(),
+                "run_id": resolved_run_name,
+                "intrabar_mode": parse_intrabar_spec(config).mode,
+            },
+        )
+        raise
     finally:
         write_sanity_json(
             run_dir,

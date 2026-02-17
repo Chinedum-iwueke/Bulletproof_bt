@@ -22,7 +22,7 @@ def validate_resolved_config_completeness(config: dict[str, Any]) -> None:
 
     missing: list[str] = []
     required_paths = [
-        "intrabar_mode",
+        "execution.intrabar_mode",
         "signal_delay_bars",
         "initial_cash",
         "outputs.root_dir",
