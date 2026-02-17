@@ -11,6 +11,7 @@ from bt.core.types import Bar, Fill, Order
 from bt.execution.fees import FeeModel
 from bt.execution.intrabar import worst_case_market_fill_price
 from bt.execution.slippage import SlippageModel
+from bt.execution.spread import SpreadMode, apply_spread
 
 
 class ExecutionModel:
@@ -19,13 +20,21 @@ class ExecutionModel:
         *,
         fee_model: FeeModel,
         slippage_model: SlippageModel,
+        spread_mode: SpreadMode = "none",
+        spread_bps: float = 0.0,
         intrabar_mode: IntrabarMode = IntrabarMode.WORST_CASE,
         delay_bars: int = 1,
     ) -> None:
         if delay_bars < 0:
             raise ValueError("delay_bars must be >= 0")
+        if spread_bps < 0:
+            raise ValueError("spread_bps must be >= 0")
+        if spread_mode not in {"none", "fixed_bps", "bar_range_proxy"}:
+            raise ValueError(f"Unsupported spread_mode: {spread_mode}")
         self._fee_model = fee_model
         self._slippage_model = slippage_model
+        self._spread_mode = spread_mode
+        self._spread_bps = spread_bps
         self._intrabar_mode = intrabar_mode
         self._delay_bars = delay_bars
 
@@ -65,6 +74,17 @@ class ExecutionModel:
                 continue
 
             fill_price = worst_case_market_fill_price(updated_order.side, bar)
+            spread_adjusted_fill_price = apply_spread(
+                mode=self._spread_mode,
+                spread_bps=self._spread_bps,
+                price=fill_price,
+                bar_high=bar.high,
+                bar_low=bar.low,
+                side=updated_order.side.value,
+            )
+            spread_cost = abs(updated_order.qty) * abs(spread_adjusted_fill_price - fill_price)
+            fill_price = spread_adjusted_fill_price
+
             slippage_quote = self._slippage_model.estimate_slippage(qty=updated_order.qty, bar=bar)
             slip_px = slippage_quote / max(abs(updated_order.qty), 1e-12)
             if updated_order.side == Side.BUY:
@@ -82,6 +102,9 @@ class ExecutionModel:
                 {
                     "intrabar_mode": self._intrabar_mode.value,
                     "delay_bars": self._delay_bars,
+                    "spread_mode": self._spread_mode,
+                    "spread_bps": self._spread_bps,
+                    "spread_cost": spread_cost,
                 }
             )
 

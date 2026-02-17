@@ -29,6 +29,8 @@ def validate_resolved_config_completeness(config: dict[str, Any]) -> None:
         "outputs.jsonl",
         "model",
         "strategy.name",
+        "execution.spread_mode",
+        "execution.spread_bps",
         "data.mode",
         "data.symbols_subset",
         "risk.mode",
@@ -73,4 +75,3 @@ def validate_resolved_config_completeness(config: dict[str, Any]) -> None:
             "This usually indicates a missing default injection or config resolver regression. "
             "Fix by adding defaults in config_resolver or specifying them in configs/engine.yaml."
         )
-
