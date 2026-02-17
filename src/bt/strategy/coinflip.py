@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+from pathlib import Path
 from typing import Any, Mapping
 
 import pandas as pd
@@ -31,6 +32,24 @@ class CoinFlipStrategy(Strategy):
         self._rng = random.Random(seed)
         self._bars_since_signal: dict[str, int] = {}
         self._bars_in_position: dict[str, int] = {}
+
+    @classmethod
+    def smoke_config_overrides(cls) -> dict[str, Any]:
+        return {
+            "strategy": {
+                "p_trade": 0.8,
+                "cooldown_bars": 0,
+                "max_hold_bars": 12,
+                "seed": 42,
+            }
+        }
+
+    @classmethod
+    def smoke_assert(cls, run_dir: Path) -> None:
+        decisions_path = run_dir / "decisions.jsonl"
+        if decisions_path.exists() and decisions_path.stat().st_size == 0:
+            raise AssertionError(f"Expected non-empty decisions.jsonl for coinflip smoke run: {decisions_path}")
+
 
     @staticmethod
     def _ctx_position_side(ctx: Mapping[str, Any], symbol: str) -> Side | None:
