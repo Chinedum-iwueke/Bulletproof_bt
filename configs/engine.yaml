@@ -11,6 +11,13 @@ strategy:
   p_trade: 0.10
   cooldown_bars: 1
 
+# Benchmark default 
+benchmark:
+  enabled: false          # safe default for all clients/datasets
+  symbol: BTCUSDT         # recommended default for crypto datasets
+  price_field: close      # V1 default
+  initial_equity: 10000.0 # stable benchmark baseline across runs
+
 # Streaming dataset mode (manifest.yaml + parquet files).
 data:
   mode: streaming
