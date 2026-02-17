@@ -14,6 +14,7 @@ def _full_config() -> dict:
         "fixed_bps": 5.0,
         "outputs": {"root_dir": "outputs/runs", "jsonl": True},
         "strategy": {"name": "coinflip"},
+        "execution": {"spread_mode": "none"},
         "data": {"mode": "streaming", "symbols_subset": None, "chunksize": 50000},
         "risk": {
             "mode": "equity_pct",
@@ -41,3 +42,11 @@ def test_validate_resolved_config_completeness_raises_for_missing_keys() -> None
 
 def test_validate_resolved_config_completeness_passes_for_complete_config() -> None:
     validate_resolved_config_completeness(_full_config())
+
+
+def test_validate_resolved_config_completeness_requires_spread_bps_for_fixed_bps_mode() -> None:
+    config = _full_config()
+    config["execution"]["spread_mode"] = "fixed_bps"
+
+    with pytest.raises(ValueError, match="execution.spread_bps"):
+        validate_resolved_config_completeness(config)

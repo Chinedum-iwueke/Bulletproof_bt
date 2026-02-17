@@ -29,6 +29,7 @@ def validate_resolved_config_completeness(config: dict[str, Any]) -> None:
         "outputs.jsonl",
         "model",
         "strategy.name",
+        "execution.spread_mode",
         "data.mode",
         "data.symbols_subset",
         "risk.mode",
@@ -49,6 +50,10 @@ def validate_resolved_config_completeness(config: dict[str, Any]) -> None:
     model_value = config.get("model")
     if model_value == "fixed_bps" and not _has_key(config, "fixed_bps"):
         missing.append("fixed_bps")
+
+    execution_cfg = config.get("execution") if isinstance(config.get("execution"), dict) else {}
+    if execution_cfg.get("spread_mode") == "fixed_bps" and "spread_bps" not in execution_cfg:
+        missing.append("execution.spread_bps")
 
     data_cfg = config.get("data") if isinstance(config.get("data"), dict) else {}
     data_mode = data_cfg.get("mode")
@@ -73,4 +78,3 @@ def validate_resolved_config_completeness(config: dict[str, Any]) -> None:
             "This usually indicates a missing default injection or config resolver regression. "
             "Fix by adding defaults in config_resolver or specifying them in configs/engine.yaml."
         )
-
