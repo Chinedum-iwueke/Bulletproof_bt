@@ -14,6 +14,7 @@ class SlippageModel:
         atr_pct_cap: float = 0.20,
         impact_cap: float = 0.05,
         eps: float = 1e-12,
+        fixed_bps: float | None = None,
     ) -> None:
         if k < 0:
             raise ValueError("k must be >= 0")
@@ -23,13 +24,19 @@ class SlippageModel:
             raise ValueError("impact_cap must be >= 0")
         if eps <= 0:
             raise ValueError("eps must be > 0")
+        if fixed_bps is not None and fixed_bps < 0:
+            raise ValueError("fixed_bps must be >= 0")
         self._k = k
         self._atr_pct_cap = atr_pct_cap
         self._impact_cap = impact_cap
         self._eps = eps
+        self._fixed_bps = fixed_bps
 
     def estimate_slippage(self, *, qty: float, bar: Bar) -> float:
         """Absolute slippage in quote currency (>=0)."""
+        if self._fixed_bps is not None:
+            return abs(qty) * bar.close * (self._fixed_bps / 1e4)
+
         atr_pct = (bar.high - bar.low) / max(bar.close, self._eps)
         atr_pct = max(0.0, min(atr_pct, self._atr_pct_cap))
         bar_dollar_volume = bar.close * bar.volume
