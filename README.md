@@ -122,3 +122,16 @@ for bar in bars:
 - Implemented fix: parquet IO now runs a runtime guard `ensure_pyarrow_parquet()` before parquet operations.
 - Quick workaround: upgrade `pyarrow`/`pandas`, or run `import pyarrow.parquet` before parquet IO.
 - In this project, the guard is already applied, so manual import is usually unnecessary.
+
+## Run artifacts
+
+`run_dir/performance.json` includes cost-attribution keys (always present):
+
+- `gross_pnl`
+- `net_pnl`
+- `fee_total`
+- `slippage_total`
+- `spread_total`
+- `fee_drag_pct`
+- `slippage_drag_pct`
+- `spread_drag_pct`

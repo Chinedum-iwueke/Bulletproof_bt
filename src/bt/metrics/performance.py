@@ -27,6 +27,12 @@ class PerformanceReport:
     tail_loss_p99: float
     fee_total: float
     slippage_total: float
+    spread_total: float
+    gross_pnl: float
+    net_pnl: float
+    fee_drag_pct: float
+    slippage_drag_pct: float
+    spread_drag_pct: float
     fee_drag_pct_of_gross: Optional[float]
     slippage_drag_pct_of_gross: Optional[float]
     trade_return_skew: Optional[float]
@@ -62,6 +68,94 @@ def _sum_costs(df: pd.DataFrame, *, preferred: str, fallbacks: list[str]) -> pd.
     if len(available) == 1:
         return _coerce_numeric(df[available[0]])
     return _coerce_numeric(df[available]).sum(axis=1)
+
+
+def _drag_pct(cost: float, gross_pnl: float) -> float:
+    denominator = abs(float(gross_pnl))
+    if denominator == 0.0:
+        return 0.0
+    return 100.0 * float(cost) / denominator
+
+
+def _read_fills_cost_totals(fills_path: Path) -> tuple[float, float, float]:
+    fee_total = 0.0
+    slippage_total = 0.0
+    spread_total = 0.0
+
+    with fills_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                continue
+            fee_value = record.get("fee", record.get("fee_paid", 0.0))
+            slippage_value = record.get("slippage", record.get("slippage_cost", 0.0))
+            metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+            spread_value = record.get("spread_cost", metadata.get("spread_cost", 0.0))
+
+            fee_total += abs(float(fee_value or 0.0))
+            slippage_total += abs(float(slippage_value or 0.0))
+            spread_total += abs(float(spread_value or 0.0))
+
+    return float(fee_total), float(slippage_total), float(spread_total)
+
+
+def compute_cost_attribution(
+    run_dir: Path,
+    *,
+    fills_path: Path | None = None,
+    trades_path: Path | None = None,
+) -> dict[str, float]:
+    """Returns deterministic run-level PnL/cost attribution fields."""
+    resolved_trades_path = trades_path if trades_path is not None else run_dir / "trades.csv"
+    resolved_fills_path = fills_path if fills_path is not None else run_dir / "fills.jsonl"
+
+    if not resolved_trades_path.exists():
+        raise ValueError(
+            f"run_dir={run_dir}: missing fills/trades required for cost attribution (missing trades.csv)"
+        )
+
+    try:
+        trades_df = pd.read_csv(resolved_trades_path)
+    except pd.errors.EmptyDataError:
+        trades_df = pd.DataFrame()
+
+    if trades_df.empty:
+        return {
+            "gross_pnl": 0.0,
+            "net_pnl": 0.0,
+            "fee_total": 0.0,
+            "slippage_total": 0.0,
+            "spread_total": 0.0,
+        }
+
+    pnl_col = "pnl_net" if "pnl_net" in trades_df.columns else "pnl"
+    if pnl_col not in trades_df.columns:
+        raise ValueError(f"run_dir={run_dir}: trades.csv must include pnl_net or pnl column")
+
+    net_pnl = float(_coerce_numeric(trades_df[pnl_col]).sum())
+
+    if resolved_fills_path.exists():
+        fee_total, slippage_total, spread_total = _read_fills_cost_totals(resolved_fills_path)
+    else:
+        fees = _sum_costs(trades_df, preferred="fees_total", fallbacks=["fees", "fee"])
+        slippage = _sum_costs(
+            trades_df, preferred="slippage_total", fallbacks=["slippage", "slip"]
+        )
+        fee_total = float(abs(fees.sum()))
+        slippage_total = float(abs(slippage.sum()))
+        spread_total = 0.0
+
+    gross_pnl = float(net_pnl + fee_total + slippage_total + spread_total)
+    return {
+        "gross_pnl": gross_pnl,
+        "net_pnl": float(net_pnl),
+        "fee_total": float(fee_total),
+        "slippage_total": float(slippage_total),
+        "spread_total": float(spread_total),
+    }
 
 
 def _max_drawdown_duration(dd: pd.Series) -> int:
@@ -296,6 +390,11 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
 
     equity_df = pd.read_csv(equity_path)
     trades_df = pd.read_csv(trades_path)
+    cost_attribution = compute_cost_attribution(
+        run_path,
+        fills_path=(run_path / "fills.jsonl"),
+        trades_path=trades_path,
+    )
 
     equity_col = None
     for candidate in ["equity", "total_equity", "portfolio_equity"]:
@@ -381,8 +480,14 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
             max_drawdown_duration_bars=max_drawdown_duration_bars,
             tail_loss_p95=0.0,
             tail_loss_p99=0.0,
-            fee_total=0.0,
-            slippage_total=0.0,
+            fee_total=cost_attribution["fee_total"],
+            slippage_total=cost_attribution["slippage_total"],
+            spread_total=cost_attribution["spread_total"],
+            gross_pnl=cost_attribution["gross_pnl"],
+            net_pnl=cost_attribution["net_pnl"],
+            fee_drag_pct=_drag_pct(cost_attribution["fee_total"], cost_attribution["gross_pnl"]),
+            slippage_drag_pct=_drag_pct(cost_attribution["slippage_total"], cost_attribution["gross_pnl"]),
+            spread_drag_pct=_drag_pct(cost_attribution["spread_total"], cost_attribution["gross_pnl"]),
             fee_drag_pct_of_gross=None,
             slippage_drag_pct_of_gross=None,
             trade_return_skew=None,
@@ -428,13 +533,19 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
         tail_loss_p95 = float(loss_values.quantile(0.95))
         tail_loss_p99 = float(loss_values.quantile(0.99))
 
-    fee_total = float(fees.sum())
-    slippage_total = float(slippage.sum())
-    pnl_gross_total = float(pnl_gross.sum())
+    fee_total = cost_attribution["fee_total"]
+    slippage_total = cost_attribution["slippage_total"]
+    spread_total = cost_attribution["spread_total"]
+    gross_pnl = cost_attribution["gross_pnl"]
+    net_pnl = cost_attribution["net_pnl"]
 
-    if pnl_gross_total != 0:
-        fee_drag_pct_of_gross = fee_total / pnl_gross_total
-        slippage_drag_pct_of_gross = slippage_total / pnl_gross_total
+    fee_drag_pct = _drag_pct(fee_total, gross_pnl)
+    slippage_drag_pct = _drag_pct(slippage_total, gross_pnl)
+    spread_drag_pct = _drag_pct(spread_total, gross_pnl)
+
+    if gross_pnl != 0:
+        fee_drag_pct_of_gross = fee_total / gross_pnl
+        slippage_drag_pct_of_gross = slippage_total / gross_pnl
     else:
         fee_drag_pct_of_gross = None
         slippage_drag_pct_of_gross = None
@@ -472,6 +583,12 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
         tail_loss_p99=tail_loss_p99,
         fee_total=fee_total,
         slippage_total=slippage_total,
+        spread_total=spread_total,
+        gross_pnl=gross_pnl,
+        net_pnl=net_pnl,
+        fee_drag_pct=fee_drag_pct,
+        slippage_drag_pct=slippage_drag_pct,
+        spread_drag_pct=spread_drag_pct,
         fee_drag_pct_of_gross=fee_drag_pct_of_gross,
         slippage_drag_pct_of_gross=slippage_drag_pct_of_gross,
         trade_return_skew=trade_return_skew,
