@@ -102,9 +102,12 @@ def _build_engine(
         atr_pct_cap=float(config.get("atr_pct_cap", 0.20)),
         impact_cap=float(config.get("impact_cap", 0.05)),
     )
+    execution_cfg = config.get("execution") if isinstance(config.get("execution"), dict) else {}
     execution = ExecutionModel(
         fee_model=fee_model,
         slippage_model=slippage_model,
+        spread_mode=str(execution_cfg.get("spread_mode", "none")),
+        spread_bps=float(execution_cfg.get("spread_bps", 0.0)),
         delay_bars=int(config.get("signal_delay_bars", 1)),
     )
 

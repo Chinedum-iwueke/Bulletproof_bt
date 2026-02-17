@@ -14,6 +14,7 @@ def _full_config() -> dict:
         "fixed_bps": 5.0,
         "outputs": {"root_dir": "outputs/runs", "jsonl": True},
         "strategy": {"name": "coinflip"},
+        "execution": {"spread_mode": "none", "spread_bps": 0.0},
         "data": {"mode": "streaming", "symbols_subset": None, "chunksize": 50000},
         "risk": {
             "mode": "equity_pct",
