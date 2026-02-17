@@ -65,6 +65,8 @@ class RiskEngine:
         raise ValueError(f"Invalid risk.qty_rounding={rounding!r}")
 
     def _stop_resolution_mode(self) -> str:
+        # risk.stop_resolution applies only to ENTRY / increase-risk signals.
+        # Exit/reduce-risk flows bypass stop resolution entirely.
         risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
         mode = risk_cfg.get("stop_resolution", "strict") if isinstance(risk_cfg, dict) else "strict"
         return str(mode)
@@ -80,6 +82,14 @@ class RiskEngine:
         if not isinstance(risk_cfg, dict):
             return 1.0
         return float(risk_cfg.get("max_notional_pct_equity", 1.0))
+
+    @staticmethod
+    def _is_exit_signal(signal: Signal) -> bool:
+        metadata = signal.metadata if isinstance(signal.metadata, dict) else {}
+        if bool(metadata.get("is_exit")) or bool(metadata.get("reduce_only")):
+            return True
+        signal_type = str(signal.signal_type)
+        return signal_type.endswith("_exit")
 
 
     def _maintenance_free_margin_pct(self) -> float:
@@ -212,7 +222,8 @@ class RiskEngine:
         if equity <= 0:
             return None, "risk_rejected:no_equity"
         cur_qty = current_qty
-        close_only = bool(signal.metadata.get("close_only"))
+        is_exit_signal = self._is_exit_signal(signal)
+        close_only = bool(signal.metadata.get("close_only")) or is_exit_signal
         if close_only and cur_qty == 0:
             return None, "risk_rejected:close_only_no_position"
         cur_side = None
@@ -249,6 +260,8 @@ class RiskEngine:
                     "max_leverage": max_leverage,
                     "scaled_by_margin": False,
                     "reason": reason,
+                    "stop_resolution_skipped": is_exit_signal,
+                    "stop_resolution_skip_reason": "exit_signal" if is_exit_signal else None,
                 }
             )
             signal_with_metadata = replace(signal, metadata=metadata)
@@ -299,7 +312,12 @@ class RiskEngine:
         except ValueError as exc:
             if "stop distance cannot be resolved" in str(exc):
                 if stop_resolution_mode == "strict":
-                    return None, "risk_rejected:stop_unresolvable:strict"
+                    return (
+                        None,
+                        "risk_rejected:stop_unresolvable:strict"
+                        f":signal_type={signal.signal_type}"
+                        ":hint=ENTRY_requires_explicit_stop_price_or_strategy_must_provide_resolvable_stop_metadata",
+                    )
                 if stop_resolution_mode == "allow_legacy_proxy":
                     legacy_cfg = {"risk": dict(self._config.get("risk", {}))}
                     legacy_stop_cfg = dict(legacy_cfg["risk"].get("stop", {}))
@@ -346,7 +364,7 @@ class RiskEngine:
         if bar.close > 0:
             stop_distance_pct = stop_dist / bar.close
             if stop_distance_pct < min_stop_distance_pct:
-                return None, "stop_too_small"
+                return None, "risk_rejected:stop_too_small"
 
         desired_notional = abs(desired_qty) * bar.close
         cap_applied = False

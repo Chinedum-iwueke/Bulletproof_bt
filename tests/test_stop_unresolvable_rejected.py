@@ -28,4 +28,6 @@ def test_stop_unresolvable_signal_is_rejected() -> None:
     )
 
     assert order_intent is None
-    assert reason == "risk_rejected:stop_unresolvable:strict"
+    assert reason.startswith("risk_rejected:stop_unresolvable:strict")
+    assert "signal_type=unit" in reason
+    assert "ENTRY_requires_explicit_stop_price" in reason
