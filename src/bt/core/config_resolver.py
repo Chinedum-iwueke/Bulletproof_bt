@@ -127,6 +127,37 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     strategy_cfg.setdefault("name", "coinflip")
     resolved["strategy"] = strategy_cfg
 
+    execution_cfg = _ensure_mapping(resolved.get("execution"), name="execution")
+    execution_cfg.setdefault("spread_mode", "none")
+    execution_cfg.setdefault("spread_bps", 0.0)
+
+    spread_mode = execution_cfg.get("spread_mode")
+    if spread_mode not in {"none", "fixed_bps", "bar_range_proxy"}:
+        raise ConfigError(
+            "Invalid execution.spread_mode: expected one of "
+            "{'none', 'fixed_bps', 'bar_range_proxy'} "
+            f"got {spread_mode!r}"
+        )
+
+    if spread_mode == "fixed_bps":
+        if "spread_bps" not in execution_cfg:
+            raise ConfigError("execution.spread_bps is required when execution.spread_mode='fixed_bps'")
+        try:
+            spread_bps = float(execution_cfg["spread_bps"])
+        except (TypeError, ValueError) as exc:
+            raise ConfigError("Invalid execution.spread_bps: expected float >= 0") from exc
+        if spread_bps < 0:
+            raise ConfigError("Invalid execution.spread_bps: expected float >= 0")
+        execution_cfg["spread_bps"] = spread_bps
+
+    if spread_mode == "none":
+        execution_cfg["spread_bps"] = float(execution_cfg.get("spread_bps", 0.0))
+
+    if spread_mode == "bar_range_proxy":
+        execution_cfg["spread_bps"] = float(execution_cfg.get("spread_bps", 0.0))
+
+    resolved["execution"] = execution_cfg
+
     if "htf_timeframes" in resolved or "htf_strict" in resolved:
         htf_resampler_cfg = _ensure_mapping(resolved.get("htf_resampler"), name="htf_resampler")
         if "htf_timeframes" in resolved:
