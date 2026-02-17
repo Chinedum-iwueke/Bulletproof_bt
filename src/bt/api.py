@@ -22,6 +22,7 @@ def _build_engine(
     from bt.data.resample import TimeframeResampler
     from bt.execution.execution_model import ExecutionModel
     from bt.execution.fees import FeeModel
+    from bt.execution.profile import resolve_execution_profile
     from bt.execution.slippage import SlippageModel
     from bt.logging.jsonl import JsonlWriter
     from bt.logging.trades import TradesCsvWriter
@@ -78,29 +79,33 @@ def _build_engine(
             risk_cfg_for_spec["r_per_trade"] = config["risk_per_trade_pct"]
     risk_spec = parse_risk_spec({"risk": risk_cfg_for_spec})
 
+    execution_profile = resolve_execution_profile(config)
+    effective_slippage_bps = execution_profile.slippage_bps + execution_profile.spread_bps
+
     risk = RiskEngine(
         max_positions=int(risk_cfg.get("max_positions", 5)),
         max_notional_per_symbol=config.get("max_notional_per_symbol"),
         margin_buffer_tier=int(risk_cfg.get("margin_buffer_tier", 1)),
-        maker_fee_bps=float(config.get("maker_fee_bps", 0.0)),
-        taker_fee_bps=float(config.get("taker_fee_bps", 0.0)),
+        maker_fee_bps=execution_profile.maker_fee * 1e4,
+        taker_fee_bps=execution_profile.taker_fee * 1e4,
         slippage_k_proxy=float(risk_cfg.get("slippage_k_proxy", 0.0)),
         config={
             "risk": risk_cfg_for_spec,
-            "model": config.get("model"),
-            "fixed_bps": config.get("fixed_bps"),
+            "model": "fixed_bps",
+            "fixed_bps": effective_slippage_bps,
             "slippage": config.get("slippage"),
         },
     )
 
     fee_model = FeeModel(
-        maker_fee_bps=float(config.get("maker_fee_bps", 0.0)),
-        taker_fee_bps=float(config.get("taker_fee_bps", 0.0)),
+        maker_fee_bps=execution_profile.maker_fee * 1e4,
+        taker_fee_bps=execution_profile.taker_fee * 1e4,
     )
     slippage_model = SlippageModel(
         k=float(config.get("slippage_k", 1.0)),
         atr_pct_cap=float(config.get("atr_pct_cap", 0.20)),
         impact_cap=float(config.get("impact_cap", 0.05)),
+        fixed_bps=effective_slippage_bps,
     )
     execution_cfg = config.get("execution") if isinstance(config.get("execution"), dict) else {}
     raw_spread_mode = execution_cfg.get("spread_mode", "none")
@@ -114,7 +119,7 @@ def _build_engine(
         slippage_model=slippage_model,
         spread_mode=spread_mode,
         spread_bps=spread_bps,
-        delay_bars=int(config.get("signal_delay_bars", 1)),
+        delay_bars=execution_profile.delay_bars,
     )
 
     portfolio_max_leverage = risk_spec.max_leverage

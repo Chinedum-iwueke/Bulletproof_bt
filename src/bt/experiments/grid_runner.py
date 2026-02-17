@@ -14,6 +14,7 @@ from typing import Any
 
 import yaml
 
+from bt.execution.profile import resolve_execution_profile
 from bt.logging.jsonl import to_jsonable
 from bt.risk.stop_resolution import (
     STOP_RESOLUTION_ATR_MULTIPLE,
@@ -379,24 +380,51 @@ def run_grid(
             with performance_path.open("r", encoding="utf-8") as handle:
                 perf_payload = json.load(handle)
 
+            profile = resolve_execution_profile(run_cfg)
             status_payload = {
                 "status": "PASS",
                 "error_type": "",
                 "error_message": "",
                 "traceback": "",
                 "run_id": run_name,
+                "execution_profile": profile.name,
+                "effective_execution": {
+                    "maker_fee": profile.maker_fee,
+                    "taker_fee": profile.taker_fee,
+                    "slippage_bps": profile.slippage_bps,
+                    "delay_bars": profile.delay_bars,
+                    "spread_bps": profile.spread_bps,
+                },
             }
             _write_run_status(run_dir, status_payload)
 
             summary_rows.append(_build_summary_row(run_name, params, perf_payload, status="PASS"))
         except Exception as exc:
             tb = traceback.format_exc()
+            fail_profile_payload: dict[str, Any] = {}
+            try:
+                profile = resolve_execution_profile(merged_cfg)
+            except ValueError:
+                profile = None
+            if profile is not None:
+                fail_profile_payload = {
+                    "execution_profile": profile.name,
+                    "effective_execution": {
+                        "maker_fee": profile.maker_fee,
+                        "taker_fee": profile.taker_fee,
+                        "slippage_bps": profile.slippage_bps,
+                        "delay_bars": profile.delay_bars,
+                        "spread_bps": profile.spread_bps,
+                    },
+                }
+
             status_payload = {
                 "status": "FAIL",
                 "error_type": type(exc).__name__,
                 "error_message": str(exc),
                 "traceback": tb,
                 "run_id": run_name,
+                **fail_profile_payload,
             }
             _write_run_status(run_dir, status_payload)
 
