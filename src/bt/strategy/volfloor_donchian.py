@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import math
 from typing import Any, Mapping
 
 import pandas as pd
@@ -39,6 +40,8 @@ class VolFloorDonchianStrategy(Strategy):
         vol_floor_pct: float = 60.0,
         atr_period: int = 14,
         vol_lookback_bars: int = 2880,
+        stop_mode: str = "hybrid",
+        atr_stop_multiple: float = 2.5,
         symbols: list[str] | None = None,
     ) -> None:
         self._seed = seed
@@ -49,8 +52,63 @@ class VolFloorDonchianStrategy(Strategy):
         self._vol_floor_pct = vol_floor_pct
         self._atr_period = atr_period
         self._vol_lookback_bars = vol_lookback_bars
+        self._stop_mode = stop_mode
+        self._atr_stop_multiple = atr_stop_multiple
         self._symbols = set(symbols) if symbols is not None else None
         self._state: dict[str, _SymbolState] = {}
+
+    @staticmethod
+    def _compute_structural_stop(side: Side, exit_high: float | None, exit_low: float | None) -> float | None:
+        if side == Side.BUY:
+            return exit_low
+        if side == Side.SELL:
+            return exit_high
+        return None
+
+    @staticmethod
+    def _compute_atr_stop(
+        side: Side,
+        entry_price: float,
+        atr_value: float | None,
+        atr_stop_multiple: float,
+    ) -> float | None:
+        if atr_value is None or atr_stop_multiple <= 0:
+            return None
+        if side == Side.BUY:
+            return entry_price - (atr_stop_multiple * atr_value)
+        if side == Side.SELL:
+            return entry_price + (atr_stop_multiple * atr_value)
+        return None
+
+    @staticmethod
+    def _compute_final_stop(
+        side: Side,
+        stop_mode: str,
+        structural_stop: float | None,
+        atr_stop: float | None,
+    ) -> float | None:
+        if stop_mode == "structural":
+            return structural_stop
+        if stop_mode == "atr":
+            return atr_stop
+        if stop_mode == "hybrid":
+            if structural_stop is None or atr_stop is None:
+                return None
+            if side == Side.BUY:
+                return min(structural_stop, atr_stop)
+            if side == Side.SELL:
+                return max(structural_stop, atr_stop)
+        return None
+
+    @staticmethod
+    def _is_valid_stop(side: Side, entry_price: float, stop_price: float | None) -> bool:
+        if stop_price is None or not math.isfinite(stop_price) or stop_price <= 0:
+            return False
+        if side == Side.BUY:
+            return stop_price < entry_price
+        if side == Side.SELL:
+            return stop_price > entry_price
+        return False
 
     def _state_for(self, symbol: str) -> _SymbolState:
         current = self._state.get(symbol)
@@ -169,45 +227,103 @@ class VolFloorDonchianStrategy(Strategy):
                 short_bias_ok = plus_di is None or minus_di is None or minus_di > plus_di
 
                 if entry_high is not None and htf_bar.close > entry_high and long_bias_ok:
-                    signals.append(
-                        Signal(
-                            ts=ts,
-                            symbol=symbol,
-                            side=Side.BUY,
-                            signal_type="h1_volfloor_donchian_entry",
-                            confidence=1.0,
-                            metadata={
-                                "strategy": "volfloor_donchian",
-                                "tf": self._timeframe,
-                                "vol_pct_rank": vol_rank,
-                                "vol_floor_pct": self._vol_floor_pct,
-                                "adx": adx_value,
-                                "donchian_entry": {"high": entry_high, "low": entry_low},
-                                "donchian_exit": {"high": exit_high, "low": exit_low},
-                            },
-                        )
+                    entry_price = float(htf_bar.close)
+                    structural_stop = self._compute_structural_stop(Side.BUY, exit_high=exit_high, exit_low=exit_low)
+                    atr_stop = self._compute_atr_stop(
+                        Side.BUY,
+                        entry_price=entry_price,
+                        atr_value=atr_value,
+                        atr_stop_multiple=self._atr_stop_multiple,
                     )
-                    symbol_state.position = Side.BUY
+                    stop_price = self._compute_final_stop(
+                        Side.BUY,
+                        stop_mode=self._stop_mode,
+                        structural_stop=structural_stop,
+                        atr_stop=atr_stop,
+                    )
+                    if not self._is_valid_stop(Side.BUY, entry_price=entry_price, stop_price=stop_price):
+                        pass
+                    else:
+                        stop_source = f"donchian_{self._stop_mode}"
+                        stop_details = {
+                            "entry_price": entry_price,
+                            "structural_stop": structural_stop,
+                            "atr_value": atr_value,
+                            "atr_stop_multiple": self._atr_stop_multiple,
+                            "atr_stop": atr_stop,
+                            "stop_mode": self._stop_mode,
+                        }
+                        signals.append(
+                            Signal(
+                                ts=ts,
+                                symbol=symbol,
+                                side=Side.BUY,
+                                signal_type="h1_volfloor_donchian_entry",
+                                confidence=1.0,
+                                metadata={
+                                    "strategy": "volfloor_donchian",
+                                    "tf": self._timeframe,
+                                    "vol_pct_rank": vol_rank,
+                                    "vol_floor_pct": self._vol_floor_pct,
+                                    "adx": adx_value,
+                                    "donchian_entry": {"high": entry_high, "low": entry_low},
+                                    "donchian_exit": {"high": exit_high, "low": exit_low},
+                                    "stop_price": stop_price,
+                                    "stop_source": stop_source,
+                                    "stop_details": stop_details,
+                                },
+                            )
+                        )
+                        symbol_state.position = Side.BUY
                 elif entry_low is not None and htf_bar.close < entry_low and short_bias_ok:
-                    signals.append(
-                        Signal(
-                            ts=ts,
-                            symbol=symbol,
-                            side=Side.SELL,
-                            signal_type="h1_volfloor_donchian_entry",
-                            confidence=1.0,
-                            metadata={
-                                "strategy": "volfloor_donchian",
-                                "tf": self._timeframe,
-                                "vol_pct_rank": vol_rank,
-                                "vol_floor_pct": self._vol_floor_pct,
-                                "adx": adx_value,
-                                "donchian_entry": {"high": entry_high, "low": entry_low},
-                                "donchian_exit": {"high": exit_high, "low": exit_low},
-                            },
-                        )
+                    entry_price = float(htf_bar.close)
+                    structural_stop = self._compute_structural_stop(Side.SELL, exit_high=exit_high, exit_low=exit_low)
+                    atr_stop = self._compute_atr_stop(
+                        Side.SELL,
+                        entry_price=entry_price,
+                        atr_value=atr_value,
+                        atr_stop_multiple=self._atr_stop_multiple,
                     )
-                    symbol_state.position = Side.SELL
+                    stop_price = self._compute_final_stop(
+                        Side.SELL,
+                        stop_mode=self._stop_mode,
+                        structural_stop=structural_stop,
+                        atr_stop=atr_stop,
+                    )
+                    if not self._is_valid_stop(Side.SELL, entry_price=entry_price, stop_price=stop_price):
+                        pass
+                    else:
+                        stop_source = f"donchian_{self._stop_mode}"
+                        stop_details = {
+                            "entry_price": entry_price,
+                            "structural_stop": structural_stop,
+                            "atr_value": atr_value,
+                            "atr_stop_multiple": self._atr_stop_multiple,
+                            "atr_stop": atr_stop,
+                            "stop_mode": self._stop_mode,
+                        }
+                        signals.append(
+                            Signal(
+                                ts=ts,
+                                symbol=symbol,
+                                side=Side.SELL,
+                                signal_type="h1_volfloor_donchian_entry",
+                                confidence=1.0,
+                                metadata={
+                                    "strategy": "volfloor_donchian",
+                                    "tf": self._timeframe,
+                                    "vol_pct_rank": vol_rank,
+                                    "vol_floor_pct": self._vol_floor_pct,
+                                    "adx": adx_value,
+                                    "donchian_entry": {"high": entry_high, "low": entry_low},
+                                    "donchian_exit": {"high": exit_high, "low": exit_low},
+                                    "stop_price": stop_price,
+                                    "stop_source": stop_source,
+                                    "stop_details": stop_details,
+                                },
+                            )
+                        )
+                        symbol_state.position = Side.SELL
 
             symbol_state.highs.append(htf_bar.high)
             symbol_state.lows.append(htf_bar.low)
