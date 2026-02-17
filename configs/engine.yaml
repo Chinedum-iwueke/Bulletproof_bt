@@ -1,11 +1,13 @@
 # Default backtest engine config: safe, streaming-first, and overlay-friendly.
-intrabar_mode: worst_case
 signal_delay_bars: 1
 initial_cash: 100000.0
 maker_fee_bps: 1.0
 taker_fee_bps: 2.0
 
 # Strategy defaults to a deterministic baseline that runs on any dataset.
+execution:
+  intrabar_mode: worst_case
+
 strategy:
   name: coinflip
   p_trade: 0.10

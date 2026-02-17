@@ -7,14 +7,13 @@ from bt.validation.config_completeness import validate_resolved_config_completen
 
 def _full_config() -> dict:
     return {
-        "intrabar_mode": "worst_case",
         "signal_delay_bars": 1,
         "initial_cash": 100000.0,
         "model": "fixed_bps",
         "fixed_bps": 5.0,
         "outputs": {"root_dir": "outputs/runs", "jsonl": True},
         "strategy": {"name": "coinflip"},
-        "execution": {"spread_mode": "none", "spread_bps": 0.0},
+        "execution": {"intrabar_mode": "worst_case", "spread_mode": "none", "spread_bps": 0.0},
         "data": {"mode": "streaming", "symbols_subset": None, "chunksize": 50000},
         "risk": {
             "mode": "equity_pct",

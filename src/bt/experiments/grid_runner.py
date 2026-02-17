@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 
 from bt.execution.profile import resolve_execution_profile
+from bt.execution.intrabar import parse_intrabar_spec
 from bt.logging.jsonl import to_jsonable
 from bt.risk.stop_resolution import (
     STOP_RESOLUTION_ATR_MULTIPLE,
@@ -395,12 +396,18 @@ def run_grid(
                     "delay_bars": profile.delay_bars,
                     "spread_bps": profile.spread_bps,
                 },
+                "intrabar_mode": parse_intrabar_spec(run_cfg).mode,
             }
             _write_run_status(run_dir, status_payload)
 
             summary_rows.append(_build_summary_row(run_name, params, perf_payload, status="PASS"))
         except Exception as exc:
             tb = traceback.format_exc()
+            try:
+                intrabar_mode = parse_intrabar_spec(merged_cfg).mode
+            except ValueError:
+                intrabar_mode = "worst_case"
+
             fail_profile_payload: dict[str, Any] = {}
             try:
                 profile = resolve_execution_profile(merged_cfg)
@@ -416,6 +423,7 @@ def run_grid(
                         "delay_bars": profile.delay_bars,
                         "spread_bps": profile.spread_bps,
                     },
+                    "intrabar_mode": intrabar_mode,
                 }
 
             status_payload = {
@@ -424,6 +432,7 @@ def run_grid(
                 "error_message": str(exc),
                 "traceback": tb,
                 "run_id": run_name,
+                "intrabar_mode": intrabar_mode,
                 **fail_profile_payload,
             }
             _write_run_status(run_dir, status_payload)

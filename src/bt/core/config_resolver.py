@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Any
 import copy
 
+from bt.execution.intrabar import parse_intrabar_spec
+
 
 @dataclass(frozen=True)
 class ResolvedConfig:
@@ -106,7 +108,6 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(resolved, dict):
         raise ConfigError("Config root must be a mapping")
 
-    resolved.setdefault("intrabar_mode", "worst_case")
     resolved.setdefault("signal_delay_bars", 1)
     resolved.setdefault("initial_cash", 100000.0)
     resolved.setdefault("model", "fixed_bps")
@@ -130,6 +131,10 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     execution_cfg = _ensure_mapping(resolved.get("execution"), name="execution")
     execution_cfg.setdefault("spread_mode", "none")
     execution_cfg.setdefault("spread_bps", 0.0)
+
+    resolved["execution"] = execution_cfg
+    intrabar_spec = parse_intrabar_spec(resolved)
+    execution_cfg["intrabar_mode"] = intrabar_spec.mode
 
     spread_mode = execution_cfg.get("spread_mode")
     if spread_mode not in {"none", "fixed_bps", "bar_range_proxy"}:
