@@ -123,6 +123,11 @@ def resolve_execution_profile(config: dict[str, Any]) -> ExecutionProfile:
     else:
         raise ValueError(f"Invalid execution: expected mapping, got {type(execution_cfg_raw).__name__}")
 
+    if "profile" not in execution_cfg:
+        legacy_profile = _resolve_legacy_top_level_profile(root)
+        if legacy_profile is not None:
+            return legacy_profile
+
     raw_profile = execution_cfg.get("profile", "tier2")
     if raw_profile not in {"tier1", "tier2", "tier3", "custom"}:
         raise ValueError(
@@ -134,7 +139,17 @@ def resolve_execution_profile(config: dict[str, Any]) -> ExecutionProfile:
     profile_fields = ("maker_fee", "taker_fee", "slippage_bps", "delay_bars", "spread_bps")
 
     if profile_name != "custom":
-        conflicting = [field for field in profile_fields if field in execution_cfg]
+        # Keep spread controls orthogonal to execution profiles.
+        #
+        # execution.spread_mode / execution.spread_bps are validated by config
+        # resolution and consumed directly by ExecutionModel. They are present in
+        # the default config even when a built-in profile is used, so they should
+        # not force callers into execution.profile='custom'.
+        conflicting = [
+            field
+            for field in ("maker_fee", "taker_fee", "slippage_bps", "delay_bars")
+            if field in execution_cfg
+        ]
         if conflicting:
             first = conflicting[0]
             raise ValueError(
