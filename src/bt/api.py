@@ -108,12 +108,17 @@ def _build_engine(
         fixed_bps=effective_slippage_bps,
     )
     execution_cfg = config.get("execution") if isinstance(config.get("execution"), dict) else {}
+    raw_spread_mode = execution_cfg.get("spread_mode", "none")
+    spread_mode = raw_spread_mode if isinstance(raw_spread_mode, str) and raw_spread_mode else "none"
+
+    raw_spread_bps = execution_cfg.get("spread_bps", 0.0)
+    spread_bps = 0.0 if raw_spread_bps is None else float(raw_spread_bps)
+
     execution = ExecutionModel(
         fee_model=fee_model,
         slippage_model=slippage_model,
-        spread_mode=str(execution_cfg.get("spread_mode", "none")),
-        spread_bps=float(execution_cfg.get("spread_bps", 0.0)),
-        delay_bars=int(config.get("signal_delay_bars", 1)),
+        spread_mode=spread_mode,
+        spread_bps=spread_bps,
         delay_bars=execution_profile.delay_bars,
     )
 
