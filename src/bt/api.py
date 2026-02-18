@@ -193,6 +193,7 @@ def run_backtest(
     from bt.experiments.grid_runner import _write_run_status
     from bt.logging.trades import make_run_id, prepare_run_dir, write_config_used, write_data_scope
     from bt.metrics.performance import compute_performance, write_performance_artifacts
+    from bt.metrics.reconcile import reconcile_execution_costs
     from bt.execution.profile import resolve_execution_profile
 
     base_config = load_yaml(config_path)
@@ -253,6 +254,7 @@ def run_backtest(
 
         report = compute_performance(run_dir)
         write_performance_artifacts(report, run_dir)
+        reconcile_execution_costs(run_dir)
 
         if benchmark_spec.enabled:
             if benchmark_metrics is None:
