@@ -29,7 +29,7 @@ data:
   row_limit_per_symbol: null
   chunksize: 50000
 
-# Stage C risk spec (normalized sizing, conservative leverage).
+# Risk spec (normalized sizing, conservative leverage).
 risk:
   mode: equity_pct
   r_per_trade: 0.005
