@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from bt.api import run_backtest
+from bt.logging.run_contract import validate_run_artifacts
 
 
 def main() -> None:
@@ -26,6 +28,8 @@ def main() -> None:
         override_paths=override_paths or None,
         run_name=args.run_id,
     )
+
+    validate_run_artifacts(Path(run_dir))
 
     print(f"run_dir: {run_dir}")
 
