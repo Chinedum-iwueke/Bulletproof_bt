@@ -8,6 +8,7 @@ from bt.api import run_backtest
 from bt.config import load_yaml
 from bt.logging.run_contract import validate_run_artifacts
 from bt.logging.run_manifest import write_run_manifest
+from bt.logging.summary import write_summary_txt
 
 
 def main() -> None:
@@ -42,6 +43,7 @@ def main() -> None:
         raise ValueError(f"Invalid config_used.yaml format in run_dir={run_dir}; expected mapping.")
 
     write_run_manifest(Path(run_dir), config=config, data_path=args.data)
+    write_summary_txt(Path(run_dir))
 
     print(f"run_dir: {run_dir}")
 
