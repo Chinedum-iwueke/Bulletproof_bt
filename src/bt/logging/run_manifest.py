@@ -2,26 +2,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import json
 from pathlib import Path
 from typing import Any
+
+from bt.logging.formatting import write_json_deterministic
 
 
 _MANIFEST_FILENAME = "run_manifest.json"
 
-
-def _round_float(value: float) -> float:
-    return round(value, 12)
-
-
-def _normalize_for_json(value: Any) -> Any:
-    if isinstance(value, float):
-        return _round_float(value)
-    if isinstance(value, dict):
-        return {str(k): _normalize_for_json(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_normalize_for_json(v) for v in value]
-    return value
 
 
 def _artifact_files(run_dir: Path) -> list[str]:
@@ -92,8 +80,5 @@ def write_run_manifest(
     }
 
     manifest_path = run_dir / _MANIFEST_FILENAME
-    manifest_path.write_text(
-        json.dumps(_normalize_for_json(payload), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    write_json_deterministic(manifest_path, payload)
     return manifest_path

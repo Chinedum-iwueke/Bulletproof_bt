@@ -11,6 +11,7 @@ import pandas as pd
 import yaml
 
 from bt.metrics.r_metrics import summarize_r
+from bt.logging.formatting import FLOAT_DECIMALS_CSV, write_json_deterministic
 
 
 @dataclass(frozen=True)
@@ -624,9 +625,7 @@ def write_performance_artifacts(report: PerformanceReport, run_dir: str | Path) 
     by_bucket_path = run_path / "performance_by_bucket.csv"
     trade_returns_path = run_path / "trade_returns.csv"
 
-    with performance_path.open("w", encoding="utf-8") as handle:
-        json.dump(asdict(report), handle, indent=2, sort_keys=True)
-        handle.write("\n")
+    write_json_deterministic(performance_path, asdict(report))
 
     rows = []
     for bucket in sorted(report.ev_by_bucket.keys()):
@@ -638,7 +637,7 @@ def write_performance_artifacts(report: PerformanceReport, run_dir: str | Path) 
             }
         )
     pd.DataFrame(rows, columns=["bucket", "n_trades", "ev_net"]).to_csv(
-        by_bucket_path, index=False
+        by_bucket_path, index=False, float_format=f"%.{FLOAT_DECIMALS_CSV}f"
     )
 
     trades_path = run_path / "trades.csv"
@@ -651,7 +650,11 @@ def write_performance_artifacts(report: PerformanceReport, run_dir: str | Path) 
         trades_df = pd.DataFrame()
     trade_returns_df, _, _, _ = _compute_trade_returns(trades_df)
     ordered_trade_returns = _order_trade_returns(trade_returns_df)
-    ordered_trade_returns.to_csv(trade_returns_path, index=False)
+    ordered_trade_returns.to_csv(
+        trade_returns_path,
+        index=False,
+        float_format=f"%.{FLOAT_DECIMALS_CSV}f",
+    )
 
     param_sweep_dir = run_path / "param_sweep"
     if param_sweep_dir.exists() and param_sweep_dir.is_dir():
@@ -670,6 +673,4 @@ def write_performance_artifacts(report: PerformanceReport, run_dir: str | Path) 
         if run_summaries:
             stability = compute_param_stability(run_summaries)
             stability_path = run_path / "param_stability.json"
-            with stability_path.open("w", encoding="utf-8") as handle:
-                json.dump(stability, handle, indent=2, sort_keys=True)
-                handle.write("\n")
+            write_json_deterministic(stability_path, stability)

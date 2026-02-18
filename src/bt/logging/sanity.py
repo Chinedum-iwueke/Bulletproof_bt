@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-import json
 from pathlib import Path
 from typing import Any
+
+from bt.logging.formatting import write_json_deterministic
 
 
 @dataclass
@@ -62,5 +63,4 @@ def write_sanity_json(run_dir: str | Path, counters: SanityCounters, data_scope:
         payload["data_end_ts"] = data_scope.get("data_end_ts")
     payload["created_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_deterministic(path, payload)

@@ -12,6 +12,7 @@ from bt.core.config_resolver import resolve_config
 from bt.execution.effective import build_effective_execution_snapshot
 from bt.execution.intrabar import parse_intrabar_spec
 from bt.logging.sanity import SanityCounters, write_sanity_json
+from bt.logging.formatting import write_json_deterministic
 from bt.validation.config_completeness import validate_resolved_config_completeness
 
 
@@ -247,10 +248,7 @@ def run_backtest(
             benchmark_points = benchmark_tracker.finalize(initial_equity=benchmark_initial_equity)
             write_benchmark_equity_csv(benchmark_points, run_dir / "benchmark_equity.csv")
             benchmark_metrics = compute_benchmark_metrics(equity_points=benchmark_points)
-            (run_dir / "benchmark_metrics.json").write_text(
-                json.dumps(benchmark_metrics, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+            write_json_deterministic(run_dir / "benchmark_metrics.json", benchmark_metrics)
 
         report = compute_performance(run_dir)
         write_performance_artifacts(report, run_dir)
@@ -265,10 +263,7 @@ def run_backtest(
                 strategy_perf=asdict(report),
                 bench_metrics=benchmark_metrics,
             )
-            (run_dir / "comparison_summary.json").write_text(
-                json.dumps(comparison_summary, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+            write_json_deterministic(run_dir / "comparison_summary.json", comparison_summary)
 
         execution_snapshot = build_effective_execution_snapshot(config)
         _write_run_status(
