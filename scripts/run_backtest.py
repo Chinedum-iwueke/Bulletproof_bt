@@ -5,7 +5,9 @@ import argparse
 from pathlib import Path
 
 from bt.api import run_backtest
+from bt.config import load_yaml
 from bt.logging.run_contract import validate_run_artifacts
+from bt.logging.run_manifest import write_run_manifest
 
 
 def main() -> None:
@@ -30,6 +32,16 @@ def main() -> None:
     )
 
     validate_run_artifacts(Path(run_dir))
+
+    config_path = Path(run_dir) / "config_used.yaml"
+    try:
+        config = load_yaml(config_path)
+    except Exception as exc:  # pragma: no cover - defensive user-facing guard
+        raise ValueError(f"Unable to read config_used.yaml from run_dir={run_dir}: {exc}") from exc
+    if not isinstance(config, dict):
+        raise ValueError(f"Invalid config_used.yaml format in run_dir={run_dir}; expected mapping.")
+
+    write_run_manifest(Path(run_dir), config=config, data_path=args.data)
 
     print(f"run_dir: {run_dir}")
 
