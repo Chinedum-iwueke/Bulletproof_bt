@@ -36,6 +36,7 @@ from bt.data.load_feed import load_feed
 from bt.logging.sanity import SanityCounters, write_sanity_json
 from bt.logging.trades import write_data_scope
 from bt.metrics.performance import compute_performance, write_performance_artifacts
+from bt.metrics.reconcile import reconcile_execution_costs
 from bt.validation.config_completeness import validate_resolved_config_completeness
 
 
@@ -359,6 +360,7 @@ def run_grid(
 
             report = compute_performance(run_dir)
             write_performance_artifacts(report, run_dir)
+            reconcile_execution_costs(run_dir)
 
             if benchmark_spec.enabled:
                 if benchmark_metrics is None:
