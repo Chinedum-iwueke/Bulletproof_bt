@@ -43,6 +43,14 @@ _BUILTIN_PROFILES: dict[str, ExecutionProfile] = {
     ),
 }
 
+_PROFILE_OVERRIDE_FIELDS: tuple[str, ...] = (
+    "maker_fee",
+    "taker_fee",
+    "slippage_bps",
+    "delay_bars",
+    "spread_bps",
+)
+
 
 def get_builtin_profile(name: ProfileName) -> ExecutionProfile:
     """Return the built-in profile definition."""
@@ -136,34 +144,22 @@ def resolve_execution_profile(config: dict[str, Any]) -> ExecutionProfile:
         )
     profile_name: ProfileName = raw_profile
 
-    profile_fields = ("maker_fee", "taker_fee", "slippage_bps", "delay_bars", "spread_bps")
-
     if profile_name != "custom":
-        # Keep spread controls orthogonal to execution profiles.
-        #
-        # execution.spread_mode / execution.spread_bps are validated by config
-        # resolution and consumed directly by ExecutionModel. They are present in
-        # the default config even when a built-in profile is used, so they should
-        # not force callers into execution.profile='custom'.
-        conflicting = [
-            field
-            for field in ("maker_fee", "taker_fee", "slippage_bps", "delay_bars")
-            if field in execution_cfg
-        ]
+        conflicting = [field for field in _PROFILE_OVERRIDE_FIELDS if field in execution_cfg]
         if conflicting:
-            first = conflicting[0]
             raise ValueError(
-                f"execution.{first} is not allowed when execution.profile={profile_name!r}. "
-                "Set execution.profile='custom' to provide explicit execution overrides."
+                f"execution.profile={profile_name} forbids overrides. "
+                "Set execution.profile=custom to specify "
+                "maker_fee/taker_fee/slippage_bps/delay_bars/spread_bps."
             )
         return get_builtin_profile(profile_name)
 
-    missing = [field for field in profile_fields if field not in execution_cfg]
+    missing = [field for field in _PROFILE_OVERRIDE_FIELDS if field not in execution_cfg]
     if missing:
-        first = missing[0]
+        missing_keys = ", ".join(f"execution.{field}" for field in missing)
         raise ValueError(
-            f"Missing required key execution.{first} when execution.profile='custom'. "
-            "Provide maker_fee, taker_fee, slippage_bps, delay_bars, and spread_bps."
+            "execution.profile=custom requires all override keys. "
+            f"Missing: {missing_keys}."
         )
 
     return ExecutionProfile(

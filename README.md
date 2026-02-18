@@ -34,6 +34,32 @@ python scripts/run_experiment_grid.py --config configs/engine.yaml --experiment 
   4. each `--override` in the order provided
   5. `--local-config` (if supplied)
 
+
+## Execution profiles
+
+Execution profiles are reusable presets. Overrides are only allowed when `execution.profile: custom`.
+If you use `tier1`, `tier2`, or `tier3` (or omit the profile, which defaults to `tier2`), do not set any of:
+`maker_fee`, `taker_fee`, `slippage_bps`, `delay_bars`, `spread_bps`.
+
+Valid tier preset example (no overrides):
+
+```yaml
+execution:
+  profile: tier2
+```
+
+Valid custom example (all override fields required):
+
+```yaml
+execution:
+  profile: custom
+  maker_fee: 0.0
+  taker_fee: 0.001
+  slippage_bps: 2.0
+  delay_bars: 1
+  spread_bps: 1.0
+```
+
 ## Public API
 
 ```python
