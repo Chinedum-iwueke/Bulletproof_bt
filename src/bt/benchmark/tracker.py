@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from bt.benchmark.buy_hold import EquityPoint, compute_buy_hold_equity
+from bt.logging.formatting import FLOAT_DECIMALS_CSV
 from bt.benchmark.spec import BenchmarkSpec
 
 
@@ -65,7 +66,7 @@ def write_benchmark_equity_csv(points: list[EquityPoint], path: Path) -> None:
         writer = csv.writer(handle)
         writer.writerow(["ts", "equity"])
         for point in points:
-            writer.writerow([point.ts.isoformat(), point.equity])
+            writer.writerow([point.ts.isoformat(), f"{point.equity:.{FLOAT_DECIMALS_CSV}f}"])
 
 
 

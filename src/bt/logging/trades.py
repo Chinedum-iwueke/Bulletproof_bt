@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
-import json
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -12,6 +11,7 @@ import pandas as pd
 import yaml
 
 from bt.data.config_utils import parse_date_range
+from bt.logging.formatting import FLOAT_DECIMALS_CSV, write_json_deterministic
 from bt.data.dataset import load_dataset_manifest
 from bt.core.types import Trade
 from bt.risk.r_multiple import compute_r_multiple
@@ -98,7 +98,7 @@ def write_data_scope(run_dir: Path, *, config: dict, dataset_dir: str | None = N
         payload["effective_symbol_count"] = len(manifest.symbols)
 
     path = run_dir / "data_scope.json"
-    path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+    write_json_deterministic(path, payload)
 
 
 class TradesCsvWriter:
@@ -138,6 +138,8 @@ class TradesCsvWriter:
             return value.isoformat()
         if isinstance(value, Enum):
             return value.name
+        if isinstance(value, float):
+            return f"{value:.{FLOAT_DECIMALS_CSV}f}"
         return str(value)
 
     def write_trade(self, trade: Trade) -> None:

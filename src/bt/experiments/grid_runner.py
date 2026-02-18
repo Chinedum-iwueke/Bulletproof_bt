@@ -34,6 +34,7 @@ from bt.core.config_resolver import resolve_config
 from bt.data.dataset import load_dataset_manifest
 from bt.data.load_feed import load_feed
 from bt.logging.sanity import SanityCounters, write_sanity_json
+from bt.logging.formatting import write_json_deterministic
 from bt.logging.trades import write_data_scope
 from bt.metrics.performance import compute_performance, write_performance_artifacts
 from bt.metrics.reconcile import reconcile_execution_costs
@@ -143,9 +144,7 @@ def _write_run_status(run_dir: Path, status_payload: dict[str, Any]) -> None:
     payload["r_metrics_valid"] = r_metrics_valid
     payload["notes"] = merged_notes
 
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(to_jsonable(payload), handle, indent=2, sort_keys=True)
-        handle.write("\n")
+    write_json_deterministic(path, to_jsonable(payload))
 
 
 def set_by_dotpath(cfg: dict[str, Any], dotpath: str, value: Any) -> None:
@@ -353,10 +352,7 @@ def run_grid(
                 benchmark_points = benchmark_tracker.finalize(initial_equity=benchmark_initial_equity)
                 write_benchmark_equity_csv(benchmark_points, run_dir / "benchmark_equity.csv")
                 benchmark_metrics = compute_benchmark_metrics(equity_points=benchmark_points)
-                (run_dir / "benchmark_metrics.json").write_text(
-                    json.dumps(benchmark_metrics, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
+                write_json_deterministic(run_dir / "benchmark_metrics.json", benchmark_metrics)
 
             report = compute_performance(run_dir)
             write_performance_artifacts(report, run_dir)
@@ -371,10 +367,7 @@ def run_grid(
                     strategy_perf=asdict(report),
                     bench_metrics=benchmark_metrics,
                 )
-                (run_dir / "comparison_summary.json").write_text(
-                    json.dumps(comparison_summary, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
+                write_json_deterministic(run_dir / "comparison_summary.json", comparison_summary)
 
             performance_path = run_dir / "performance.json"
             if not performance_path.exists():
@@ -450,24 +443,24 @@ def run_grid(
         writer = csv.DictWriter(handle, fieldnames=_SUMMARY_COLUMNS)
         writer.writeheader()
         for row in summary_rows:
-            writer.writerow(row)
+            normalized_row = dict(row)
+            for key, value in normalized_row.items():
+                if isinstance(value, float):
+                    normalized_row[key] = f"{value:.12f}"
+            writer.writerow(normalized_row)
 
-    with (out_path / "summary.json").open("w", encoding="utf-8") as handle:
-        json.dump(
-            {
-                "metadata": {
-                    "config": "<in-memory>",
-                    "experiment": "<in-memory>",
-                    "data": str(data_path),
-                    "out": str(out_path),
-                    "run_count": len(summary_rows),
-                },
-                "runs": summary_rows,
+    write_json_deterministic(
+        out_path / "summary.json",
+        {
+            "metadata": {
+                "config": "<in-memory>",
+                "experiment": "<in-memory>",
+                "data": str(data_path),
+                "out": str(out_path),
+                "run_count": len(summary_rows),
             },
-            handle,
-            indent=2,
-            sort_keys=True,
-        )
-        handle.write("\n")
+            "runs": summary_rows,
+        },
+    )
 
     return out_path

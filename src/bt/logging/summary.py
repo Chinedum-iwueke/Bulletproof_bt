@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from bt.logging.formatting import write_text_deterministic
+
 
 def _read_json_file(run_dir: Path, filename: str, *, required: bool) -> dict[str, Any] | None:
     path = run_dir / filename
@@ -294,5 +296,5 @@ def write_summary_txt(run_dir: Path) -> Path:
     )
 
     summary_path = run_dir / "summary.txt"
-    summary_path.write_text("\n".join(lines), encoding="utf-8")
+    write_text_deterministic(summary_path, "\n".join(lines))
     return summary_path
