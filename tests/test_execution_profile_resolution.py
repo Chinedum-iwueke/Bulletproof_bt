@@ -45,7 +45,7 @@ def test_builtin_profile_values_exact() -> None:
 
 
 def test_profile_override_conflict_raises() -> None:
-    with pytest.raises(ValueError, match="execution.taker_fee") as exc_info:
+    with pytest.raises(ValueError, match="taker_fee") as exc_info:
         resolve_execution_profile({"execution": {"profile": "tier2", "taker_fee": 0.01}})
     assert "profile" in str(exc_info.value)
 

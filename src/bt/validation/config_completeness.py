@@ -30,7 +30,6 @@ def validate_resolved_config_completeness(config: dict[str, Any]) -> None:
         "model",
         "strategy.name",
         "execution.spread_mode",
-        "execution.spread_bps",
         "data.mode",
         "data.symbols_subset",
         "risk.mode",

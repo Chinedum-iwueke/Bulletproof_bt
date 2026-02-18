@@ -130,7 +130,6 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
 
     execution_cfg = _ensure_mapping(resolved.get("execution"), name="execution")
     execution_cfg.setdefault("spread_mode", "none")
-    execution_cfg.setdefault("spread_bps", 0.0)
 
     resolved["execution"] = execution_cfg
     intrabar_spec = parse_intrabar_spec(resolved)
@@ -155,11 +154,13 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
             raise ConfigError("Invalid execution.spread_bps: expected float >= 0")
         execution_cfg["spread_bps"] = spread_bps
 
-    if spread_mode == "none":
-        execution_cfg["spread_bps"] = float(execution_cfg.get("spread_bps", 0.0))
-
-    if spread_mode == "bar_range_proxy":
-        execution_cfg["spread_bps"] = float(execution_cfg.get("spread_bps", 0.0))
+    if spread_mode in {"none", "bar_range_proxy"} and "spread_bps" in execution_cfg:
+        try:
+            execution_cfg["spread_bps"] = float(execution_cfg["spread_bps"])
+        except (TypeError, ValueError) as exc:
+            raise ConfigError("Invalid execution.spread_bps: expected float >= 0") from exc
+        if execution_cfg["spread_bps"] < 0:
+            raise ConfigError("Invalid execution.spread_bps: expected float >= 0")
 
     resolved["execution"] = execution_cfg
 
