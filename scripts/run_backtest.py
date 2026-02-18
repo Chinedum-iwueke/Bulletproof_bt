@@ -6,6 +6,7 @@ from pathlib import Path
 
 from bt.api import run_backtest
 from bt.config import load_yaml
+from bt.logging.cli_footer import print_run_footer
 from bt.logging.run_contract import validate_run_artifacts
 from bt.logging.run_manifest import write_run_manifest
 from bt.logging.summary import write_summary_txt
@@ -44,8 +45,7 @@ def main() -> None:
 
     write_run_manifest(Path(run_dir), config=config, data_path=args.data)
     write_summary_txt(Path(run_dir))
-
-    print(f"run_dir: {run_dir}")
+    print_run_footer(Path(run_dir))
 
 
 if __name__ == "__main__":

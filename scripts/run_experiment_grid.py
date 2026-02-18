@@ -7,6 +7,7 @@ from pathlib import Path
 
 from bt.api import run_grid
 from bt.config import load_yaml
+from bt.logging.cli_footer import print_grid_footer
 from bt.logging.run_contract import validate_run_artifacts
 from bt.logging.run_manifest import write_run_manifest
 from bt.logging.summary import write_summary_txt
@@ -42,6 +43,8 @@ def main() -> None:
     if not isinstance(runs, list):
         raise ValueError(f"Invalid summary.json format at {summary_path}; expected list at 'runs'.")
 
+    run_dirs: list[Path] = []
+
     for row in runs:
         if not isinstance(row, dict):
             raise ValueError(f"Invalid run row in {summary_path}; expected object entries in 'runs'.")
@@ -63,6 +66,9 @@ def main() -> None:
 
             write_run_manifest(run_dir, config=config, data_path=args.data)
             write_summary_txt(run_dir)
+            run_dirs.append(run_dir)
+
+    print_grid_footer(run_dirs, out_dir=Path(args.out))
 
 
 if __name__ == "__main__":
