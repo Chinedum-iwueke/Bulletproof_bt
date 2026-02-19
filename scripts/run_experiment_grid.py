@@ -9,7 +9,7 @@ from bt.api import run_grid
 from bt.config import load_yaml
 from bt.logging.cli_footer import print_grid_footer
 from bt.logging.run_contract import validate_run_artifacts
-from bt.logging.run_manifest import write_run_manifest
+from bt.logging.run_manifest import write_artifacts_manifest, write_run_manifest
 from bt.logging.summary import write_summary_txt
 
 
@@ -49,24 +49,29 @@ def main() -> None:
         if not isinstance(row, dict):
             raise ValueError(f"Invalid run row in {summary_path}; expected object entries in 'runs'.")
         run_name = row.get("run_name")
-        status = row.get("status")
         if not isinstance(run_name, str) or not run_name:
             raise ValueError(f"Invalid run_name in {summary_path}; expected non-empty string.")
-        if status == "PASS":
-            run_dir = runs_dir / run_name
-            validate_run_artifacts(run_dir)
 
+        run_dir = runs_dir / run_name
+        config: dict | None = None
+        try:
             config_path = run_dir / "config_used.yaml"
             try:
-                config = load_yaml(config_path)
+                loaded_config = load_yaml(config_path)
             except Exception as exc:  # pragma: no cover - defensive user-facing guard
                 raise ValueError(f"Unable to read config_used.yaml from run_dir={run_dir}: {exc}") from exc
-            if not isinstance(config, dict):
+            if not isinstance(loaded_config, dict):
                 raise ValueError(f"Invalid config_used.yaml format in run_dir={run_dir}; expected mapping.")
 
-            write_run_manifest(run_dir, config=config, data_path=args.data)
-            write_summary_txt(run_dir)
-            run_dirs.append(run_dir)
+            config = loaded_config
+            if row.get("status") == "PASS":
+                validate_run_artifacts(run_dir)
+                write_summary_txt(run_dir)
+                write_run_manifest(run_dir, config=config, data_path=args.data)
+                run_dirs.append(run_dir)
+        finally:
+            if config is not None:
+                write_artifacts_manifest(run_dir, config=config)
 
     print_grid_footer(run_dirs, out_dir=Path(args.out))
 
