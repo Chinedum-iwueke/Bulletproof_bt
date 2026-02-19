@@ -36,6 +36,11 @@ from bt.data.dataset import load_dataset_manifest
 from bt.data.load_feed import load_feed
 from bt.logging.sanity import SanityCounters, write_sanity_json
 from bt.logging.formatting import write_json_deterministic
+from bt.logging.schema_versions import (
+    BENCHMARK_METRICS_SCHEMA_VERSION,
+    COMPARISON_SUMMARY_SCHEMA_VERSION,
+    RUN_STATUS_SCHEMA_VERSION,
+)
 from bt.logging.trades import write_data_scope
 from bt.metrics.performance import compute_performance, write_performance_artifacts
 from bt.metrics.reconcile import reconcile_execution_costs
@@ -153,6 +158,7 @@ def _write_run_status(run_dir: Path, status_payload: dict[str, Any], *, config: 
             merged_notes.append(note)
 
     payload = dict(status_payload)
+    payload["schema_version"] = RUN_STATUS_SCHEMA_VERSION
     payload["stop_resolution"] = stop_resolution
     payload["used_legacy_stop_proxy"] = used_legacy_stop_proxy
     payload["r_metrics_valid"] = r_metrics_valid
@@ -377,6 +383,7 @@ def run_grid(
                 benchmark_points = benchmark_tracker.finalize(initial_equity=benchmark_initial_equity)
                 write_benchmark_equity_csv(benchmark_points, run_dir / "benchmark_equity.csv")
                 benchmark_metrics = compute_benchmark_metrics(equity_points=benchmark_points)
+                benchmark_metrics["schema_version"] = BENCHMARK_METRICS_SCHEMA_VERSION
                 write_json_deterministic(run_dir / "benchmark_metrics.json", benchmark_metrics)
 
             report = compute_performance(run_dir)
@@ -392,6 +399,7 @@ def run_grid(
                     strategy_perf=asdict(report),
                     bench_metrics=benchmark_metrics,
                 )
+                comparison_summary["schema_version"] = COMPARISON_SUMMARY_SCHEMA_VERSION
                 write_json_deterministic(run_dir / "comparison_summary.json", comparison_summary)
 
             performance_path = run_dir / "performance.json"

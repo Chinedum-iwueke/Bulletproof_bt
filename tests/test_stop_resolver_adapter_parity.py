@@ -110,4 +110,4 @@ def test_resolve_stop_from_spec_hybrid_not_implemented(policy: str) -> None:
 
 
 def test_fallback_reason_code_constant_is_stable() -> None:
-    assert RISK_FALLBACK_LEGACY_PROXY == "risk_fallback:legacy_proxy"
+    assert RISK_FALLBACK_LEGACY_PROXY == "risk_fallback:stop_legacy_proxy"

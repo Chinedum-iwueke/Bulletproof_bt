@@ -259,7 +259,7 @@ def test_signal_to_order_intent_rejects_when_stop_distance_pct_too_small() -> No
     )
 
     assert order_intent is None
-    assert reason == "risk_rejected:stop_too_small"
+    assert reason == "risk_rejected:min_stop_distance_violation"
 
 
 def test_signal_to_order_intent_caps_notional_by_pct_equity() -> None:

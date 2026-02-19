@@ -12,6 +12,7 @@ import yaml
 
 from bt.metrics.r_metrics import summarize_r
 from bt.logging.formatting import FLOAT_DECIMALS_CSV, write_json_deterministic
+from bt.logging.schema_versions import PERFORMANCE_SCHEMA_VERSION
 
 
 @dataclass(frozen=True)
@@ -625,7 +626,9 @@ def write_performance_artifacts(report: PerformanceReport, run_dir: str | Path) 
     by_bucket_path = run_path / "performance_by_bucket.csv"
     trade_returns_path = run_path / "trade_returns.csv"
 
-    write_json_deterministic(performance_path, asdict(report))
+    performance_payload = asdict(report)
+    performance_payload["schema_version"] = PERFORMANCE_SCHEMA_VERSION
+    write_json_deterministic(performance_path, performance_payload)
 
     rows = []
     for bucket in sorted(report.ev_by_bucket.keys()):

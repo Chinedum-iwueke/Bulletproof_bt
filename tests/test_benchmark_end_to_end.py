@@ -149,7 +149,7 @@ def test_benchmark_enabled_writes_all_artifacts(tmp_path: Path) -> None:
     assert benchmark_metrics["n_points"] == 3
 
     comparison_summary = json.loads(comparison_summary_path.read_text(encoding="utf-8"))
-    assert set(comparison_summary.keys()) == {"strategy", "benchmark", "delta"}
+    assert set(comparison_summary.keys()) == {"strategy", "benchmark", "delta", "schema_version"}
     assert comparison_summary["benchmark"]["total_return"] == pytest.approx(
         benchmark_metrics["total_return"]
     )
