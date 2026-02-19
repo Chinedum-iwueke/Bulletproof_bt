@@ -1,84 +1,117 @@
 # Dataset Contract
 
-## What this contract covers
-This contract defines accepted market-data inputs, validation rules, and dataset-directory behavior for client runs.
+## Stable contract (client-facing)
 
-Implementation: src/bt/data/load_feed.py, src/bt/data/dataset.py, src/bt/data/symbol_source.py, src/bt/data/validation.py
+### Supported input modes
+1. **Single file** (`.csv` or `.parquet`): loaded as in-memory dataframe feed.
+2. **Dataset directory** (`manifest.yaml` + per-symbol parquet files): loaded as streaming feed.
 
-## V1 support
-- Input forms:
-  - Single file (`.csv` or `.parquet`).
-  - Dataset directory containing `manifest.yaml`.
-- Dataset manifest schemas:
-  - Strict v1 schema (`version: 1`, `format: parquet`, `files: ...`).
-  - Legacy schema (`format: per_symbol_parquet`, `symbols`, `path: "{symbol}..."`).
+**Single-file vs dataset-dir difference:** dataset directories default to `data.mode=streaming`; single files default to `data.mode=dataframe` (and `streaming` is currently coerced back to dataframe for single files).  
+Repo Evidence: `src/bt/data/load_feed.py::load_feed`, `src/bt/data/load_feed.py::_resolve_mode`.
 
-Implementation: src/bt/data/load_feed.py, src/bt/data/dataset.py
+### Manifest schemas accepted for dataset directories
+- **Strict v1 manifest**
+  - Required: `version: 1`, `format: parquet`, `files`.
+  - `files` supports either:
+    - list of strings (path-only; internal synthetic symbols are assigned), or
+    - list of objects `{symbol, path}`.
+- **Legacy manifest**
+  - Required: `format: per_symbol_parquet`, `symbols`, `path`.
+  - `path` must include `{symbol}`.
 
-## Inputs and guarantees
-- `ts` must be timezone-aware UTC.
-- Per-symbol timestamps must be strictly increasing (no duplicates, no non-monotonic rows).
-- OHLC sanity must hold: `low <= min(open, close)`, `high >= max(open, close)`, `high >= low`.
-- `volume >= 0`.
-- Gaps are preserved; missing bars are not synthesized or interpolated.
-- Dataset directory scope knobs supported:
-  - `data.symbols_subset` (canonical)
-  - `data.symbols` (alias of `data.symbols_subset`; setting both with different values is an error)
-  - `data.max_symbols`
-  - `data.date_range` (start inclusive, end exclusive)
-  - `data.row_limit_per_symbol`
-  - `data.chunksize` (performance-only)
+Repo Evidence: `src/bt/data/dataset.py::_normalize_v1_manifest`, `src/bt/data/dataset.py::_normalize_legacy_manifest`.
 
-Implementation: src/bt/data/symbol_source.py, src/bt/data/stream_feed.py, src/bt/data/config_utils.py, src/bt/logging/trades.py
+### Universe scoping rules (dataset-dir)
+Precedence and behavior:
+1. `data.symbols_subset` (canonical list)
+2. `data.symbols` (alias; used when `symbols_subset` absent)
+3. If both present and differ -> error
+4. `data.max_symbols` applies after symbol list selection (caps first N symbols)
+5. If no symbol scope keys -> full manifest universe
 
-## Rejections and failure modes
-- Invalid/missing manifest, invalid YAML, unsupported schema, unknown symbols in subset, missing referenced files.
-- Non-UTC timestamps, non-monotonic timestamps, invalid OHLC, negative volume.
-- Invalid streaming knobs (for example non-positive `chunksize` or `row_limit_per_symbol`).
-- Dataset directory in `dataframe` mode is rejected.
+Repo Evidence: `src/bt/data/dataset.py::_apply_optional_filters`, `src/bt/core/config_resolver.py::_resolve_data_symbols_alias`.
 
-Implementation: src/bt/data/dataset.py, src/bt/data/symbol_source.py, src/bt/data/stream_feed.py, src/bt/data/load_feed.py
+### Gap policy
+- Missing bars are **not interpolated**.
+- Streaming tick output is a dictionary for the current timestamp; symbols with no bar at that timestamp are simply absent from that dict.
 
-## Artifacts and where to look
-- `data_scope.json` is written only when scope-reducing knobs are used.
-- Includes requested scope plus effective symbols when dataset-dir inputs are used.
+Repo Evidence: `src/bt/data/resample.py` module docstring, `src/bt/data/stream_feed.py::StreamingHistoricalDataFeed.next`, `src/bt/portfolio/portfolio.py::mark_to_market`.
 
-Implementation: src/bt/logging/trades.py
+### Timestamp/ordering requirements
+- Timestamps must be timezone-aware UTC.
+- Per-symbol timestamps must be strictly increasing.
+- Duplicate `(symbol, ts)` rows are rejected.
 
-## Examples
-Single-file run (CSV):
+Repo Evidence: `src/bt/data/symbol_source.py::_parse_ts_utc`, `src/bt/data/symbol_source.py::_validate_row`, `src/bt/data/validation.py::validate_bars_df`.
 
+### HTF strictness behavior
+- HTF resampling strict mode (`strict=True`) drops incomplete buckets.
+- Incomplete = minute gaps inside bucket or wrong bar count vs expected timeframe bars.
+
+Repo Evidence: `src/bt/data/resample.py::TimeframeResampler._finalize`, `src/bt/data/resample.py::TimeframeResampler.update`.
+
+### Streaming knobs
+- `data.date_range` (`start` inclusive, `end` exclusive)
+- `data.row_limit_per_symbol`
+- `data.chunksize`
+
+`data_scope.json` is written only when scope-reducing knobs are active (`symbols_subset/symbols`, `max_symbols`, `date_range`, `row_limit_per_symbol`). `chunksize` is performance-only and does not trigger `data_scope.json`.
+
+Repo Evidence: `src/bt/data/symbol_source.py::_validate_row`, `src/bt/data/stream_feed.py::StreamingHistoricalDataFeed.reset`, `src/bt/logging/trades.py::write_data_scope`.
+
+## Copy/paste YAML examples
+
+### BTC-only subset
 ```yaml
-# run: python scripts/run_backtest.py --data data/curated/sample.csv --config configs/engine.yaml
+data:
+  mode: streaming
+  symbols_subset: [BTCUSDT]
 ```
 
-Dataset-dir run (strict v1 manifest):
-
+### Basket subset
 ```yaml
-# dataset_dir/manifest.yaml
-version: 1
-format: parquet
-files:
-  - symbol: BTCUSDT
-    path: symbols/BTCUSDT.parquet
-  - symbol: ETHUSDT
-    path: symbols/ETHUSDT.parquet
+data:
+  mode: streaming
+  symbols_subset: [BTCUSDT, ETHUSDT, SOLUSDT]
 ```
 
-Dataset-dir run (legacy manifest):
-
+### Cap first N symbols
 ```yaml
-# dataset_dir/manifest.yaml
-format: per_symbol_parquet
-symbols: [BTCUSDT, ETHUSDT]
-path: "symbols/{symbol}.parquet"
+data:
+  mode: streaming
+  max_symbols: 20
 ```
 
-## Versioning
-- Contract version: v1.
-- Manifest schema versioning:
-  - Strict schema exposes `version: 1`.
-  - Legacy schema is supported for compatibility.
-- Schema versioning for all dataset-related artifacts is not yet uniformly exposed; treat this doc plus tests as source of truth.
+### Date range
+```yaml
+data:
+  mode: streaming
+  date_range:
+    start: "2024-01-01T00:00:00Z"
+    end: "2024-06-01T00:00:00Z"
+```
 
-Observation points: tests/test_dataset_manifest_normalization.py, tests/test_symbol_source_streaming_validation.py, tests/test_streaming_knobs.py, tests/test_data_scope_artifact.py
+## FAQ / common failure modes
+- **"Dataset directories are not supported in dataframe mode"**  
+  Fix: set `data.mode: streaming` for dataset-dir inputs.  
+  Repo Evidence: `src/bt/data/load_feed.py::load_feed`.
+
+- **"data.symbols and data.symbols_subset both set but differ"**  
+  Fix: keep only one, or make them identical.  
+  Repo Evidence: `src/bt/data/dataset.py::_apply_optional_filters`.
+
+- **"ts must be timezone-aware UTC" / non-monotonic timestamp errors**  
+  Fix: normalize timestamps to UTC and sort per symbol strictly increasing with no duplicates.  
+  Repo Evidence: `src/bt/data/symbol_source.py::_parse_ts_utc`, `src/bt/data/symbol_source.py::_validate_row`.
+
+## Repo Evidence index
+- `src/bt/data/load_feed.py::load_feed`
+- `src/bt/data/dataset.py::load_dataset_manifest`
+- `src/bt/data/dataset.py::_apply_optional_filters`
+- `src/bt/data/stream_feed.py::StreamingHistoricalDataFeed.reset`
+- `src/bt/data/stream_feed.py::StreamingHistoricalDataFeed.next`
+- `src/bt/data/symbol_source.py::SymbolDataSource`
+- `src/bt/data/resample.py::TimeframeResampler`
+- `src/bt/logging/trades.py::write_data_scope`
+- `tests/test_data_symbols_alias_scoping.py`
+- `tests/test_streaming_knobs.py`

@@ -1,61 +1,72 @@
 # Config Layering Contract
 
-## What this contract covers
-This contract defines config merge order, override semantics, and canonical risk/config normalization.
+## Stable contract (client-facing)
 
-Implementation: src/bt/api.py, src/bt/config.py, src/bt/core/config_resolver.py
+### Three config layers
+Runtime stack for `run_backtest`:
+1. `configs/engine.yaml` (or `--config` base file)
+2. Overlay defaults: `configs/fees.yaml`, then `configs/slippage.yaml`
+3. User overrides (`--override`) in provided order
+4. `resolve_config(...)` normalization, then `config_used.yaml` write as resolved truth
 
-## V1 support
-Merge order for backtests:
-1. Base config (`--config`)
-2. `configs/fees.yaml`
-3. `configs/slippage.yaml`
-4. Each `--override` in argument order
+Repo Evidence: `src/bt/api.py::run_backtest`, `src/bt/logging/trades.py::write_config_used`.
 
-Then config is normalized and validated before engine build.
+### Deep merge behavior
+`deep_merge(base, override)` rules:
+- dict + dict => recursive merge
+- scalar/list => override replaces base value
+- merge is deep-copied (no shared references)
 
-Implementation: src/bt/api.py
+Repo Evidence: `src/bt/config.py::deep_merge`, `tests/test_config_deep_merge_overrides.py`.
 
-## Inputs and guarantees
-- Deep-merge semantics:
-  - Mapping + mapping merges recursively.
-  - Scalar/list values are replaced by override value.
-- Canonical defaults and aliases are resolved (for example risk aliases and stop-resolution normalization).
-- Deterministic resolved config behavior for same inputs.
+### Path resolution semantics
+`resolve_paths_relative_to(base_path_dir, override_paths)` currently resolves non-absolute override paths relative to **current working directory** (`Path.cwd()`), not `base_path_dir`.
 
-Implementation: src/bt/config.py, src/bt/core/config_resolver.py
+Repo Evidence: `src/bt/config.py::resolve_paths_relative_to`, `tests/test_config_resolver_dedup.py`.
 
-## Rejections and failure modes
-- Missing/unparseable YAML config files.
-- Conflicting alias values (for example canonical and legacy keys disagreeing).
-- Invalid bounds/types for normalized risk/execution fields.
+### Determinism contract
+For a fixed code version:
+- same dataset
+- same resolved `config_used.yaml`
+- same run path semantics
+=> deterministic outputs expected (excluding run-id/time metadata).
 
-Implementation: src/bt/config.py, src/bt/core/config_resolver.py
+Repo Evidence: `tests/test_config_packs_stop_contract.py::test_configs_resolve_deterministically`, `tests/test_artifact_deterministic_serialization.py`, `tests/test_run_status_execution_metadata.py::test_run_status_execution_metadata_is_deterministic`.
 
-## Artifacts and where to look
-- `config_used.yaml`: effective resolved run config.
-- `run_status.json`: derived execution snapshot and run outcome.
+## Copy/paste examples
 
-Implementation: src/bt/logging/trades.py, src/bt/api.py
-
-## Examples
-Single-file run with one override:
-
+### Override only benchmark symbol
 ```yaml
-# CLI
-# python scripts/run_backtest.py --data data/curated/sample.csv --config configs/engine.yaml --override configs/examples/safe_client.yaml
+benchmark:
+  enabled: true
+  symbol: BTCUSDT
 ```
 
-Dataset-dir run with strict pack:
-
+### Override only subset list
 ```yaml
-# CLI
-# python scripts/run_backtest.py --data <dataset_dir> --config configs/engine.yaml --override configs/examples/strict_research.yaml
+data:
+  symbols_subset: [BTCUSDT, ETHUSDT]
 ```
 
-## Versioning
-- Contract version: v1.
-- Config normalization is code-defined and backward compatibility is maintained via alias handling where implemented.
-- Schema versioning: not yet exposed as a unified config schema field; treat docs/tests as source of truth.
+### Override execution custom fields (must use custom profile)
+```yaml
+execution:
+  profile: custom
+  maker_fee: 0.0
+  taker_fee: 0.001
+  slippage_bps: 2.0
+  spread_bps: 1.0
+  delay_bars: 1
+```
 
-Observation points: tests/test_config_deep_merge_overrides.py, tests/test_config_resolver_dedup.py, tests/test_config_resolver_risk_aliases.py, tests/test_experiment_grid_local_config_overlay.py
+## FAQ / common failure modes
+- **Override file not found**  
+  Check working directory and override path; non-absolute paths are cwd-relative.
+
+- **My partial nested override removed sibling keys**  
+  For dicts it should merge, not replace; verify YAML shape (mapping vs scalar/list).
+
+- **Custom execution values rejected**  
+  Ensure `execution.profile: custom` and all required fields are present.
+
+Repo Evidence: `src/bt/config.py`, `src/bt/execution/profile.py::resolve_execution_profile`.
