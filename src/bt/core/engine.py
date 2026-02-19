@@ -16,6 +16,7 @@ from bt.indicators.vwap import VWAP
 from bt.logging.jsonl import JsonlWriter
 from bt.logging.sanity import SanityCounters
 from bt.logging.trades import TradesCsvWriter
+from bt.portfolio.constants import QTY_EPSILON
 from bt.portfolio.portfolio import Portfolio
 from bt.risk.risk_engine import RiskEngine
 from bt.strategy.base import Strategy
@@ -143,7 +144,7 @@ class BacktestEngine:
     ) -> None:
         liquidation_orders: list[Order] = []
         for symbol, position in self._portfolio.position_book.all_positions().items():
-            if position.side is None or position.qty == 0:
+            if position.side is None or abs(float(position.qty)) < QTY_EPSILON:
                 continue
             if position.side == Side.BUY:
                 close_side = Side.SELL
