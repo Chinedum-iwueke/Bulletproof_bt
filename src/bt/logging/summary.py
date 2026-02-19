@@ -185,6 +185,39 @@ def derive_conclusion(perf: dict[str, Any], comparison: dict[str, Any] | None) -
     return "Conclusion: Inconclusive; inspect trade distribution and stability across parameters."
 
 
+def _parse_stop_contract(run_status: dict[str, Any] | None) -> dict[str, Any] | None:
+    if run_status is None:
+        return None
+    payload = run_status.get("stop_contract")
+    if not isinstance(payload, dict):
+        return None
+    counts = payload.get("counts")
+    if not isinstance(counts, dict):
+        return None
+    return payload
+
+
+def _stop_contract_hint(counts: dict[str, int]) -> str | None:
+    hint_priority: list[tuple[str, str]] = [
+        (
+            "rejected_missing_stop",
+            "Hint: In strict mode, entry signals must provide stop_price or metadata.stop_spec.",
+        ),
+        (
+            "rejected_unresolvable_stop",
+            "Hint: Ensure provided stop_spec is resolvable with current bar/context inputs.",
+        ),
+        (
+            "rejected_invalid_stop_payload",
+            "Hint: Validate stop payload fields/types for stop_price or metadata.stop_spec.",
+        ),
+    ]
+    for key, hint in hint_priority:
+        if counts.get(key, 0) > 0:
+            return hint
+    return None
+
+
 def write_summary_txt(run_dir: Path) -> Path:
     """
     Reads run artifacts and writes summary.txt to run_dir.
@@ -294,6 +327,35 @@ def write_summary_txt(run_dir: Path) -> Path:
             "",
         ]
     )
+
+    stop_contract = _parse_stop_contract(run_status)
+    if stop_contract is not None:
+        raw_counts = stop_contract.get("counts")
+        counts = raw_counts if isinstance(raw_counts, dict) else {}
+        version = _safe_int(stop_contract.get("version"))
+        mode = str(stop_contract.get("mode", "safe"))
+        allow_legacy_proxy = bool(stop_contract.get("allow_legacy_proxy", False))
+        lines.extend(
+            [
+                f"Stop Contract (v{version if version is not None else 1})",
+                f"  mode: {mode}",
+                f"  legacy proxy allowed: {str(allow_legacy_proxy).lower()}",
+                "  resolved: "
+                f"explicit={_safe_int(counts.get('resolved_explicit')) or 0} "
+                f"atr={_safe_int(counts.get('resolved_atr')) or 0} "
+                f"structural={_safe_int(counts.get('resolved_structural')) or 0} "
+                f"hybrid={_safe_int(counts.get('resolved_hybrid')) or 0}",
+                f"  fallback legacy proxy: {_safe_int(counts.get('fallback_legacy_proxy')) or 0}",
+                "  rejected: "
+                f"missing_stop={_safe_int(counts.get('rejected_missing_stop')) or 0} "
+                f"unresolvable={_safe_int(counts.get('rejected_unresolvable_stop')) or 0} "
+                f"invalid_payload={_safe_int(counts.get('rejected_invalid_stop_payload')) or 0}",
+            ]
+        )
+        hint = _stop_contract_hint({k: _safe_int(v) or 0 for k, v in counts.items()})
+        if hint is not None:
+            lines.append(f"  {hint}")
+        lines.append("")
 
     summary_path = run_dir / "summary.txt"
     write_text_deterministic(summary_path, "\n".join(lines))
