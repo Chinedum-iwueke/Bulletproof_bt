@@ -9,6 +9,9 @@ import pandas as pd
 
 from bt.core.enums import OrderType, Side
 from bt.core.types import Bar, OrderIntent, Signal
+from bt.risk.reject_codes import RISK_FALLBACK_LEGACY_PROXY
+from bt.risk.stop_resolver import resolve_stop_from_spec
+from bt.risk.stop_spec import normalize_stop_spec
 from bt.risk.margin_math import compute_snapshot, initial_margin_required
 from bt.risk.spec import parse_risk_spec
 from bt.risk.stop_distance import resolve_stop_distance
@@ -40,21 +43,6 @@ class RiskEngine:
         self._risk_spec = parse_risk_spec(config)
 
     @staticmethod
-    def _extract_stop_price(signal: object) -> float | None:
-        if isinstance(signal, dict):
-            value = signal.get("stop_price")
-            return None if value is None else float(value)
-        value = getattr(signal, "stop_price", None)
-        if value is not None:
-            return float(value)
-        metadata = getattr(signal, "metadata", None)
-        if isinstance(metadata, dict):
-            value = metadata.get("stop_price")
-            if value is not None:
-                return float(value)
-        return None
-
-    @staticmethod
     def _round_qty(qty: float, rounding: str) -> float:
         if rounding == "none":
             return qty
@@ -69,8 +57,172 @@ class RiskEngine:
         # risk.stop_resolution applies only to ENTRY / increase-risk signals.
         # Exit/reduce-risk flows bypass stop resolution entirely.
         risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
-        mode = risk_cfg.get("stop_resolution", "strict") if isinstance(risk_cfg, dict) else "strict"
-        return str(mode)
+        mode = risk_cfg.get("stop_resolution", "safe") if isinstance(risk_cfg, dict) else "safe"
+        normalized = str(mode)
+        if normalized not in {"safe", "strict"}:
+            raise ValueError(
+                "Invalid config: risk.stop_resolution must be one of ['safe', 'strict']. "
+                f"Got risk.stop_resolution={normalized!r}. Example fix:\n"
+                "risk:\n"
+                "  stop_resolution: safe\n"
+                "  allow_legacy_proxy: false"
+            )
+        return normalized
+
+    def _allow_legacy_proxy(self) -> bool:
+        risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
+        allow_legacy = risk_cfg.get("allow_legacy_proxy", False) if isinstance(risk_cfg, dict) else False
+        if not isinstance(allow_legacy, bool):
+            raise ValueError(
+                "Invalid config: risk.allow_legacy_proxy must be a boolean. "
+                f"Got risk.allow_legacy_proxy={allow_legacy!r}. Example fix:\n"
+                "risk:\n"
+                "  stop_resolution: safe\n"
+                "  allow_legacy_proxy: true"
+            )
+        if self._stop_resolution_mode() == "strict" and allow_legacy:
+            raise ValueError(
+                "Invalid config: risk.allow_legacy_proxy=true is not allowed when risk.stop_resolution=strict. "
+                "Example fix:\n"
+                "risk:\n"
+                "  stop_resolution: strict\n"
+                "  allow_legacy_proxy: false"
+            )
+        return allow_legacy
+
+    def _resolve_stop_contract(
+        self,
+        *,
+        signal: Signal,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        bar: Bar,
+        ctx_payload: dict[str, object],
+        equity: float,
+    ) -> tuple[float, dict[str, object]]:
+        stop_resolution_mode = self._stop_resolution_mode()
+        allow_legacy = self._allow_legacy_proxy()
+        stop_spec = normalize_stop_spec(signal, config=self._config)
+
+        risk_amount = equity * self._risk_spec.r_per_trade
+        risk_meta: dict[str, object] = {
+            "risk_amount": risk_amount,
+            "stop_distance": None,
+            "stop_price": None,
+            "stop_source": None,
+            "stop_details": {},
+            "stop_reason_code": None,
+            "stop_contract_version": stop_spec.contract_version if stop_spec is not None else None,
+            "stop_resolution_mode": stop_resolution_mode,
+            "used_legacy_stop_proxy": False,
+            "r_metrics_valid": False,
+        }
+
+        if stop_spec is not None:
+            resolved = resolve_stop_from_spec(
+                stop_spec,
+                symbol=symbol,
+                side=side,
+                entry_price=entry_price,
+                bar=bar,
+                ctx=ctx_payload,
+                config=self._config,
+            )
+            if resolved.stop_distance is None:
+                raise ValueError(
+                    f"{symbol}: StrategyContractError: stop_spec was provided but stop_distance is unresolved for signal_type={signal.signal_type}. "
+                    "Example fix snippet:\n"
+                    "signal:\n"
+                    "  metadata:\n"
+                    "    stop_spec:\n"
+                    "      kind: atr\n"
+                    "      atr_multiple: 2.5"
+                )
+            stop_distance = float(resolved.stop_distance)
+            if stop_distance <= 0:
+                raise ValueError(f"{symbol}: invalid stop_distance computed: {stop_distance}")
+            risk_meta.update(
+                {
+                    "stop_distance": stop_distance,
+                    "stop_price": resolved.stop_price,
+                    "stop_source": resolved.stop_source,
+                    "stop_details": resolved.details or {},
+                    "stop_reason_code": resolved.reason_code,
+                    "used_legacy_stop_proxy": bool(resolved.used_fallback),
+                    "r_metrics_valid": not bool(resolved.used_fallback),
+                }
+            )
+        elif stop_resolution_mode == "strict":
+            raise ValueError(
+                f"{symbol}: StrategyContractError: missing stop for entry sizing in strict mode "
+                f"(risk.stop_resolution={stop_resolution_mode}, signal_type={signal.signal_type}, side={side}). "
+                "Provide a resolvable stop via signal.stop_price or signal.metadata.stop_spec. "
+                "Example fix snippet:\n"
+                "signal:\n"
+                "  stop_price: 123.45\n"
+                "# OR\n"
+                "signal:\n"
+                "  metadata:\n"
+                "    stop_spec: {kind: atr, atr_multiple: 2.5}\n"
+                "# OR, if fallback is truly intended:\n"
+                "risk:\n"
+                "  stop_resolution: safe\n"
+                "  allow_legacy_proxy: true"
+            )
+        elif not allow_legacy:
+            raise ValueError(
+                f"{symbol}: Safe mode is active but legacy proxy fallback is disabled "
+                f"(risk.stop_resolution={stop_resolution_mode}, risk.allow_legacy_proxy={allow_legacy}, signal_type={signal.signal_type}, side={side}). "
+                "Set risk.allow_legacy_proxy: true to allow fallback OR attach stop_spec/stop_price. "
+                "Example fix snippet:\n"
+                "risk:\n"
+                "  stop_resolution: safe\n"
+                "  allow_legacy_proxy: true"
+            )
+        else:
+            legacy_cfg = {"risk": dict(self._config.get("risk", {}))}
+            legacy_stop_cfg = dict(legacy_cfg["risk"].get("stop", {}))
+            legacy_stop_cfg["mode"] = "legacy_proxy"
+            legacy_cfg["risk"]["stop"] = legacy_stop_cfg
+            stop_result = resolve_stop_distance(
+                symbol=symbol,
+                side=side,
+                entry_price=entry_price,
+                signal={},
+                bars_by_symbol={symbol: bar},
+                ctx=ctx_payload,
+                config=legacy_cfg,
+            )
+            stop_distance = float(stop_result.stop_distance)
+            if stop_distance <= 0:
+                raise ValueError(f"{symbol}: invalid stop_distance computed: {stop_distance}")
+            risk_meta.update(
+                {
+                    "stop_distance": stop_distance,
+                    "stop_source": "legacy_high_low_proxy",
+                    "stop_details": stop_result.details,
+                    "stop_reason_code": RISK_FALLBACK_LEGACY_PROXY,
+                    "used_legacy_stop_proxy": True,
+                    "r_metrics_valid": False,
+                }
+            )
+
+        min_stop_distance = self._risk_spec.min_stop_distance
+        stop_distance = float(risk_meta["stop_distance"])
+        if min_stop_distance is not None:
+            stop_distance = max(stop_distance, min_stop_distance)
+            risk_meta["stop_distance"] = stop_distance
+
+        qty = risk_amount / stop_distance
+        risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
+        qty_rounding = "none"
+        if isinstance(risk_cfg, dict):
+            qty_rounding = str(risk_cfg.get("qty_rounding", "none"))
+        qty = self._round_qty(qty, qty_rounding)
+        if not math.isfinite(qty) or qty <= 0:
+            raise ValueError(f"{symbol}: invalid qty computed: {qty}")
+        return qty, risk_meta
 
     def _min_stop_distance_pct(self) -> float:
         risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
@@ -294,9 +446,6 @@ class RiskEngine:
         else:
             return None, "risk_rejected:invalid_side"
 
-        stop_price = self._extract_stop_price(signal)
-        signal_payload: object = signal if stop_price is None else {"stop_price": stop_price}
-        bars_payload: dict[str, object] = {signal.symbol: bar}
         ctx_payload: dict[str, object] = {}
         if isinstance(signal, Signal):
             maybe_ctx = signal.metadata.get("ctx")
@@ -307,61 +456,17 @@ class RiskEngine:
             raise NotImplementedError(f"Unsupported risk mode: {self._risk_spec.mode}")
         stop_resolution_mode = self._stop_resolution_mode()
         try:
-            desired_qty, risk_meta = self.compute_position_size_r(
+            desired_qty, risk_meta = self._resolve_stop_contract(
+                signal=signal,
                 symbol=signal.symbol,
                 side=side,
                 entry_price=bar.close,
-                signal=signal_payload,
-                bars_by_symbol=bars_payload,
-                ctx=ctx_payload,
+                bar=bar,
+                ctx_payload=ctx_payload,
                 equity=equity,
             )
         except ValueError as exc:
-            if "stop distance cannot be resolved" in str(exc):
-                if stop_resolution_mode == "strict":
-                    return (
-                        None,
-                        "risk_rejected:stop_unresolvable:strict"
-                        f":signal_type={signal.signal_type}"
-                        ":hint=ENTRY_requires_explicit_stop_price_or_strategy_must_provide_resolvable_stop_metadata",
-                    )
-                if stop_resolution_mode == "allow_legacy_proxy":
-                    legacy_cfg = {"risk": dict(self._config.get("risk", {}))}
-                    legacy_stop_cfg = dict(legacy_cfg["risk"].get("stop", {}))
-                    legacy_stop_cfg["mode"] = "legacy_proxy"
-                    legacy_cfg["risk"]["stop"] = legacy_stop_cfg
-                    try:
-                        risk_amount = equity * self._risk_spec.r_per_trade
-                        stop_result = resolve_stop_distance(
-                            symbol=signal.symbol,
-                            side=side,
-                            entry_price=bar.close,
-                            signal=signal_payload,
-                            bars_by_symbol=bars_payload,
-                            ctx=ctx_payload,
-                            config=legacy_cfg,
-                        )
-                        stop_distance = float(stop_result.stop_distance)
-                        min_stop_distance = self._risk_spec.min_stop_distance
-                        if min_stop_distance is not None:
-                            stop_distance = max(stop_distance, min_stop_distance)
-                        desired_qty = self._round_qty(risk_amount / stop_distance, str(self._config.get("risk", {}).get("qty_rounding", "none")))
-                        if not math.isfinite(desired_qty) or desired_qty <= 0:
-                            raise ValueError(f"{signal.symbol}: invalid qty computed: {desired_qty}")
-                        risk_meta = {
-                            "risk_amount": risk_amount,
-                            "stop_distance": stop_distance,
-                            "stop_source": "legacy_high_low_proxy",
-                            "stop_details": stop_result.details,
-                            "used_legacy_stop_proxy": True,
-                            "r_metrics_valid": False,
-                        }
-                    except ValueError as legacy_exc:
-                        return None, f"risk_rejected:invalid_stop:{legacy_exc}"
-                else:
-                    return None, f"risk_rejected:invalid_stop_resolution_mode:{stop_resolution_mode}"
-            else:
-                return None, f"risk_rejected:invalid_stop:{exc}"
+            raise ValueError(str(exc)) from exc
 
         risk_meta["r_metrics_valid"] = bool(risk_meta.get("r_metrics_valid", True)) and bool(risk_meta.get("stop_source")) and float(risk_meta.get("stop_distance", 0.0)) > 0
 
@@ -498,6 +603,9 @@ class RiskEngine:
                 "stop_distance": risk_meta["stop_distance"],
                 "stop_source": risk_meta["stop_source"],
                 "stop_details": risk_meta["stop_details"],
+                "stop_reason_code": risk_meta.get("stop_reason_code"),
+                "stop_contract_version": risk_meta.get("stop_contract_version"),
+                "stop_price": risk_meta.get("stop_price"),
                 "r_metrics_valid": risk_meta["r_metrics_valid"],
                 "used_legacy_stop_proxy": bool(risk_meta.get("used_legacy_stop_proxy", False)),
                 "stop_resolution_mode": stop_resolution_mode,
