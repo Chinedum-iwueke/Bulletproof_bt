@@ -60,6 +60,45 @@ execution:
   spread_bps: 1.0
 ```
 
+## Stop Contract (Safe vs Strict)
+
+Strategies should provide stop intent on entry signals via either:
+- `signal.stop_price`, or
+- `signal.metadata.stop_spec`
+
+Use the client-safe pack (fallback explicitly enabled):
+
+```bash
+python scripts/run_backtest.py \
+  --data <PATH> \
+  --config configs/engine.yaml \
+  --override configs/examples/safe_client.yaml
+```
+
+Use the research-strict pack (no fallback/proxy sizing):
+
+```bash
+python scripts/run_backtest.py \
+  --data <PATH> \
+  --config configs/engine.yaml \
+  --override configs/examples/strict_research.yaml
+```
+
+Minimal `stop_spec` example in strategy code:
+
+```python
+signal = Signal(
+    ts=ts,
+    symbol=symbol,
+    side=Side.BUY,
+    signal_type="entry",
+    confidence=1.0,
+    metadata={
+        "stop_spec": {"contract_version": 1, "kind": "atr", "atr_multiple": 2.0}
+    },
+)
+```
+
 ## Public API
 
 ```python

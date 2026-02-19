@@ -1,0 +1,7 @@
+# Strict research pack: no proxy sizing, strategy contract must be honored.
+risk:
+  stop_resolution: strict
+  allow_legacy_proxy: false
+
+  # In strict mode, strategies must emit signal.stop_price or signal.metadata.stop_spec.
+  stop: {}
