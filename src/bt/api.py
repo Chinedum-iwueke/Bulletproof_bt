@@ -276,6 +276,7 @@ def run_backtest(
                 "run_id": resolved_run_name,
                 **execution_snapshot,
             },
+            config=config,
         )
     except Exception as exc:
         status_payload = {
@@ -293,6 +294,7 @@ def run_backtest(
         _write_run_status(
             run_dir,
             status_payload,
+            config=config,
         )
         raise
     finally:

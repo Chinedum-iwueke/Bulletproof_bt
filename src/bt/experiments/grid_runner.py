@@ -24,6 +24,7 @@ from bt.risk.stop_resolution import (
     STOP_RESOLUTION_LEGACY_HIGH_LOW_PROXY,
     STOP_RESOLUTION_UNRESOLVED,
 )
+from bt.risk.stop_contract_reporting import build_stop_contract_report
 
 from bt.benchmark.compare import compare_strategy_vs_benchmark
 from bt.benchmark.metrics import compute_benchmark_metrics
@@ -131,7 +132,7 @@ def _collect_run_stop_resolution(run_dir: Path) -> tuple[str, bool, bool, list[s
     return stop_resolution, used_legacy_stop_proxy, r_metrics_valid, notes, counts
 
 
-def _write_run_status(run_dir: Path, status_payload: dict[str, Any]) -> None:
+def _write_run_status(run_dir: Path, status_payload: dict[str, Any], *, config: dict[str, Any] | None = None) -> None:
     path = run_dir / "run_status.json"
     existing_notes: list[str] = []
     if path.exists():
@@ -157,6 +158,16 @@ def _write_run_status(run_dir: Path, status_payload: dict[str, Any]) -> None:
     payload["r_metrics_valid"] = r_metrics_valid
     payload["notes"] = merged_notes
     payload["stop_resolution_counts"] = stop_resolution_counts
+    if config is not None:
+        stop_contract = build_stop_contract_report(config=config, decisions_path=run_dir / "decisions.jsonl")
+        if stop_contract is not None:
+            payload["stop_contract"] = {
+                "version": stop_contract.version,
+                "mode": stop_contract.mode,
+                "allow_legacy_proxy": stop_contract.allow_legacy_proxy,
+                "counts": stop_contract.counts,
+                "notes": stop_contract.notes,
+            }
 
     write_json_deterministic(path, to_jsonable(payload))
 
@@ -399,7 +410,7 @@ def run_grid(
                 "run_id": run_name,
                 **execution_snapshot,
             }
-            _write_run_status(run_dir, status_payload)
+            _write_run_status(run_dir, status_payload, config=run_cfg)
 
             summary_rows.append(_build_summary_row(run_name, params, perf_payload, status="PASS"))
         except Exception as exc:
@@ -424,7 +435,7 @@ def run_grid(
                 "intrabar_mode": intrabar_mode,
                 **fail_execution_payload,
             }
-            _write_run_status(run_dir, status_payload)
+            _write_run_status(run_dir, status_payload, config=merged_cfg)
 
             summary_rows.append(
                 _build_summary_row(
