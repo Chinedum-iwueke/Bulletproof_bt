@@ -1,68 +1,113 @@
 # Execution Model Contract
 
-## What this contract covers
-This contract defines how orders are processed into fills, what execution profiles are supported, and what clients can rely on in v1.
+## Stable contract (client-facing)
 
-Implementation: src/bt/execution/execution_model.py, src/bt/execution/profile.py, src/bt/execution/effective.py
+### Order support matrix (v1)
+| Order type | Support |
+| --- | --- |
+| `MARKET` | ✅ supported |
+| `LIMIT` | ❌ defined in enums, but execution rejects non-market orders in v1 |
 
-## V1 support
-- `OrderType.MARKET` is supported.
-- `OrderType.LIMIT` is defined but rejected by execution processing.
-- Execution profiles:
-  - `tier1`
-  - `tier2` (default)
-  - `tier3`
-  - `custom` (all override keys required)
+Repo Evidence: `src/bt/core/enums.py::OrderType`, `src/bt/execution/execution_model.py::ExecutionModel.process`.
 
-Implementation: src/bt/execution/execution_model.py, src/bt/execution/profile.py, src/bt/core/enums.py
+### Fill timing semantics
+- `delay_bars` means an order waits that many bars before it becomes fill-eligible.
+- Delay countdown is tracked in order metadata (`delay_remaining`).
 
-## Inputs and guarantees
-- Deterministic profile resolution from config.
-- Delay handling via `delay_bars`.
-- Fill pricing applies, in order:
-  1. Intrabar market fill model.
-  2. Spread adjustment.
-  3. Slippage adjustment.
-  4. Fee computation on notional.
-- Effective execution metadata is written into run status.
+Repo Evidence: `src/bt/execution/execution_model.py::ExecutionModel.process`.
 
-Implementation: src/bt/execution/execution_model.py, src/bt/execution/profile.py, src/bt/execution/effective.py, src/bt/experiments/grid_runner.py
+### Intrabar mode options
+- `worst_case`:
+  - BUY fills at bar high
+  - SELL fills at bar low
+- `best_case`:
+  - BUY fills at bar low
+  - SELL fills at bar high
+- `midpoint`: fills at `(high + low)/2`
 
-## Rejections and failure modes
-- Non-market orders: `NotImplementedError("Only MARKET orders are supported in v1.")`.
-- Invalid `execution.profile` values or forbidden profile overrides.
-- Invalid `custom` profile payload (missing required fields).
+Default intrabar mode is `worst_case` when unset.
 
-Implementation: src/bt/execution/execution_model.py, src/bt/execution/profile.py
+Repo Evidence: `src/bt/execution/intrabar.py::parse_intrabar_spec`, `src/bt/execution/intrabar.py::market_fill_price`.
 
-## Artifacts and where to look
-- `run_status.json` contains effective execution snapshot keys (`execution_profile`, fees/slippage/spread/delay, intrabar mode).
+### Cost model pipeline (execution order)
+1. Intrabar raw market fill price
+2. Spread application (`apply_spread`)
+3. Slippage application (`estimate_slippage`)
+4. Fee application on final notional (`fee_for_notional`)
 
-Implementation: src/bt/execution/effective.py, src/bt/api.py, src/bt/experiments/grid_runner.py
+Repo Evidence: `src/bt/execution/execution_model.py::ExecutionModel.process`, `src/bt/execution/spread.py::apply_spread`, `src/bt/execution/slippage.py::SlippageModel.estimate_slippage`, `src/bt/execution/fees.py::FeeModel.fee_for_notional`.
 
-## Examples
-Tier preset:
+## Execution tiers and override policy
 
+### Tier reference table (exact preset values)
+| Profile name | Intended use case / realism | maker_fee | taker_fee | slippage_bps | spread_bps | delay_bars | intrabar default influenced by tier? | Override policy |
+| --- | --- | ---:| ---:| ---:| ---:| ---:| --- | --- |
+| tier1 | optimistic / low-friction | 0.0 | 0.0004 | 0.5 | 0.0 | 0 | No (intrabar remains independent, default worst_case) | Preset fields locked |
+| tier2 (default) | baseline realistic default | 0.0 | 0.0006 | 2.0 | 1.0 | 1 | No | Preset fields locked |
+| tier3 | conservative / higher friction | 0.0 | 0.0008 | 5.0 | 3.0 | 1 | No | Preset fields locked |
+| custom | explicit user assumptions | required explicit | required explicit | required explicit | required explicit | required explicit | No | Only profile that allows these fields |
+
+Repo Evidence: `src/bt/execution/profile.py::_BUILTIN_PROFILES`, `src/bt/execution/profile.py::resolve_execution_profile`, `tests/test_execution_profile_resolution.py::test_builtin_profile_values_exact`.
+
+### Preset override rule
+- `tier1|tier2|tier3` reject explicit overrides for:
+  - `maker_fee`, `taker_fee`, `slippage_bps`, `delay_bars`, `spread_bps`
+- `custom` requires **all** those fields.
+
+Typical client error:
+- `execution.profile=tier2 forbids overrides. Remove override keys or set execution.profile=custom...`
+
+Repo Evidence: `src/bt/execution/profile.py::_PROFILE_OVERRIDE_FIELDS`, `src/bt/execution/profile.py::resolve_execution_profile`, `tests/test_execution_profile_override_policy.py`.
+
+### “What’s in my tier?” verification
+- Check `run_status.json`:
+  - `execution_profile`
+  - `effective_execution` snapshot (`maker_fee`, `taker_fee`, `slippage_bps`, `delay_bars`, `spread_bps`)
+- Check `config_used.yaml` for resolved config inputs.
+
+Repo Evidence: `src/bt/execution/effective.py::build_effective_execution_snapshot`, `src/bt/api.py::run_backtest`, `src/bt/experiments/grid_runner.py` status payload creation.
+
+## Copy/paste config examples
+
+### Preset tier2
 ```yaml
 execution:
   profile: tier2
+  spread_mode: none
+  intrabar_mode: worst_case
 ```
 
-Custom profile:
-
+### Custom execution assumptions
 ```yaml
 execution:
   profile: custom
   maker_fee: 0.0
-  taker_fee: 0.001
-  slippage_bps: 2.0
+  taker_fee: 0.0010
+  slippage_bps: 3.0
+  spread_bps: 1.5
   delay_bars: 1
-  spread_bps: 1.0
+  spread_mode: fixed_bps
+  intrabar_mode: midpoint
 ```
 
-## Versioning
-- Contract version: v1.
-- Execution profile schema is config-driven and additive changes should be backward compatible.
-- Schema versioning: not yet exposed as a dedicated execution schema field; treat docs and tests as source of truth.
+## FAQ / common failure modes
+- **Why am I getting “tier forbids overrides”?**  
+  Because preset tiers lock execution fields. Move to `execution.profile: custom` if you need explicit values.
 
-Observation points: tests/test_execution_model.py, tests/test_execution_profile_resolution.py, tests/test_execution_profile_override_policy.py, tests/test_run_status_execution_metadata.py
+- **Why does `spread_bps` still error even if `spread_mode: none`?**  
+  The profile resolver checks override fields independent of spread mode for preset tiers; preset tier + explicit `spread_bps` is still forbidden.
+
+- **How do I intentionally override?**  
+  Set `execution.profile: custom` and provide all required override fields.
+
+Repo Evidence: `src/bt/execution/profile.py::resolve_execution_profile`, `src/bt/core/config_resolver.py::resolve_config`.
+
+## Repo Evidence index
+- `src/bt/execution/profile.py::resolve_execution_profile`
+- `src/bt/execution/profile.py::_BUILTIN_PROFILES`
+- `src/bt/execution/execution_model.py::ExecutionModel.process`
+- `src/bt/execution/intrabar.py`
+- `src/bt/execution/spread.py`
+- `src/bt/execution/slippage.py`
+- `src/bt/execution/fees.py`
+- `src/bt/execution/effective.py::build_effective_execution_snapshot`

@@ -1,65 +1,42 @@
 # Beginner vs Pro Contract
 
-## What this contract covers
-This contract explains supported client usage tiers using current built-in config packs and execution profiles.
+## Stable contract (client-facing)
 
-Implementation: configs/examples/safe_client.yaml, configs/examples/strict_research.yaml, src/bt/execution/profile.py
+### What “safe” vs “strict” means
+- **safe** (`risk.stop_resolution: safe`): unresolved stops may fall back only if `risk.allow_legacy_proxy: true`.
+- **strict** (`risk.stop_resolution: strict`): unresolved stop contract is rejected; legacy proxy fallback is disallowed.
 
-## V1 support
-Beginner-safe path:
-- `execution.profile: tier2` (default if unset)
-- `risk.stop_resolution: safe`
-- `risk.allow_legacy_proxy: true` via `configs/examples/safe_client.yaml`
+Repo Evidence: `src/bt/core/config_resolver.py::resolve_config`, `src/bt/risk/reject_codes.py`, `tests/test_stop_resolution_enforcement_modes.py`.
 
-Pro/research path:
-- explicit execution tier (`tier1`/`tier2`/`tier3`/`custom`)
-- `risk.stop_resolution: strict`
-- `risk.allow_legacy_proxy: false` via `configs/examples/strict_research.yaml`
+### Execution profile posture by audience
+- Beginner default: preset `tier2` (no execution field overrides)
+- Pro/research: choose `tier1|tier2|tier3` presets or explicit `custom`
 
-Implementation: src/bt/execution/profile.py, src/bt/core/config_resolver.py, configs/examples/safe_client.yaml, configs/examples/strict_research.yaml
+Repo Evidence: `src/bt/execution/profile.py::_BUILTIN_PROFILES`, `src/bt/execution/profile.py::resolve_execution_profile`.
 
-## Inputs and guarantees
-| Area | Beginner (safe) | Pro (strict) |
-| --- | --- | --- |
-| Stop fallback | Allowed | Rejected |
-| Missing stop handling | May use legacy proxy fallback | Entry rejected |
-| Execution overrides | Use profile presets | Preset or fully specified `custom` |
-| Determinism | Same data + same config => same outputs | Same data + same config => same outputs |
+### Reference config packs
+- `configs/examples/safe_client.yaml`
+- `configs/examples/strict_research.yaml`
 
-Implementation: src/bt/risk/stop_resolver.py, src/bt/execution/profile.py, tests/test_stage_f_presentation_contract.py
+Repo Evidence: `configs/examples/safe_client.yaml`, `configs/examples/strict_research.yaml`, `tests/test_config_packs_stop_contract.py`.
 
-## Rejections and failure modes
-- Strict mode rejects incompatible config (`allow_legacy_proxy=true`).
-- Strict mode rejects unresolved/missing stop intent on entries.
-- Custom execution profile rejects missing override fields.
+## Safe → strict migration checklist
+1. Move to `risk.stop_resolution: strict`.
+2. Set `risk.allow_legacy_proxy: false`.
+3. Ensure strategy emits resolvable stop inputs (explicit stop price or stop spec).
+4. Run and inspect `run_status.json.stop_resolution` and decision reasons for rejects.
+5. Keep execution profile preset unless you intentionally need `custom` values.
 
-Implementation: src/bt/core/config_resolver.py, src/bt/risk/risk_engine.py, src/bt/execution/profile.py
+Repo Evidence: `src/bt/core/config_resolver.py`, `src/bt/experiments/grid_runner.py::_write_run_status`, `tests/test_stop_unresolvable_rejected.py`.
 
-## Artifacts and where to look
-- `run_status.json` for stop/execution metadata and PASS/FAIL.
-- `decisions.jsonl` for per-intent reasons and fallback evidence.
-- `performance.json` for final metrics.
+## FAQ / common failure modes
+- **Strict config rejected because `allow_legacy_proxy=true`**  
+  That combination is invalid by contract; set it to `false` for strict mode.
 
-Implementation: src/bt/api.py, src/bt/experiments/grid_runner.py
+- **Strategy works in safe mode but fails in strict mode**  
+  Safe mode can allow fallback; strict mode requires explicit stop-contract compliance.
 
-## Examples
-Beginner-safe run:
+- **Can I stay safe mode but use tier3 execution?**  
+  Yes; risk stop mode and execution profile are independent controls.
 
-```yaml
-# CLI
-# python scripts/run_backtest.py --data <PATH> --config configs/engine.yaml --override configs/examples/safe_client.yaml
-```
-
-Pro-strict run:
-
-```yaml
-# CLI
-# python scripts/run_backtest.py --data <PATH> --config configs/engine.yaml --override configs/examples/strict_research.yaml
-```
-
-## Versioning
-- Contract version: v1.
-- Safe/strict packs are concrete config files in-repo and versioned by Git history.
-- Schema versioning: not yet exposed for this tiering model; treat docs and tests as source of truth.
-
-Observation points: tests/test_config_packs_stop_contract.py, tests/test_stop_resolution_enforcement_modes.py, tests/test_stage_f_presentation_contract.py
+Repo Evidence: `src/bt/core/config_resolver.py`, `src/bt/execution/profile.py`, `tests/test_config_packs_stop_contract.py`.
