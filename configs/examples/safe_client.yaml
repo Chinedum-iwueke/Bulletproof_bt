@@ -1,0 +1,13 @@
+# Safe client pack: permissive mode for first-run usability.
+risk:
+  # Keep contract in safe mode and allow explicit fallback to legacy proxy sizing.
+  stop_resolution: safe
+  allow_legacy_proxy: true
+
+  # Conservative guardrails for client environments.
+  max_notional_pct_equity: 0.5
+  min_stop_distance_pct: 0.002
+
+  stop:
+    # Explicitly set legacy fallback mode for strategies that do not emit stop data.
+    mode: legacy_proxy
