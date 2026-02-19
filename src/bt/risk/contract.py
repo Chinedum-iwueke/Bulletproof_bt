@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from bt.core.errors import StrategyContractError as StrategyContractErrorBase
+
 
 @dataclass(frozen=True)
 class StopSpec:
@@ -45,5 +47,5 @@ class StopResolutionResult:
     details: dict[str, Any] | None = None
 
 
-class StrategyContractError(ValueError):
+class StrategyContractError(StrategyContractErrorBase):
     """Raised when a strategy violates a required contract (used for config/schema-level issues)."""

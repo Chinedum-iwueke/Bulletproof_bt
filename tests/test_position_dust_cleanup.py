@@ -120,7 +120,7 @@ def test_end_of_run_liquidation_skips_dust_positions(tmp_path: Path, monkeypatch
         ts=pd.Timestamp("2024-01-01T00:00:00Z"),
         bars_by_symbol={},
         writer=writer,
-        liquidation_reason="end_of_run",
+        liquidation_reason="liquidation:end_of_run",
     )
 
     assert buffer.getvalue() == ""

@@ -6,6 +6,7 @@ import csv
 from typing import Any, Mapping
 
 from bt.core.enums import OrderState, OrderType, Side
+from bt.core.reason_codes import FORCED_LIQUIDATION_END_OF_RUN, FORCED_LIQUIDATION_MARGIN
 from bt.core.types import Order
 from bt.data.feed import HistoricalDataFeed
 from bt.execution.execution_model import ExecutionModel
@@ -404,7 +405,7 @@ class BacktestEngine:
                         ts=ts,
                         bars_by_symbol=bars_by_symbol,
                         writer=writer,
-                        liquidation_reason="negative_free_margin",
+                        liquidation_reason=FORCED_LIQUIDATION_MARGIN,
                     )
                     forced_liquidated = True
 
@@ -430,7 +431,7 @@ class BacktestEngine:
                     ts=last_ts,
                     bars_by_symbol=last_bars_by_symbol,
                     writer=writer,
-                    liquidation_reason="end_of_run",
+                    liquidation_reason=FORCED_LIQUIDATION_END_OF_RUN,
                 )
                 handle.flush()
 

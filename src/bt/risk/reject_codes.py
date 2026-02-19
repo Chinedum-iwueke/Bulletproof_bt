@@ -1,5 +1,14 @@
 """Stable reason-code taxonomy for risk rejections and fallback outcomes."""
 
+from bt.core.reason_codes import (
+    RISK_REJECT_INSUFFICIENT_MARGIN as _rc_insufficient_margin,
+    RISK_REJECT_MAX_POSITIONS as _rc_max_positions,
+    RISK_REJECT_MIN_STOP_DISTANCE as _rc_min_stop_distance,
+    RISK_REJECT_NOTIONAL_CAP as _rc_notional_cap,
+    RISK_REJECT_STOP_UNRESOLVABLE as _rc_stop_unresolvable,
+    RISK_SCALED_BY_MARGIN as _rc_scaled_by_margin,
+)
+
 # Stop/contract
 STOP_UNRESOLVABLE_STRICT = "risk_rejected:stop_unresolvable:strict"
 STOP_UNRESOLVABLE_SAFE_NO_PROXY = "risk_rejected:stop_unresolvable:safe_no_proxy"
@@ -53,6 +62,12 @@ _ALL_CODES = {
     RISK_APPROVED_CLOSE_ONLY,
     RISK_REJECT_ATR_NOT_READY,
     RISK_REJECT_INVALID_STOP_DISTANCE,
+    _rc_insufficient_margin,
+    _rc_max_positions,
+    _rc_notional_cap,
+    _rc_stop_unresolvable,
+    _rc_min_stop_distance,
+    _rc_scaled_by_margin,
 }
 
 

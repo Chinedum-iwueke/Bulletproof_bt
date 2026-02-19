@@ -119,7 +119,7 @@ def test_engine_forced_liquidation_at_end_of_run(tmp_path: Path) -> None:
         and row["metadata"].get("forced_liquidation") is True
         and row["metadata"].get("close_only") is True
         and row["metadata"].get("reason") == "forced_liquidation"
-        and row["metadata"].get("liquidation_reason") == "end_of_run"
+        and row["metadata"].get("liquidation_reason") == "liquidation:end_of_run"
         for row in fill_rows
     )
 
@@ -203,7 +203,7 @@ def test_engine_forced_liquidation_on_negative_free_margin(tmp_path: Path) -> No
         isinstance(row.get("metadata"), dict)
         and row["metadata"].get("forced_liquidation") is True
         and row["metadata"].get("exit_reason") == "forced_liquidation"
-        and row["metadata"].get("liquidation_reason") == "negative_free_margin"
+        and row["metadata"].get("liquidation_reason") == "liquidation:negative_free_margin"
         for row in fill_rows
     )
 
@@ -261,7 +261,7 @@ def test_engine_strict_mode_prevents_negative_free_margin_forced_liquidation(tmp
     assert not any(
         isinstance(row.get("metadata"), dict)
         and row["metadata"].get("forced_liquidation") is True
-        and row["metadata"].get("liquidation_reason") == "negative_free_margin"
+        and row["metadata"].get("liquidation_reason") == "liquidation:negative_free_margin"
         for row in fill_rows
     )
     entry = next(row for row in fill_rows if not row["metadata"].get("close_only"))
