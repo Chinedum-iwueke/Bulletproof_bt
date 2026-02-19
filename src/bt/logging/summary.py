@@ -75,7 +75,9 @@ def _read_trades_stats(run_dir: Path) -> tuple[int, int | None, float | None]:
 
             for row in reader:
                 trade_count += 1
-                pnl_value = _to_float(row.get("pnl"))
+                pnl_value = _to_float(row.get("pnl_net"))
+                if pnl_value is None:
+                    pnl_value = _to_float(row.get("pnl"))
                 if pnl_value is not None and pnl_value < 0:
                     current_loss_streak += 1
                     longest_loss_streak = max(longest_loss_streak, current_loss_streak)
@@ -297,13 +299,13 @@ def write_summary_txt(run_dir: Path) -> Path:
         f"- Max Drawdown Duration: {'None' if max_drawdown_duration is None else max_drawdown_duration}",
         f"- Worst Trade R: {_fmt(worst_trade_r)}",
         "",
-        "COST DRAG",
-        f"- Fee Total: {_fmt(perf.get('fee_total', 0.0))}",
-        f"- Slippage Total: {_fmt(perf.get('slippage_total', 0.0))}",
-        f"- Spread Total: {_fmt(perf.get('spread_total', 0.0))}",
-        f"- Fee Drag %: {_fmt(perf.get('fee_drag_pct', 0.0))}",
-        f"- Slippage Drag %: {_fmt(perf.get('slippage_drag_pct', 0.0))}",
-        f"- Spread Drag %: {_fmt(perf.get('spread_drag_pct', 0.0))}",
+        "COST ATTRIBUTION",
+        f"- Price PnL (from fills): {_fmt(perf.get('gross_pnl', 0.0))}",
+        f"- Fees (explicit cash debits): {_fmt(perf.get('fee_total', 0.0))}",
+        f"- Net PnL (price PnL - fees): {_fmt(perf.get('net_pnl', 0.0))}",
+        f"- Fee Drag % vs Price PnL: {_fmt(perf.get('fee_drag_pct', 0.0))}",
+        f"- Slippage Total (diagnostic, embedded in fills): {_fmt(perf.get('slippage_total', 0.0))}",
+        f"- Spread Total (diagnostic, embedded in fills): {_fmt(perf.get('spread_total', 0.0))}",
         "",
         "BENCHMARK COMPARISON",
     ]

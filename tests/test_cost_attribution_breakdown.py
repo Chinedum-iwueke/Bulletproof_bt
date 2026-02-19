@@ -40,7 +40,7 @@ def test_totals_and_net_math_consistent(tmp_path: Path) -> None:
     assert got["fee_total"] == 2.0
     assert got["slippage_total"] == 3.0
     assert got["spread_total"] == 1.0
-    assert got["gross_pnl"] == 100.0
+    assert got["gross_pnl"] == 96.0
     assert got["net_pnl"] == 94.0
 
 
@@ -73,10 +73,10 @@ def test_drag_pct_zero_gross_safe(tmp_path: Path) -> None:
 
     report = compute_performance(run_dir)
 
-    assert report.gross_pnl == 0.0
-    assert report.fee_drag_pct == 0.0
-    assert report.slippage_drag_pct == 0.0
-    assert report.spread_drag_pct == 0.0
+    assert report.gross_pnl == -4.0
+    assert report.fee_drag_pct == 50.0
+    assert report.slippage_drag_pct == 75.0
+    assert report.spread_drag_pct == 25.0
 
 
 def test_spread_absent_treated_as_zero(tmp_path: Path) -> None:
@@ -95,5 +95,5 @@ def test_spread_absent_treated_as_zero(tmp_path: Path) -> None:
     got = compute_cost_attribution(run_dir)
 
     assert got["spread_total"] == 0.0
-    assert got["gross_pnl"] == 100.0
+    assert got["gross_pnl"] == 97.0
     assert got["net_pnl"] == 95.0

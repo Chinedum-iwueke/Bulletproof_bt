@@ -54,7 +54,7 @@ def test_summary_txt_written_and_contains_sections(tmp_path: Path) -> None:
     content = summary_path.read_text(encoding="utf-8")
     assert "TOP METRICS" in content
     assert "WORST STREAK" in content
-    assert "COST DRAG" in content
+    assert "COST ATTRIBUTION" in content
     assert "MOST IMPORTANT CONCLUSION" in content
 
 

@@ -163,6 +163,9 @@ class TradesCsvWriter:
         "entry_price",
         "exit_price",
         "pnl",
+        "pnl_price",
+        "fees_paid",
+        "pnl_net",
         "fees",
         "slippage",
         "mae_price",
@@ -200,13 +203,17 @@ class TradesCsvWriter:
         risk_amount = metadata.get("risk_amount")
         stop_distance = metadata.get("stop_distance")
 
-        pnl_net = trade.pnl
-        pnl_gross = trade.pnl + trade.fees + trade.slippage
+        pnl_price = trade.pnl
+        fees_paid = trade.fees
+        pnl_net = pnl_price - fees_paid
 
         computed_values: dict[str, Any] = {
+            "pnl_price": pnl_price,
+            "fees_paid": fees_paid,
+            "pnl_net": pnl_net,
             "risk_amount": risk_amount,
             "stop_distance": stop_distance,
-            "r_multiple_gross": compute_r_multiple(pnl_gross, risk_amount),
+            "r_multiple_gross": compute_r_multiple(pnl_price, risk_amount),
             "r_multiple_net": compute_r_multiple(pnl_net, risk_amount),
         }
 

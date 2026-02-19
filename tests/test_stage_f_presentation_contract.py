@@ -221,7 +221,7 @@ def test_summary_contains_sections(tmp_path: Path) -> None:
 
     assert "TOP METRICS" in summary
     assert "WORST STREAK" in summary
-    assert "COST DRAG" in summary
+    assert "COST ATTRIBUTION" in summary
     assert "BENCHMARK COMPARISON" in summary
     assert "MOST IMPORTANT CONCLUSION" in summary
 

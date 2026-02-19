@@ -55,9 +55,10 @@ def test_trades_csv_contains_risk_and_r_multiple_columns(tmp_path: Path) -> None
     assert float(row["risk_amount"]) == 100.0
     assert float(row["stop_distance"]) == 5.0
 
-    pnl_gross = trade.pnl + trade.fees + trade.slippage
-    assert float(row["r_multiple_gross"]) == pnl_gross / 100.0
-    assert float(row["r_multiple_net"]) == trade.pnl / 100.0
+    pnl_price = trade.pnl
+    pnl_net = trade.pnl - trade.fees
+    assert float(row["r_multiple_gross"]) == pnl_price / 100.0
+    assert float(row["r_multiple_net"]) == pnl_net / 100.0
 
 
 def test_trades_csv_legacy_trade_without_risk_metadata(tmp_path: Path) -> None:
