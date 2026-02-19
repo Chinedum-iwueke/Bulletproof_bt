@@ -8,7 +8,8 @@ from bt.api import run_backtest
 from bt.config import load_yaml
 from bt.logging.cli_footer import print_run_footer
 from bt.logging.run_contract import validate_run_artifacts
-from bt.logging.run_manifest import write_artifacts_manifest, write_run_manifest
+from bt.logging.artifacts_manifest import write_artifacts_manifest
+from bt.logging.run_manifest import write_run_manifest
 from bt.logging.summary import write_summary_txt
 
 
