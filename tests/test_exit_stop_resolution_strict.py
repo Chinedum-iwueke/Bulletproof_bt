@@ -56,7 +56,15 @@ def test_exit_signals_do_not_get_stop_rejections_in_strict_mode(tmp_path: Path) 
     strategy_module.STRATEGY_REGISTRY["entry_then_exit_no_stop"] = _EntryThenExitNoStopStrategy
 
     override = {
-        "signal_delay_bars": 0,
+        "execution": {
+            "profile": "custom",
+            "maker_fee": 0.0,
+            "taker_fee": 0.0006,
+            "slippage_bps": 2.0,
+            "delay_bars": 0,
+            "spread_bps": 1.0,
+            "spread_mode": "none",
+        },
         "strategy": {"name": "entry_then_exit_no_stop"},
         "risk": {"mode": "r_fixed", "r_per_trade": 0.01, "stop_resolution": "strict", "allow_legacy_proxy": False, "stop": {}},
     }

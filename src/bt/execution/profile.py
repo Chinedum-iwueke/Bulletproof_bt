@@ -51,6 +51,13 @@ _PROFILE_OVERRIDE_FIELDS: tuple[str, ...] = (
     "spread_bps",
 )
 
+_LEGACY_OVERRIDE_KEYS: tuple[str, ...] = (
+    "maker_fee_bps",
+    "taker_fee_bps",
+    "signal_delay_bars",
+    "fixed_bps",
+)
+
 
 def get_builtin_profile(name: ProfileName) -> ExecutionProfile:
     """Return the built-in profile definition."""
@@ -84,57 +91,16 @@ def _as_non_negative_int(value: Any, *, key: str) -> int:
     return parsed
 
 
-def _resolve_legacy_top_level_profile(root: dict[str, Any]) -> ExecutionProfile | None:
-    legacy_keys_present = any(
-        key in root for key in ("maker_fee_bps", "taker_fee_bps", "signal_delay_bars", "fixed_bps")
-    )
-    if not legacy_keys_present:
-        return None
-
-    base = get_builtin_profile("tier2")
-    maker_fee = base.maker_fee
-    taker_fee = base.taker_fee
-    delay_bars = base.delay_bars
-    slippage_bps = base.slippage_bps
-
-    if "maker_fee_bps" in root:
-        maker_fee = _as_float(root.get("maker_fee_bps"), key="maker_fee_bps") / 1e4
-    if "taker_fee_bps" in root:
-        taker_fee = _as_float(root.get("taker_fee_bps"), key="taker_fee_bps") / 1e4
-    if "signal_delay_bars" in root:
-        delay_bars = _as_non_negative_int(root.get("signal_delay_bars"), key="signal_delay_bars")
-    if "fixed_bps" in root:
-        slippage_bps = _as_float(root.get("fixed_bps"), key="fixed_bps")
-
-    return ExecutionProfile(
-        name="custom",
-        maker_fee=maker_fee,
-        taker_fee=taker_fee,
-        slippage_bps=slippage_bps,
-        delay_bars=delay_bars,
-        spread_bps=base.spread_bps,
-    )
-
-
 def resolve_execution_profile(config: dict[str, Any]) -> ExecutionProfile:
     """Resolve the effective execution profile from config."""
     root = config if isinstance(config, dict) else {}
     execution_cfg_raw = root.get("execution")
-    if execution_cfg_raw is None:
-        legacy_profile = _resolve_legacy_top_level_profile(root)
-        if legacy_profile is not None:
-            return legacy_profile
     if execution_cfg_raw is None:
         execution_cfg: dict[str, Any] = {}
     elif isinstance(execution_cfg_raw, dict):
         execution_cfg = execution_cfg_raw
     else:
         raise ValueError(f"Invalid execution: expected mapping, got {type(execution_cfg_raw).__name__}")
-
-    if "profile" not in execution_cfg:
-        legacy_profile = _resolve_legacy_top_level_profile(root)
-        if legacy_profile is not None:
-            return legacy_profile
 
     raw_profile = execution_cfg.get("profile", "tier2")
     if raw_profile not in {"tier1", "tier2", "tier3", "custom"}:
@@ -144,13 +110,26 @@ def resolve_execution_profile(config: dict[str, Any]) -> ExecutionProfile:
         )
     profile_name: ProfileName = raw_profile
 
+    legacy_keys_present = [key for key in _LEGACY_OVERRIDE_KEYS if key in root]
+    profile_explicitly_set = "profile" in execution_cfg
+    if legacy_keys_present and not profile_explicitly_set and profile_name != "custom":
+        raise ValueError(
+            "Legacy execution override keys detected but execution.profile is not 'custom'. "
+            "Set execution.profile=custom to use override fields. "
+            f"Detected: {', '.join(legacy_keys_present)}"
+        )
+
     if profile_name != "custom":
-        conflicting = [field for field in _PROFILE_OVERRIDE_FIELDS if field in execution_cfg]
+        conflicting = [
+            field
+            for field in _PROFILE_OVERRIDE_FIELDS
+            if field in execution_cfg and execution_cfg.get(field) is not None
+        ]
         if conflicting:
             raise ValueError(
                 f"execution.profile={profile_name} forbids overrides. "
-                "Set execution.profile=custom to specify "
-                "maker_fee/taker_fee/slippage_bps/delay_bars/spread_bps."
+                "Remove override keys or set execution.profile=custom. "
+                f"Offending keys: {', '.join(conflicting)}"
             )
         return get_builtin_profile(profile_name)
 

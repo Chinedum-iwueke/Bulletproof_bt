@@ -188,6 +188,9 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     resolved["strategy"] = strategy_cfg
 
     execution_cfg = _ensure_mapping(resolved.get("execution"), name="execution")
+    # Default execution profile is tier2. We do not implicitly switch to custom
+    # when legacy override keys are present. Users must set profile=custom explicitly.
+    execution_cfg.setdefault("profile", "tier2")
     execution_cfg.setdefault("spread_mode", "none")
 
     resolved["execution"] = execution_cfg

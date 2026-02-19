@@ -1,11 +1,8 @@
 # Default backtest engine config: safe, streaming-first, and overlay-friendly.
-# NOTE: Top-level fee/slippage keys are kept for legacy compatibility.
-signal_delay_bars: 1
+# NOTE: Top-level fee/slippage execution overrides are intentionally omitted.
+# Use execution.profile=custom with execution.* override fields for custom execution behavior.
 initial_cash: 100000.0
 model: fixed_bps
-fixed_bps: 5.0
-maker_fee_bps: 1.0
-taker_fee_bps: 2.0
 
 # Data loading and streaming controls.
 data:
