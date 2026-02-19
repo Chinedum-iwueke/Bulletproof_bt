@@ -69,10 +69,10 @@ def _count_rejections(reason_code: str, counts: dict[str, int]) -> None:
         return
 
     normalized = reason_code.lower()
-    if RISK_REJECT_STOP_MISSING in normalized or "missing stop" in normalized:
+    if RISK_REJECT_STOP_MISSING in normalized or "risk_reject:stop_missing" in normalized or "missing stop" in normalized:
         counts["rejected_missing_stop"] += 1
         return
-    if RISK_REJECT_STOP_UNRESOLVABLE in normalized or "stop_unresolvable" in normalized or "unresolvable stop" in normalized:
+    if RISK_REJECT_STOP_UNRESOLVABLE in normalized or "risk_reject:stop_unresolvable" in normalized or "stop_unresolvable" in normalized or "unresolvable stop" in normalized:
         counts["rejected_unresolvable_stop"] += 1
         return
     if "invalid_stop" in normalized or "invalid stop" in normalized:

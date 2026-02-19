@@ -79,6 +79,6 @@ def test_reservation_blocks_second_signal_same_timestamp(tmp_path: Path) -> None
 
     assert len(approved) == 1
     assert len(rejected) == 1
-    assert rejected[0]["reason"] == "risk_rejected:max_positions"
+    assert rejected[0]["reason"] == "risk_rejected:max_positions_reached"
     assert len(fills) == 2
     assert sum(1 for fill in fills if fill.get("metadata", {}).get("forced_liquidation") is True) == 1

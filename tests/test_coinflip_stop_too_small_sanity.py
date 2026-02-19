@@ -38,12 +38,12 @@ def test_coinflip_run_logs_stop_too_small_rejections_and_sanity_counter(tmp_path
     rejected_stop_small = [
         row
         for row in decisions
-        if row.get("approved") is False and "stop_too_small" in str(row.get("reason"))
+        if row.get("approved") is False and "min_stop_distance_violation" in str(row.get("reason"))
     ]
     assert rejected_stop_small
 
     sanity_path = run_dir / "sanity.json"
     assert sanity_path.exists()
     sanity = json.loads(sanity_path.read_text(encoding="utf-8"))
-    assert int(sanity["rejected_by_reason"].get("stop_too_small", 0)) >= 1
+    assert int(sanity["rejected_by_reason"].get("min_stop_distance_violation", 0)) >= 1
     assert sanity["signals_emitted"] == sanity["signals_approved"] + sanity["signals_rejected"]

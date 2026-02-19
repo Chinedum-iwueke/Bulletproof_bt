@@ -9,7 +9,25 @@ import pandas as pd
 
 from bt.core.enums import OrderType, Side
 from bt.core.types import Bar, OrderIntent, Signal
-from bt.risk.reject_codes import RISK_FALLBACK_LEGACY_PROXY
+from bt.risk.reject_codes import (
+    ALREADY_IN_POSITION,
+    CLOSE_ONLY_NO_POSITION,
+    INSUFFICIENT_FREE_MARGIN,
+    INVALID_FLIP,
+    INVALID_SIDE,
+    MAX_POSITIONS_REACHED,
+    MIN_STOP_DISTANCE_VIOLATION,
+    NO_EQUITY,
+    NO_SIDE,
+    QTY_SIGN_INVARIANT_FAILED,
+    RISK_APPROVED,
+    RISK_APPROVED_CLOSE_ONLY,
+    STOP_FALLBACK_LEGACY_PROXY,
+    STOP_UNRESOLVABLE_SAFE_NO_PROXY,
+    STOP_UNRESOLVABLE_STRICT,
+    SYMBOL_MISMATCH,
+    validate_known,
+)
 from bt.risk.stop_resolver import resolve_stop_from_spec
 from bt.risk.stop_spec import normalize_stop_spec
 from bt.risk.margin_math import compute_snapshot, initial_margin_required
@@ -154,8 +172,9 @@ class RiskEngine:
                 }
             )
         elif stop_resolution_mode == "strict":
+            validate_known(STOP_UNRESOLVABLE_STRICT)
             raise ValueError(
-                f"{symbol}: StrategyContractError: missing stop for entry sizing in strict mode "
+                f"{STOP_UNRESOLVABLE_STRICT}: {symbol}: StrategyContractError: missing stop for entry sizing in strict mode "
                 f"(risk.stop_resolution={stop_resolution_mode}, signal_type={signal.signal_type}, side={side}). "
                 "Provide a resolvable stop via signal.stop_price or signal.metadata.stop_spec. "
                 "Example fix snippet:\n"
@@ -171,8 +190,9 @@ class RiskEngine:
                 "  allow_legacy_proxy: true"
             )
         elif not allow_legacy:
+            validate_known(STOP_UNRESOLVABLE_SAFE_NO_PROXY)
             raise ValueError(
-                f"{symbol}: Safe mode is active but legacy proxy fallback is disabled "
+                f"{STOP_UNRESOLVABLE_SAFE_NO_PROXY}: {symbol}: Safe mode is active but legacy proxy fallback is disabled "
                 f"(risk.stop_resolution={stop_resolution_mode}, risk.allow_legacy_proxy={allow_legacy}, signal_type={signal.signal_type}, side={side}). "
                 "Set risk.allow_legacy_proxy: true to allow fallback OR attach stop_spec/stop_price. "
                 "Example fix snippet:\n"
@@ -202,7 +222,7 @@ class RiskEngine:
                     "stop_distance": stop_distance,
                     "stop_source": "legacy_high_low_proxy",
                     "stop_details": stop_result.details,
-                    "stop_reason_code": RISK_FALLBACK_LEGACY_PROXY,
+                    "stop_reason_code": STOP_FALLBACK_LEGACY_PROXY,
                     "used_legacy_stop_proxy": True,
                     "r_metrics_valid": False,
                 }
@@ -373,18 +393,18 @@ class RiskEngine:
         """
 
         if signal.side is None:
-            return None, "risk_rejected:no_side"
+            return None, NO_SIDE
         if signal.symbol != bar.symbol:
-            return None, "risk_rejected:symbol_mismatch"
+            return None, SYMBOL_MISMATCH
         if open_positions >= self.max_positions and current_qty == 0:
-            return None, "risk_rejected:max_positions"
+            return None, MAX_POSITIONS_REACHED
         if equity <= 0:
-            return None, "risk_rejected:no_equity"
+            return None, NO_EQUITY
         cur_qty = current_qty
         is_exit_signal = self._is_exit_signal(signal)
         close_only = bool(signal.metadata.get("close_only")) or is_exit_signal
         if close_only and cur_qty == 0:
-            return None, "risk_rejected:close_only_no_position"
+            return None, CLOSE_ONLY_NO_POSITION
         cur_side = None
         if cur_qty > 0:
             cur_side = Side.BUY
@@ -400,8 +420,8 @@ class RiskEngine:
                 order_qty=order_qty,
                 close_only=True,
             ):
-                return None, f"risk_rejected:qty_sign_invariant_failed:current_qty={cur_qty}:signal_side={signal.side.value}:flip={cur_qty != 0 and signal.side != cur_side}:order_qty={order_qty}"
-            reason = "risk_approved:close_only"
+                return None, QTY_SIGN_INVARIANT_FAILED
+            reason = RISK_APPROVED_CLOSE_ONLY
             metadata = dict(signal.metadata)
             metadata.update(
                 {
@@ -437,14 +457,14 @@ class RiskEngine:
             return order_intent, reason
 
         if cur_qty != 0 and signal.side == cur_side:
-            return None, "risk_rejected:already_in_position"
+            return None, ALREADY_IN_POSITION
 
         if signal.side == Side.BUY:
             side = "long"
         elif signal.side == Side.SELL:
             side = "short"
         else:
-            return None, "risk_rejected:invalid_side"
+            return None, INVALID_SIDE
 
         ctx_payload: dict[str, object] = {}
         if isinstance(signal, Signal):
@@ -476,7 +496,7 @@ class RiskEngine:
         if bar.close > 0:
             stop_distance_pct = stop_dist / bar.close
             if stop_distance_pct < min_stop_distance_pct:
-                return None, "risk_rejected:stop_too_small"
+                return None, MIN_STOP_DISTANCE_VIOLATION
 
         desired_notional = abs(desired_qty) * bar.close
         cap_applied = False
@@ -506,7 +526,7 @@ class RiskEngine:
             elif signal.side == Side.BUY and cur_qty < 0:
                 order_qty = -cur_qty + desired_qty
             else:
-                return None, "risk_rejected:invalid_flip"
+                return None, INVALID_FLIP
         else:
             order_qty = desired_qty if signal.side == Side.BUY else -desired_qty
 
@@ -517,10 +537,10 @@ class RiskEngine:
             order_qty=order_qty,
             close_only=False,
         ):
-            return None, f"risk_rejected:qty_sign_invariant_failed:current_qty={cur_qty}:signal_side={signal.side.value}:flip={flip}:order_qty={order_qty}"
+            return None, QTY_SIGN_INVARIANT_FAILED
 
         if free_margin <= 0:
-            return None, "risk_rejected:insufficient_free_margin"
+            return None, INSUFFICIENT_FREE_MARGIN
 
         mark_price_used_for_margin = bar.close
         if signal.side == Side.BUY:
@@ -563,17 +583,17 @@ class RiskEngine:
             )
             max_affordable_notional = max_total_required / max(total_required_per_notional, self.eps)
             if max_affordable_notional <= 0:
-                return None, "risk_rejected:insufficient_free_margin"
+                return None, INSUFFICIENT_FREE_MARGIN
 
             max_affordable_qty = max_affordable_notional / max(mark_price_used_for_margin, self.eps)
             if max_affordable_qty <= 0:
-                return None, "risk_rejected:insufficient_free_margin"
+                return None, INSUFFICIENT_FREE_MARGIN
 
             if abs(order_qty) > max_affordable_qty:
                 order_qty = math.copysign(max_affordable_qty, order_qty)
                 scaled_by_margin = True
                 if abs(order_qty) <= 0:
-                    return None, "risk_rejected:insufficient_free_margin"
+                    return None, INSUFFICIENT_FREE_MARGIN
                 notional = abs(order_qty) * mark_price_used_for_margin
                 fee_buffer, slippage_buffer = self._estimate_buffers(notional)
                 adverse_move_buffer = abs(order_qty) * max(adverse_move_per_unit, 0.0)
@@ -591,9 +611,9 @@ class RiskEngine:
                 total_required = snapshot.total_required
 
             if abs(order_qty) <= 0 or total_required > max_total_required + self.eps:
-                return None, "risk_rejected:insufficient_free_margin"
+                return None, INSUFFICIENT_FREE_MARGIN
 
-        reason = "risk_approved"
+        reason = RISK_APPROVED
         metadata = dict(signal.metadata)
         metadata.update(
             {
