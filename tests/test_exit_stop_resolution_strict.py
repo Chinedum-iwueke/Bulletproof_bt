@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
+import pytest
 
 from bt.api import run_backtest
 from bt.core.enums import Side
@@ -57,7 +58,7 @@ def test_exit_signals_do_not_get_stop_rejections_in_strict_mode(tmp_path: Path) 
     override = {
         "signal_delay_bars": 0,
         "strategy": {"name": "entry_then_exit_no_stop"},
-        "risk": {"mode": "r_fixed", "r_per_trade": 0.01, "stop_resolution": "strict", "stop": {}},
+        "risk": {"mode": "r_fixed", "r_per_trade": 0.01, "stop_resolution": "strict", "allow_legacy_proxy": False, "stop": {}},
     }
     override_path = tmp_path / "override.yaml"
     override_path.write_text(yaml.safe_dump(override, sort_keys=False), encoding="utf-8")
@@ -103,24 +104,24 @@ def test_exit_signals_do_not_get_stop_rejections_in_strict_mode(tmp_path: Path) 
 def test_entry_without_stop_rejects_with_strict_reason_and_hint() -> None:
     engine = RiskEngine(
         max_positions=5,
-        config={"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "qty_rounding": "none", "stop": {}}},
+        config={"risk": {"mode": "r_fixed", "r_per_trade": 0.01, "qty_rounding": "none", "stop": {}, "stop_resolution": "strict", "allow_legacy_proxy": False}},
     )
     ts = pd.Timestamp("2024-01-01T00:00:00Z")
     bar = Bar(ts=ts, symbol="BTC", open=100.0, high=110.0, low=100.0, close=105.0, volume=1.0)
     signal = Signal(ts=ts, symbol="BTC", side=Side.BUY, signal_type="unit", confidence=1.0, metadata={})
 
-    order_intent, reason = engine.signal_to_order_intent(
-        ts=ts,
-        signal=signal,
-        bar=bar,
-        equity=10_000.0,
-        free_margin=10_000.0,
-        open_positions=0,
-        max_leverage=2.0,
-        current_qty=0.0,
-    )
+    with pytest.raises(ValueError, match=r"StrategyContractError") as excinfo:
+        engine.signal_to_order_intent(
+            ts=ts,
+            signal=signal,
+            bar=bar,
+            equity=10_000.0,
+            free_margin=10_000.0,
+            open_positions=0,
+            max_leverage=2.0,
+            current_qty=0.0,
+        )
 
-    assert order_intent is None
-    assert reason.startswith("risk_rejected:stop_unresolvable:strict")
+    reason = str(excinfo.value)
     assert "signal_type=unit" in reason
-    assert "ENTRY_requires_explicit_stop_price_or_strategy_must_provide_resolvable_stop_metadata" in reason
+    assert "stop_price" in reason

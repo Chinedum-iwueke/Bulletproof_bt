@@ -68,9 +68,14 @@ _SUMMARY_COLUMNS = [
 ]
 
 
-def _collect_run_stop_resolution(run_dir: Path) -> tuple[str, bool, bool, list[str]]:
+def _collect_run_stop_resolution(run_dir: Path) -> tuple[str, bool, bool, list[str], dict[str, int]]:
     decisions_path = run_dir / "decisions.jsonl"
     observed_sources: set[str] = set()
+    counts = {
+        "stop_resolution.strict.required_missing_stop": 0,
+        "stop_resolution.safe.no_fallback_missing_stop": 0,
+        "stop_resolution.safe.fallback_legacy_proxy_used": 0,
+    }
 
     if decisions_path.exists():
         with decisions_path.open("r", encoding="utf-8") as handle:
@@ -84,11 +89,19 @@ def _collect_run_stop_resolution(run_dir: Path) -> tuple[str, bool, bool, list[s
                     raise ValueError(f"Invalid decisions JSONL at {decisions_path}: {exc}") from exc
                 order = payload.get("order")
                 if not isinstance(order, dict):
+                    reason = payload.get("reason")
+                    if isinstance(reason, str):
+                        if "risk_rejected:invalid_stop" in reason and "strict mode" in reason:
+                            counts["stop_resolution.strict.required_missing_stop"] += 1
+                        if "Safe mode is active but legacy proxy fallback is disabled" in reason:
+                            counts["stop_resolution.safe.no_fallback_missing_stop"] += 1
                     continue
                 metadata = order.get("metadata")
                 if not isinstance(metadata, dict):
                     continue
                 stop_source = metadata.get("stop_source")
+                if bool(metadata.get("used_legacy_stop_proxy")):
+                    counts["stop_resolution.safe.fallback_legacy_proxy_used"] += 1
                 if stop_source is None:
                     continue
                 if stop_source not in STOP_RESOLUTION_LABELS:
@@ -115,7 +128,7 @@ def _collect_run_stop_resolution(run_dir: Path) -> tuple[str, bool, bool, list[s
             "Legacy stop proxy used because stop distance was not resolvable from signal or ATR config."
         )
 
-    return stop_resolution, used_legacy_stop_proxy, r_metrics_valid, notes
+    return stop_resolution, used_legacy_stop_proxy, r_metrics_valid, notes, counts
 
 
 def _write_run_status(run_dir: Path, status_payload: dict[str, Any]) -> None:
@@ -132,7 +145,7 @@ def _write_run_status(run_dir: Path, status_payload: dict[str, Any]) -> None:
                 raise ValueError(f"Invalid notes in existing run_status.json at {path}; expected list[str].")
             existing_notes = list(maybe_notes)
 
-    stop_resolution, used_legacy_stop_proxy, r_metrics_valid, derived_notes = _collect_run_stop_resolution(run_dir)
+    stop_resolution, used_legacy_stop_proxy, r_metrics_valid, derived_notes, stop_resolution_counts = _collect_run_stop_resolution(run_dir)
     merged_notes = list(existing_notes)
     for note in derived_notes:
         if note not in merged_notes:
@@ -143,6 +156,7 @@ def _write_run_status(run_dir: Path, status_payload: dict[str, Any]) -> None:
     payload["used_legacy_stop_proxy"] = used_legacy_stop_proxy
     payload["r_metrics_valid"] = r_metrics_valid
     payload["notes"] = merged_notes
+    payload["stop_resolution_counts"] = stop_resolution_counts
 
     write_json_deterministic(path, to_jsonable(payload))
 
