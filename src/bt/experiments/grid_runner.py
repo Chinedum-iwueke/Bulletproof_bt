@@ -36,7 +36,7 @@ from bt.data.dataset import load_dataset_manifest
 from bt.data.load_feed import load_feed
 from bt.logging.sanity import SanityCounters, write_sanity_json
 from bt.logging.formatting import write_json_deterministic
-from bt.logging.schema_versions import (
+from bt.contracts.schema_versions import (
     BENCHMARK_METRICS_SCHEMA_VERSION,
     COMPARISON_SUMMARY_SCHEMA_VERSION,
     RUN_STATUS_SCHEMA_VERSION,

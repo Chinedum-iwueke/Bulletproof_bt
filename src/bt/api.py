@@ -13,7 +13,7 @@ from bt.execution.effective import build_effective_execution_snapshot
 from bt.execution.intrabar import parse_intrabar_spec
 from bt.logging.sanity import SanityCounters, write_sanity_json
 from bt.logging.formatting import write_json_deterministic
-from bt.logging.schema_versions import (
+from bt.contracts.schema_versions import (
     BENCHMARK_METRICS_SCHEMA_VERSION,
     COMPARISON_SUMMARY_SCHEMA_VERSION,
 )

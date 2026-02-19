@@ -12,7 +12,7 @@ import yaml
 
 from bt.metrics.r_metrics import summarize_r
 from bt.logging.formatting import FLOAT_DECIMALS_CSV, write_json_deterministic
-from bt.logging.schema_versions import PERFORMANCE_SCHEMA_VERSION
+from bt.contracts.schema_versions import PERFORMANCE_SCHEMA_VERSION
 
 
 @dataclass(frozen=True)
