@@ -24,6 +24,58 @@ _LEGACY_STOP_RESOLUTION_WARNING = (
 )
 
 
+def _normalize_symbol_list(value: Any, *, key_path: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ConfigError(
+            f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})"
+        )
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise ConfigError(
+                f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})"
+            )
+        symbol = item.strip()
+        if not symbol:
+            continue
+        if symbol not in seen:
+            seen.add(symbol)
+            normalized.append(symbol)
+
+    if not normalized:
+        raise ConfigError(
+            f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})"
+        )
+    return normalized
+
+
+def _resolve_data_symbols_alias(resolved: dict[str, Any]) -> None:
+    data_cfg = _ensure_mapping(resolved.get("data"), name="data")
+    subset = data_cfg.get("symbols_subset")
+    symbols = data_cfg.get("symbols")
+
+    if symbols is None and subset is None:
+        resolved["data"] = data_cfg
+        return
+
+    normalized_subset = None if subset is None else _normalize_symbol_list(subset, key_path="data.symbols_subset")
+    normalized_symbols = None if symbols is None else _normalize_symbol_list(symbols, key_path="data.symbols")
+
+    if normalized_symbols is not None and normalized_subset is None:
+        data_cfg["symbols_subset"] = normalized_symbols
+    elif normalized_symbols is not None and normalized_subset is not None and normalized_symbols != normalized_subset:
+        raise ConfigError(
+            "Config conflict: data.symbols and data.symbols_subset both set but differ. "
+            f"Use only one. data.symbols={symbols!r} data.symbols_subset={subset!r}"
+        )
+    elif normalized_subset is not None:
+        data_cfg["symbols_subset"] = normalized_subset
+
+    resolved["data"] = data_cfg
+
+
 def _ensure_mapping(value: Any, *, name: str) -> dict[str, Any]:
     if value is None:
         return {}
@@ -129,6 +181,7 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     data_cfg.setdefault("symbols_subset", None)
     data_cfg.setdefault("chunksize", 50000)
     resolved["data"] = data_cfg
+    _resolve_data_symbols_alias(resolved)
 
     strategy_cfg = _ensure_mapping(resolved.get("strategy"), name="strategy")
     strategy_cfg.setdefault("name", "coinflip")

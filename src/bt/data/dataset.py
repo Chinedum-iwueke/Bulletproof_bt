@@ -23,6 +23,28 @@ def _err(dataset_dir: Path, manifest_path: Path, detail: str) -> ValueError:
     )
 
 
+def _normalize_requested_symbols(value: Any, *, key_path: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})")
+        symbol = item.strip()
+        if not symbol:
+            continue
+        if symbol not in seen:
+            seen.add(symbol)
+            normalized.append(symbol)
+
+    if not normalized:
+        raise ValueError(f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})")
+
+    return normalized
+
+
 def _load_manifest_yaml(dataset_dir: Path, manifest_path: Path) -> dict[str, Any]:
     if not dataset_dir.is_dir():
         raise _err(dataset_dir, manifest_path, "dataset_dir is not an existing directory")
@@ -177,25 +199,33 @@ def _apply_optional_filters(
     symbols = list(manifest.symbols)
 
     subset = data_cfg.get("symbols_subset")
-    if subset is not None:
-        if not isinstance(subset, list) or not all(isinstance(symbol, str) for symbol in subset):
-            raise _err(dataset_dir, manifest_path, "data.symbols_subset must be a list of strings")
+    symbols_alias = data_cfg.get("symbols")
 
-        unknown_symbols = [symbol for symbol in subset if symbol not in manifest.files_by_symbol]
+    normalized_subset = None if subset is None else _normalize_requested_symbols(subset, key_path="data.symbols_subset")
+    normalized_symbols_alias = (
+        None if symbols_alias is None else _normalize_requested_symbols(symbols_alias, key_path="data.symbols")
+    )
+
+    requested_subset = normalized_subset
+    if normalized_subset is None and normalized_symbols_alias is not None:
+        requested_subset = normalized_symbols_alias
+    elif normalized_subset is not None and normalized_symbols_alias is not None and normalized_subset != normalized_symbols_alias:
+        raise _err(
+            dataset_dir,
+            manifest_path,
+            "Config conflict: data.symbols and data.symbols_subset both set but differ. "
+            f"Use only one. data.symbols={symbols_alias!r} data.symbols_subset={subset!r}",
+        )
+
+    if requested_subset is not None:
+        unknown_symbols = [symbol for symbol in requested_subset if symbol not in manifest.files_by_symbol]
         if unknown_symbols:
             raise _err(
                 dataset_dir,
                 manifest_path,
                 f"data.symbols_subset contains unknown symbol(s): {unknown_symbols}",
             )
-
-        deduped_subset: list[str] = []
-        seen: set[str] = set()
-        for symbol in subset:
-            if symbol not in seen:
-                seen.add(symbol)
-                deduped_subset.append(symbol)
-        symbols = deduped_subset
+        symbols = requested_subset
 
     max_symbols = data_cfg.get("max_symbols")
     if max_symbols is not None:

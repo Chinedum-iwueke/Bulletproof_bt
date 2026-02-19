@@ -22,7 +22,8 @@ Implementation: src/bt/data/load_feed.py, src/bt/data/dataset.py
 - `volume >= 0`.
 - Gaps are preserved; missing bars are not synthesized or interpolated.
 - Dataset directory scope knobs supported:
-  - `data.symbols_subset`
+  - `data.symbols_subset` (canonical)
+  - `data.symbols` (alias of `data.symbols_subset`; setting both with different values is an error)
   - `data.max_symbols`
   - `data.date_range` (start inclusive, end exclusive)
   - `data.row_limit_per_symbol`
