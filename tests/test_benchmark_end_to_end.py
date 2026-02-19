@@ -10,6 +10,10 @@ import pytest
 import yaml
 
 from bt.api import run_backtest
+from bt.contracts.schema_versions import (
+    BENCHMARK_METRICS_SCHEMA_VERSION,
+    COMPARISON_SUMMARY_SCHEMA_VERSION,
+)
 
 
 def _write_legacy_manifest(dataset_dir: Path, symbols: list[str]) -> None:
@@ -147,9 +151,11 @@ def test_benchmark_enabled_writes_all_artifacts(tmp_path: Path) -> None:
     assert "total_return" in benchmark_metrics
     assert "max_drawdown" in benchmark_metrics
     assert benchmark_metrics["n_points"] == 3
+    assert benchmark_metrics["schema_version"] == BENCHMARK_METRICS_SCHEMA_VERSION
 
     comparison_summary = json.loads(comparison_summary_path.read_text(encoding="utf-8"))
     assert set(comparison_summary.keys()) == {"strategy", "benchmark", "delta", "schema_version"}
+    assert comparison_summary["schema_version"] == COMPARISON_SUMMARY_SCHEMA_VERSION
     assert comparison_summary["benchmark"]["total_return"] == pytest.approx(
         benchmark_metrics["total_return"]
     )

@@ -7,6 +7,12 @@ import pandas as pd
 import yaml
 
 from bt.api import run_backtest
+from bt.contracts.schema_versions import (
+    BENCHMARK_METRICS_SCHEMA_VERSION,
+    COMPARISON_SUMMARY_SCHEMA_VERSION,
+    PERFORMANCE_SCHEMA_VERSION,
+    RUN_STATUS_SCHEMA_VERSION,
+)
 
 
 def _write_basic_config(path: Path, *, benchmark_enabled: bool = False) -> None:
@@ -52,7 +58,7 @@ def _write_dataset(dataset_dir: Path) -> None:
     (dataset_dir / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
 
-def test_run_status_has_schema_version(tmp_path: Path) -> None:
+def test_run_status_includes_schema_version(tmp_path: Path) -> None:
     config_path = tmp_path / "engine.yaml"
     _write_basic_config(config_path)
 
@@ -67,10 +73,10 @@ def test_run_status_has_schema_version(tmp_path: Path) -> None:
 
     payload = json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
     assert payload["status"] == "PASS"
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == RUN_STATUS_SCHEMA_VERSION
 
 
-def test_performance_has_schema_version(tmp_path: Path) -> None:
+def test_performance_includes_schema_version(tmp_path: Path) -> None:
     config_path = tmp_path / "engine_perf.yaml"
     _write_basic_config(config_path)
 
@@ -85,10 +91,10 @@ def test_performance_has_schema_version(tmp_path: Path) -> None:
 
     payload = json.loads((run_dir / "performance.json").read_text(encoding="utf-8"))
     assert "total_trades" in payload
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == PERFORMANCE_SCHEMA_VERSION
 
 
-def test_benchmark_artifacts_have_schema_version_when_enabled(tmp_path: Path) -> None:
+def test_benchmark_jsons_include_schema_version(tmp_path: Path) -> None:
     dataset_dir = tmp_path / "dataset"
     _write_dataset(dataset_dir)
 
@@ -104,10 +110,15 @@ def test_benchmark_artifacts_have_schema_version_when_enabled(tmp_path: Path) ->
         )
     )
 
-    benchmark_metrics = json.loads((run_dir / "benchmark_metrics.json").read_text(encoding="utf-8"))
-    comparison_summary = json.loads((run_dir / "comparison_summary.json").read_text(encoding="utf-8"))
+    benchmark_metrics_path = run_dir / "benchmark_metrics.json"
+    comparison_summary_path = run_dir / "comparison_summary.json"
+    assert benchmark_metrics_path.exists()
+    assert comparison_summary_path.exists()
+
+    benchmark_metrics = json.loads(benchmark_metrics_path.read_text(encoding="utf-8"))
+    comparison_summary = json.loads(comparison_summary_path.read_text(encoding="utf-8"))
 
     assert benchmark_metrics["n_points"] >= 1
-    assert benchmark_metrics["schema_version"] == 1
+    assert benchmark_metrics["schema_version"] == BENCHMARK_METRICS_SCHEMA_VERSION
     assert "strategy" in comparison_summary
-    assert comparison_summary["schema_version"] == 1
+    assert comparison_summary["schema_version"] == COMPARISON_SUMMARY_SCHEMA_VERSION
