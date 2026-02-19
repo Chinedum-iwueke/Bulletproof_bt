@@ -38,7 +38,11 @@ def _build_engine(
     from bt.risk.risk_engine import RiskEngine
     from bt.risk.spec import parse_risk_spec
     from bt.strategy import make_strategy
-    from bt.strategy.htf_context import HTFContextStrategyAdapter, ReadOnlyContextStrategyAdapter
+    from bt.strategy.htf_context import (
+        HTFContextStrategyAdapter,
+        ReadOnlyContextStrategyAdapter,
+        SignalConflictPolicyStrategyAdapter,
+    )
     from bt.universe.universe import UniverseEngine
 
     universe = UniverseEngine(
@@ -73,6 +77,9 @@ def _build_engine(
         )
     if isinstance(htf_resampler, TimeframeResampler):
         strategy = HTFContextStrategyAdapter(inner=strategy, resampler=htf_resampler)
+
+    signal_conflict_policy = strategy_cfg.get("signal_conflict_policy", "reject")
+    strategy = SignalConflictPolicyStrategyAdapter(inner=strategy, policy=str(signal_conflict_policy))
 
     if not isinstance(config.get("risk"), dict):
         raise ValueError("risk.mode and risk.r_per_trade are required")

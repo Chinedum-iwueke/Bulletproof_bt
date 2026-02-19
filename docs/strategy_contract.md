@@ -26,8 +26,23 @@ Implementation: src/bt/core/types.py, src/bt/strategy/base.py
 ## Rejections and failure modes
 - Invalid signal payloads are rejected by type validation and downstream risk resolution.
 - In strict stop mode, entries without resolvable stop data are rejected.
+- By default, multiple signals for the same `(ts, symbol)` are rejected before the engine loop with an actionable `ValueError` that points to `strategy.signal_conflict_policy`.
 
-Implementation: src/bt/core/types.py, src/bt/risk/stop_resolver.py, src/bt/risk/risk_engine.py
+Implementation: src/bt/core/types.py, src/bt/risk/stop_resolver.py, src/bt/risk/risk_engine.py, src/bt/strategy/signal_conflicts.py
+
+## Signal conflict policy
+- Config key: `strategy.signal_conflict_policy`.
+- Supported values:
+  - `reject` (default): fail fast on same `(ts, symbol)` multi-signal emissions.
+  - `first_wins`: keep first emitted signal for that `(ts, symbol)`.
+  - `last_wins`: keep last emitted signal.
+  - `net_out`: deterministic resolver with exit-priority semantics:
+    - opposite entry sides (`BUY` + `SELL`) net to no-op,
+    - exit-like (`metadata.is_exit`, `metadata.reduce_only`, or `signal_type` ending in `_exit`) wins over entries,
+    - multiple exits keep last exit,
+    - multiple same-side entries keep last entry.
+
+Implementation: src/bt/strategy/signal_conflicts.py, src/bt/strategy/htf_context.py, src/bt/api.py
 
 ## Artifacts and where to look
 - `decisions.jsonl`: accepted/rejected order intents with metadata.

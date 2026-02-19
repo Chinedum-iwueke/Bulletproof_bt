@@ -9,6 +9,7 @@ from bt.core.types import Bar, Signal
 from bt.data.resample import HTFBar, TimeframeResampler
 from bt.strategy.base import Strategy
 from bt.strategy.context_view import StrategyContextView
+from bt.strategy.signal_conflicts import SignalConflictSummary, resolve_signal_conflicts
 
 
 class ReadOnlyContextStrategyAdapter(Strategy):
@@ -53,3 +54,28 @@ class HTFContextStrategyAdapter(Strategy):
         new_ctx = dict(ctx)
         new_ctx["htf"] = emitted_index
         return self._inner.on_bars(ts, bars_by_symbol, tradeable, StrategyContextView(new_ctx))
+
+
+class SignalConflictPolicyStrategyAdapter(Strategy):
+    """Wrap strategy output with deterministic same-(ts,symbol) conflict resolution."""
+
+    def __init__(self, *, inner: Strategy, policy: str) -> None:
+        self._inner = inner
+        self._policy = str(policy)
+        self._last_conflict_summaries: list[SignalConflictSummary] = []
+
+    @property
+    def last_conflict_summaries(self) -> list[SignalConflictSummary]:
+        return list(self._last_conflict_summaries)
+
+    def on_bars(
+        self,
+        ts: pd.Timestamp,
+        bars_by_symbol: dict[str, Bar],
+        tradeable: set[str],
+        ctx: Mapping[str, Any],
+    ) -> list[Signal]:
+        emitted = self._inner.on_bars(ts, bars_by_symbol, tradeable, ctx)
+        resolved, summaries = resolve_signal_conflicts(emitted, policy=self._policy)
+        self._last_conflict_summaries = summaries
+        return resolved
