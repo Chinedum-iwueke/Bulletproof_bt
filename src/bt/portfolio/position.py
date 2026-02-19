@@ -8,6 +8,7 @@ import pandas as pd
 
 from bt.core.enums import PositionState, Side
 from bt.core.types import Fill, Position, Trade
+from bt.portfolio.constants import QTY_EPSILON
 
 
 class PositionBook:
@@ -51,15 +52,19 @@ class PositionBook:
         trade: Optional[Trade] = None
         fees_paid, slippage_paid = self._position_costs.get(fill.symbol, (0.0, 0.0))
 
-        if position.state in {PositionState.FLAT, PositionState.CLOSED} or position.qty == 0:
+        if position.state in {PositionState.FLAT, PositionState.CLOSED} or self._normalize_qty(position.qty) == 0.0:
             position = self._open_new_position(fill)
             self._positions[fill.symbol] = position
-            self._position_costs[fill.symbol] = (fill.fee, fill.slippage)
-            self._position_metadata[fill.symbol] = self._extract_risk_metadata(fill.metadata)
+            if position.qty == 0.0:
+                self._position_costs.pop(fill.symbol, None)
+                self._position_metadata.pop(fill.symbol, None)
+            else:
+                self._position_costs[fill.symbol] = (fill.fee, fill.slippage)
+                self._position_metadata[fill.symbol] = self._extract_risk_metadata(fill.metadata)
             return position, None
 
         if position.side == fill.side:
-            new_qty = position.qty + fill.qty
+            new_qty = self._normalize_qty(position.qty + fill.qty)
             new_avg = (
                 position.avg_entry_price * position.qty + fill.price * fill.qty
             ) / new_qty
@@ -82,8 +87,8 @@ class PositionBook:
         reduce_qty = min(position.qty, fill.qty)
         realized_pnl = self._realized_pnl(position, fill.price, reduce_qty)
         mae_price, mfe_price = self._update_mae_mfe(position, fill.price)
-        remaining_qty = position.qty - reduce_qty
-        fill_qty = max(abs(fill.qty), 1e-12)
+        remaining_qty = self._normalize_qty(position.qty - reduce_qty)
+        fill_qty = max(abs(fill.qty), QTY_EPSILON)
         close_ratio = reduce_qty / fill_qty
         closing_fee = fill.fee * close_ratio
         closing_slippage = fill.slippage * close_ratio
@@ -103,13 +108,17 @@ class PositionBook:
                 mfe_price=mfe_price,
                 metadata=self._position_metadata.get(fill.symbol, {}),
             )
-            position = self._open_new_position(fill, qty=fill.qty - reduce_qty)
-            self._position_costs[fill.symbol] = (
-                fill.fee - closing_fee,
-                fill.slippage - closing_slippage,
-            )
-            self._position_metadata[fill.symbol] = self._extract_risk_metadata(fill.metadata)
-        elif remaining_qty == 0:
+            position = self._open_new_position(fill, qty=self._normalize_qty(fill.qty - reduce_qty))
+            if position.qty == 0.0:
+                self._position_costs.pop(fill.symbol, None)
+                self._position_metadata.pop(fill.symbol, None)
+            else:
+                self._position_costs[fill.symbol] = (
+                    fill.fee - closing_fee,
+                    fill.slippage - closing_slippage,
+                )
+                self._position_metadata[fill.symbol] = self._extract_risk_metadata(fill.metadata)
+        elif remaining_qty == 0.0:
             trade = self._build_trade(
                 position=position,
                 exit_price=fill.price,
@@ -137,6 +146,7 @@ class PositionBook:
             )
             self._position_costs.pop(fill.symbol, None)
             self._position_metadata.pop(fill.symbol, None)
+            self._positions.pop(fill.symbol, None)
         else:
             position = replace(
                 position,
@@ -148,11 +158,28 @@ class PositionBook:
             )
             self._position_costs[fill.symbol] = (total_fees, total_slippage)
 
-        self._positions[fill.symbol] = position
+        if position.qty == 0.0:
+            self._positions.pop(fill.symbol, None)
+        else:
+            self._positions[fill.symbol] = position
         return position, trade
 
     def _open_new_position(self, fill: Fill, qty: Optional[float] = None) -> Position:
-        open_qty = fill.qty if qty is None else qty
+        open_qty = self._normalize_qty(fill.qty if qty is None else qty)
+        if open_qty == 0.0:
+            return Position(
+                symbol=fill.symbol,
+                state=PositionState.FLAT,
+                side=None,
+                qty=0.0,
+                avg_entry_price=0.0,
+                realized_pnl=0.0,
+                unrealized_pnl=0.0,
+                mae_price=None,
+                mfe_price=None,
+                opened_ts=None,
+                closed_ts=fill.ts,
+            )
         return Position(
             symbol=fill.symbol,
             state=PositionState.OPEN,
@@ -181,6 +208,12 @@ class PositionBook:
         mfe_price = max(position.mfe_price, price)
         return mae_price, mfe_price
 
+
+    @staticmethod
+    def _normalize_qty(qty: float) -> float:
+        if abs(qty) < QTY_EPSILON:
+            return 0.0
+        return round(qty, 12)
 
     @staticmethod
     def _extract_risk_metadata(metadata: object) -> dict[str, object]:
