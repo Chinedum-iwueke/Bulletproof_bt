@@ -32,7 +32,8 @@ def test_parse_risk_spec_rejects_missing_risk_fraction() -> None:
 def test_resolve_config_injects_default_stop_resolution() -> None:
     resolved = resolve_config({"risk": {"mode": "r_fixed", "r_per_trade": 0.01}})
 
-    assert resolved["risk"]["stop_resolution"] == "strict"
+    assert resolved["risk"]["stop_resolution"] == "safe"
+    assert resolved["risk"]["allow_legacy_proxy"] is False
 
 
 def test_resolve_config_injects_safe_margin_and_slippage_proxy_defaults() -> None:

@@ -37,6 +37,7 @@ def validate_resolved_config_completeness(config: dict[str, Any]) -> None:
         "risk.max_positions",
         "risk.max_leverage",
         "risk.stop_resolution",
+        "risk.allow_legacy_proxy",
         "risk.margin_buffer_tier",
         "risk.slippage_k_proxy",
         "risk.min_stop_distance_pct",

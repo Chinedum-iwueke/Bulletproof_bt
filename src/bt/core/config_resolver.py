@@ -18,6 +18,12 @@ class ConfigError(ValueError):
     """Raised when configuration keys conflict or are invalid."""
 
 
+_LEGACY_STOP_RESOLUTION_WARNING = (
+    "risk.stop_resolution=allow_legacy_proxy is deprecated; "
+    "use risk.stop_resolution=safe and risk.allow_legacy_proxy=true"
+)
+
+
 def _ensure_mapping(value: Any, *, name: str) -> dict[str, Any]:
     if value is None:
         return {}
@@ -189,7 +195,13 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
         resolved=resolved,
         top_key="stop_resolution",
         nested_key="stop_resolution",
-        default="strict",
+        default="safe",
+    )
+    _resolve_risk_value(
+        resolved=resolved,
+        top_key="allow_legacy_proxy",
+        nested_key="allow_legacy_proxy",
+        default=False,
     )
     _resolve_risk_value(
         resolved=resolved,
@@ -226,11 +238,33 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     risk_cfg = resolved.get("risk", {})
     risk_cfg.setdefault("mode", "equity_pct")
     stop_resolution = risk_cfg.get("stop_resolution")
-    if stop_resolution not in {"strict", "allow_legacy_proxy"}:
+    if stop_resolution not in {"safe", "strict", "allow_legacy_proxy"}:
         raise ConfigError(
-            "Invalid risk.stop_resolution: expected 'strict' or 'allow_legacy_proxy' "
-            f"got {stop_resolution!r}"
+            "Invalid risk.stop_resolution: expected one of safe, strict "
+            "(or legacy allow_legacy_proxy)"
         )
+
+    allow_legacy_proxy = risk_cfg.get("allow_legacy_proxy")
+    if not isinstance(allow_legacy_proxy, bool):
+        raise ConfigError("Invalid risk.allow_legacy_proxy: expected boolean")
+
+    if stop_resolution == "allow_legacy_proxy":
+        stop_resolution = "safe"
+        allow_legacy_proxy = True
+        warnings = resolved.setdefault("warnings", [])
+        if not isinstance(warnings, list):
+            raise ConfigError("Invalid warnings: expected list")
+        if _LEGACY_STOP_RESOLUTION_WARNING not in warnings:
+            warnings.append(_LEGACY_STOP_RESOLUTION_WARNING)
+
+    if stop_resolution == "strict" and allow_legacy_proxy:
+        raise ConfigError(
+            "Invalid config: risk.allow_legacy_proxy=true is not allowed when "
+            "risk.stop_resolution=strict"
+        )
+
+    risk_cfg["stop_resolution"] = stop_resolution
+    risk_cfg["allow_legacy_proxy"] = allow_legacy_proxy
 
     try:
         margin_buffer_tier = int(risk_cfg.get("margin_buffer_tier"))

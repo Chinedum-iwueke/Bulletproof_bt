@@ -37,7 +37,8 @@ risk:
   # risk_per_trade_pct: 0.005   # legacy alias accepted for compatibility
   max_positions: 5
   max_leverage: 1.5
-  stop_resolution: strict       # strict | allow_legacy_proxy
+  stop_resolution: safe         # safe | strict (legacy input: allow_legacy_proxy)
+  allow_legacy_proxy: false
   margin_buffer_tier: 1         # 1 | 2 | 3
   slippage_k_proxy: 0.0
   min_stop_distance_pct: 0.001
