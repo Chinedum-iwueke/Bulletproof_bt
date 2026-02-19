@@ -37,6 +37,54 @@ def write_config_used(run_dir: Path, config: dict[str, Any]) -> None:
         yaml.safe_dump(config, handle, sort_keys=False)
 
 
+
+
+def _normalize_requested_symbols(value: Any, *, key_path: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})")
+        symbol = item.strip()
+        if not symbol:
+            continue
+        if symbol not in seen:
+            seen.add(symbol)
+            normalized.append(symbol)
+
+    if not normalized:
+        raise ValueError(f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})")
+
+    return normalized
+
+
+def _resolve_requested_symbols(data_cfg: dict[str, Any]) -> tuple[list[str] | None, Any, Any]:
+    requested_subset_raw = data_cfg.get("symbols_subset")
+    requested_symbols_raw = data_cfg.get("symbols")
+
+    normalized_subset = (
+        None
+        if requested_subset_raw is None
+        else _normalize_requested_symbols(requested_subset_raw, key_path="data.symbols_subset")
+    )
+    normalized_symbols = (
+        None
+        if requested_symbols_raw is None
+        else _normalize_requested_symbols(requested_symbols_raw, key_path="data.symbols")
+    )
+
+    if normalized_subset is None and normalized_symbols is None:
+        return None, requested_subset_raw, requested_symbols_raw
+    if normalized_subset is not None and normalized_symbols is not None and normalized_subset != normalized_symbols:
+        raise ValueError(
+            "Config conflict: data.symbols and data.symbols_subset both set but differ. "
+            f"Use only one. data.symbols={requested_symbols_raw!r} data.symbols_subset={requested_subset_raw!r}"
+        )
+    return (normalized_subset if normalized_subset is not None else normalized_symbols), requested_subset_raw, requested_symbols_raw
+
 def write_data_scope(run_dir: Path, *, config: dict, dataset_dir: str | None = None) -> None:
     """
     Write data_scope.json into run_dir if any scope-reducing knobs are active.
@@ -54,14 +102,14 @@ def write_data_scope(run_dir: Path, *, config: dict, dataset_dir: str | None = N
     if not isinstance(data_cfg, dict):
         data_cfg = {}
 
-    requested_subset = data_cfg.get("symbols_subset")
+    requested_symbols, requested_subset_raw, requested_symbols_raw = _resolve_requested_symbols(data_cfg)
     requested_max_symbols = data_cfg.get("max_symbols")
     requested_date_range = data_cfg.get("date_range")
     requested_row_limit = data_cfg.get("row_limit_per_symbol")
 
     has_scope_knob = any(
         (
-            requested_subset not in (None, []),
+            requested_symbols is not None,
             requested_max_symbols is not None,
             requested_date_range not in (None, {}),
             requested_row_limit is not None,
@@ -73,8 +121,12 @@ def write_data_scope(run_dir: Path, *, config: dict, dataset_dir: str | None = N
     payload: dict[str, Any] = {}
     if "mode" in data_cfg:
         payload["mode"] = data_cfg.get("mode")
-    if requested_subset is not None:
-        payload["requested_symbols_subset"] = requested_subset
+    if requested_symbols is not None:
+        payload["requested_symbols"] = requested_symbols
+        if requested_subset_raw is not None:
+            payload["requested_symbols_subset"] = requested_subset_raw
+        elif requested_symbols_raw is not None:
+            payload["requested_symbols_subset"] = requested_symbols_raw
     if requested_max_symbols is not None:
         payload["requested_max_symbols"] = requested_max_symbols
     if requested_row_limit is not None:
