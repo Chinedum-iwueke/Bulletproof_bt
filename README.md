@@ -200,3 +200,14 @@ for bar in bars:
 - `fee_drag_pct`
 - `slippage_drag_pct`
 - `spread_drag_pct`
+
+## Client contracts
+
+- [docs/dataset_contract.md](docs/dataset_contract.md)
+- [docs/execution_model_contract.md](docs/execution_model_contract.md)
+- [docs/strategy_contract.md](docs/strategy_contract.md)
+- [docs/portfolio_risk_contract.md](docs/portfolio_risk_contract.md)
+- [docs/error_and_run_status_contract.md](docs/error_and_run_status_contract.md)
+- [docs/output_artifacts_contract.md](docs/output_artifacts_contract.md)
+- [docs/config_layering_contract.md](docs/config_layering_contract.md)
+- [docs/beginner_vs_pro_contract.md](docs/beginner_vs_pro_contract.md)
