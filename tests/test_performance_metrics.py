@@ -38,7 +38,7 @@ def test_compute_performance_metrics(tmp_path: Path) -> None:
     assert report.final_equity == 130.0
     assert report.total_trades == 6
     assert report.ev_net == pytest.approx(2.3333333333, rel=1e-6)
-    assert report.ev_gross == pytest.approx(1.65, rel=1e-6)
+    assert report.ev_gross == pytest.approx(2.8333333333, rel=1e-6)
     assert report.win_rate == pytest.approx(0.5, rel=1e-6)
     assert report.max_drawdown_pct == pytest.approx(-0.25, rel=1e-6)
     assert report.max_drawdown_duration_bars == 2
@@ -47,10 +47,10 @@ def test_compute_performance_metrics(tmp_path: Path) -> None:
     assert report.fee_total == pytest.approx(3.0, rel=1e-6)
     assert report.slippage_total == pytest.approx(1.1, rel=1e-6)
     assert report.spread_total == 0.0
-    assert report.gross_pnl == pytest.approx(18.1, rel=1e-6)
+    assert report.gross_pnl == pytest.approx(17.0, rel=1e-6)
     assert report.net_pnl == pytest.approx(14.0, rel=1e-6)
-    assert report.fee_drag_pct == pytest.approx(16.57458563, rel=1e-6)
-    assert report.slippage_drag_pct == pytest.approx(6.0773480663, rel=1e-6)
+    assert report.fee_drag_pct == pytest.approx(17.6470588235, rel=1e-6)
+    assert report.slippage_drag_pct == pytest.approx(6.4705882353, rel=1e-6)
     assert report.spread_drag_pct == 0.0
     assert report.ev_by_bucket == {
         "high": pytest.approx(3.0, rel=1e-6),

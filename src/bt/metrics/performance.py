@@ -133,24 +133,53 @@ def compute_cost_attribution(
             "spread_total": 0.0,
         }
 
-    pnl_col = "pnl_net" if "pnl_net" in trades_df.columns else "pnl"
-    if pnl_col not in trades_df.columns:
-        raise ValueError(f"run_dir={run_dir}: trades.csv must include pnl_net or pnl column")
+    fills_fee_total = 0.0
+    fills_slippage_total = 0.0
+    fills_spread_total = 0.0
+    if resolved_fills_path.exists():
+        fills_fee_total, fills_slippage_total, fills_spread_total = _read_fills_cost_totals(resolved_fills_path)
 
-    net_pnl = float(_coerce_numeric(trades_df[pnl_col]).sum())
+    if "fees_paid" in trades_df.columns:
+        fees_series = _coerce_numeric(trades_df["fees_paid"])
+        fee_total = float(fees_series.sum())
+    else:
+        fees_series = _sum_costs(trades_df, preferred="fees_total", fallbacks=["fees", "fee"])
+        fee_total = float(abs(fees_series.sum()))
+        if fee_total == 0.0 and fills_fee_total > 0.0:
+            fee_total = float(fills_fee_total)
+
+    if "pnl_price" in trades_df.columns:
+        pnl_price_series = _coerce_numeric(trades_df["pnl_price"])
+    elif "pnl" in trades_df.columns:
+        pnl_price_series = _coerce_numeric(trades_df["pnl"])
+    elif "pnl_net" in trades_df.columns:
+        pnl_net_series = _coerce_numeric(trades_df["pnl_net"])
+        if fee_total > 0.0:
+            pnl_price_series = pnl_net_series.copy()
+            pnl_price_series.iloc[-1] = pnl_price_series.iloc[-1] + fee_total
+        else:
+            pnl_price_series = pnl_net_series + fees_series.abs()
+    else:
+        raise ValueError(f"run_dir={run_dir}: trades.csv must include pnl_price/pnl or pnl_net")
+
+    pnl_price = float(pnl_price_series.sum())
+
+    if "pnl_net" in trades_df.columns:
+        net_pnl = float(_coerce_numeric(trades_df["pnl_net"]).sum())
+    else:
+        net_pnl = float(pnl_price - fee_total)
 
     if resolved_fills_path.exists():
-        fee_total, slippage_total, spread_total = _read_fills_cost_totals(resolved_fills_path)
+        slippage_total = float(fills_slippage_total)
+        spread_total = float(fills_spread_total)
     else:
-        fees = _sum_costs(trades_df, preferred="fees_total", fallbacks=["fees", "fee"])
         slippage = _sum_costs(
             trades_df, preferred="slippage_total", fallbacks=["slippage", "slip"]
         )
-        fee_total = float(abs(fees.sum()))
         slippage_total = float(abs(slippage.sum()))
         spread_total = 0.0
 
-    gross_pnl = float(net_pnl + fee_total + slippage_total + spread_total)
+    gross_pnl = float(pnl_price)
     return {
         "gross_pnl": gross_pnl,
         "net_pnl": float(net_pnl),
@@ -512,19 +541,27 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
             extra=extra,
         )
 
-    pnl_col = "pnl_net" if "pnl_net" in trades_df.columns else "pnl"
-    if pnl_col not in trades_df.columns:
-        raise ValueError("Trades must include pnl_net or pnl column")
+    if "fees_paid" in trades_df.columns:
+        fees = _coerce_numeric(trades_df["fees_paid"])
+    else:
+        fees = _sum_costs(trades_df, preferred="fees_total", fallbacks=["fees", "fee"])
 
-    pnl_net = _coerce_numeric(trades_df[pnl_col])
-    fees = _sum_costs(trades_df, preferred="fees_total", fallbacks=["fees", "fee"])
-    slippage = _sum_costs(
-        trades_df, preferred="slippage_total", fallbacks=["slippage", "slip"]
-    )
+    if "pnl_price" in trades_df.columns:
+        pnl_price = _coerce_numeric(trades_df["pnl_price"])
+    elif "pnl" in trades_df.columns:
+        pnl_price = _coerce_numeric(trades_df["pnl"])
+    elif "pnl_net" in trades_df.columns:
+        pnl_price = _coerce_numeric(trades_df["pnl_net"]) + fees.abs()
+    else:
+        raise ValueError("Trades must include pnl_price/pnl or pnl_net column")
 
-    pnl_gross = pnl_net + fees + slippage
+    if "pnl_net" in trades_df.columns:
+        pnl_net = _coerce_numeric(trades_df["pnl_net"])
+    else:
+        pnl_net = pnl_price - fees
+
     ev_net = float(pnl_net.mean())
-    ev_gross = float(pnl_gross.mean())
+    ev_gross = float(pnl_price.mean())
     win_rate = float((pnl_net > 0).mean())
 
     loss_values = -pnl_net[pnl_net < 0]
