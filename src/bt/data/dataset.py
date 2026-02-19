@@ -7,6 +7,8 @@ from typing import Any
 
 import yaml
 
+from bt.core.errors import DataError
+
 
 @dataclass(frozen=True)
 class DatasetManifest:
@@ -16,8 +18,8 @@ class DatasetManifest:
     files_by_symbol: dict[str, str]
 
 
-def _err(dataset_dir: Path, manifest_path: Path, detail: str) -> ValueError:
-    return ValueError(
+def _err(dataset_dir: Path, manifest_path: Path, detail: str) -> DataError:
+    return DataError(
         f"Dataset manifest validation failed for dataset_dir='{dataset_dir}' "
         f"manifest='{manifest_path}': {detail}"
     )
@@ -25,13 +27,13 @@ def _err(dataset_dir: Path, manifest_path: Path, detail: str) -> ValueError:
 
 def _normalize_requested_symbols(value: Any, *, key_path: str) -> list[str]:
     if not isinstance(value, list):
-        raise ValueError(f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})")
+        raise DataError(f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})")
 
     normalized: list[str] = []
     seen: set[str] = set()
     for item in value:
         if not isinstance(item, str):
-            raise ValueError(f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})")
+            raise DataError(f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})")
         symbol = item.strip()
         if not symbol:
             continue
@@ -40,7 +42,7 @@ def _normalize_requested_symbols(value: Any, *, key_path: str) -> list[str]:
             normalized.append(symbol)
 
     if not normalized:
-        raise ValueError(f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})")
+        raise DataError(f"Invalid config: {key_path} must be a non-empty list of strings (got: {value!r})")
 
     return normalized
 

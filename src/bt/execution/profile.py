@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from bt.core.errors import ExecutionError
+
 ProfileName = Literal["tier1", "tier2", "tier3", "custom"]
 
 
@@ -63,7 +65,7 @@ def get_builtin_profile(name: ProfileName) -> ExecutionProfile:
     """Return the built-in profile definition."""
     profile = _BUILTIN_PROFILES.get(name)
     if profile is None:
-        raise ValueError(f"Invalid execution.profile: expected one of tier1|tier2|tier3|custom, got {name!r}")
+        raise ExecutionError(f"Invalid execution.profile: expected one of tier1|tier2|tier3|custom, got {name!r}")
     return profile
 
 
@@ -71,23 +73,23 @@ def _as_float(value: Any, *, key: str) -> float:
     try:
         parsed = float(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"Invalid {key}: expected a number, got {value!r}") from exc
+        raise ExecutionError(f"Invalid {key}: expected a number, got {value!r}") from exc
     if parsed < 0:
-        raise ValueError(f"Invalid {key}: expected >= 0, got {parsed!r}")
+        raise ExecutionError(f"Invalid {key}: expected >= 0, got {parsed!r}")
     return parsed
 
 
 def _as_non_negative_int(value: Any, *, key: str) -> int:
     if isinstance(value, bool):
-        raise ValueError(f"Invalid {key}: expected int >= 0, got {value!r}")
+        raise ExecutionError(f"Invalid {key}: expected int >= 0, got {value!r}")
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"Invalid {key}: expected int >= 0, got {value!r}") from exc
+        raise ExecutionError(f"Invalid {key}: expected int >= 0, got {value!r}") from exc
     if parsed < 0:
-        raise ValueError(f"Invalid {key}: expected >= 0, got {parsed!r}")
+        raise ExecutionError(f"Invalid {key}: expected >= 0, got {parsed!r}")
     if isinstance(value, float) and not value.is_integer():
-        raise ValueError(f"Invalid {key}: expected int >= 0, got {value!r}")
+        raise ExecutionError(f"Invalid {key}: expected int >= 0, got {value!r}")
     return parsed
 
 
@@ -100,11 +102,11 @@ def resolve_execution_profile(config: dict[str, Any]) -> ExecutionProfile:
     elif isinstance(execution_cfg_raw, dict):
         execution_cfg = execution_cfg_raw
     else:
-        raise ValueError(f"Invalid execution: expected mapping, got {type(execution_cfg_raw).__name__}")
+        raise ExecutionError(f"Invalid execution: expected mapping, got {type(execution_cfg_raw).__name__}")
 
     raw_profile = execution_cfg.get("profile", "tier2")
     if raw_profile not in {"tier1", "tier2", "tier3", "custom"}:
-        raise ValueError(
+        raise ExecutionError(
             "Invalid execution.profile: expected one of tier1|tier2|tier3|custom, "
             f"got {raw_profile!r}"
         )
@@ -113,7 +115,7 @@ def resolve_execution_profile(config: dict[str, Any]) -> ExecutionProfile:
     legacy_keys_present = [key for key in _LEGACY_OVERRIDE_KEYS if key in root]
     profile_explicitly_set = "profile" in execution_cfg
     if legacy_keys_present and not profile_explicitly_set and profile_name != "custom":
-        raise ValueError(
+        raise ExecutionError(
             "Legacy execution override keys detected but execution.profile is not 'custom'. "
             "Set execution.profile=custom to use override fields. "
             f"Detected: {', '.join(legacy_keys_present)}"
@@ -126,7 +128,7 @@ def resolve_execution_profile(config: dict[str, Any]) -> ExecutionProfile:
             if field in execution_cfg and execution_cfg.get(field) is not None
         ]
         if conflicting:
-            raise ValueError(
+            raise ExecutionError(
                 f"execution.profile={profile_name} forbids overrides. "
                 "Remove override keys or set execution.profile=custom. "
                 f"Offending keys: {', '.join(conflicting)}"
@@ -136,7 +138,7 @@ def resolve_execution_profile(config: dict[str, Any]) -> ExecutionProfile:
     missing = [field for field in _PROFILE_OVERRIDE_FIELDS if field not in execution_cfg]
     if missing:
         missing_keys = ", ".join(f"execution.{field}" for field in missing)
-        raise ValueError(
+        raise ExecutionError(
             "execution.profile=custom requires all override keys. "
             f"Missing: {missing_keys}."
         )

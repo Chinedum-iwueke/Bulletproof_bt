@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 import copy
 
+from bt.core.errors import ConfigError
 from bt.execution.intrabar import parse_intrabar_spec
 
 
@@ -13,9 +14,6 @@ class ResolvedConfig:
     raw: dict[str, Any]
     resolved: dict[str, Any]
 
-
-class ConfigError(ValueError):
-    """Raised when configuration keys conflict or are invalid."""
 
 
 _LEGACY_STOP_RESOLUTION_WARNING = (
