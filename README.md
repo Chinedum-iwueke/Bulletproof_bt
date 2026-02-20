@@ -48,6 +48,9 @@ execution:
   profile: tier2
 ```
 
+If you enable spread modeling with `execution.spread_mode: fixed_bps` while using a tier preset,
+`execution.spread_bps` is auto-filled from the tier (`tier1=0.0`, `tier2=1.0`, `tier3=3.0`).
+
 Valid custom example (all override fields required):
 
 ```yaml
