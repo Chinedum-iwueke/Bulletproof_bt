@@ -22,8 +22,9 @@ Repo Evidence: `src/bt/portfolio/portfolio.py::_recalculate_state`.
 ### Reconciliation guidance
 Expected reconciliation chain:
 1. `performance.json.final_equity` equals the last equity point from `equity.csv`.
-2. `performance.json.gross_pnl/net_pnl/fee_total/slippage_total/spread_total` are computed from artifacts via `compute_cost_attribution`.
-3. `trades.csv` fields align with gross/net trade equations (`pnl_net = pnl_price - fees_paid`).
+2. `performance.json.initial_equity` equals the first equity point from `equity.csv`, and `performance.json.total_return = final_equity / initial_equity - 1` when initial equity is non-zero.
+3. `performance.json.gross_pnl/net_pnl/fee_total/slippage_total/spread_total` are computed from artifacts via `compute_cost_attribution`.
+4. `trades.csv` fields align with gross/net trade equations (`pnl_net = pnl_price - fees_paid`).
 
 Potential expected mismatches:
 - If you add external/manual adjustments not represented in run artifacts, external sheets will diverge.
@@ -36,7 +37,7 @@ Repo Evidence: `src/bt/metrics/performance.py::compute_performance`, `src/bt/met
 | `fills.jsonl` | `price`, `fee_cost`, `slippage_cost`, `spread_cost`, metadata | Per-fill executed economics |
 | `trades.csv` | `pnl_price`, `fees_paid`, `pnl_net`, `slippage` | Closed-trade ledger |
 | `equity.csv` | `cash`, `equity`, `realized_pnl`, `unrealized_pnl` | Time-series account state |
-| `performance.json` | `final_equity`, `gross_pnl`, `net_pnl`, cost totals | Aggregate report |
+| `performance.json` | `initial_equity`, `final_equity`, `total_return`, `gross_pnl`, `net_pnl`, cost totals | Aggregate report |
 | `summary.txt` | human summary from run artifacts | quick review, not authoritative for math |
 
 Repo Evidence: `src/bt/logging/jsonl.py::_with_canonical_fill_costs`, `src/bt/logging/trades.py::TradesCsvWriter._columns`, `src/bt/core/engine.py::_write_equity_header`, `src/bt/metrics/performance.py::write_performance_artifacts`, `src/bt/logging/summary.py::write_summary_txt`.

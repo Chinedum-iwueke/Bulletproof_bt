@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from bt.core.enums import Side
 from bt.core.types import Trade
@@ -49,11 +50,17 @@ def test_trades_csv_contains_risk_and_r_multiple_columns(tmp_path: Path) -> None
 
     assert "risk_amount" in row
     assert "stop_distance" in row
+    assert "entry_qty" in row
+    assert "exit_qty" in row
+    assert "entry_stop_distance" in row
     assert "r_multiple_gross" in row
     assert "r_multiple_net" in row
 
     assert float(row["risk_amount"]) == 100.0
     assert float(row["stop_distance"]) == 5.0
+    assert float(row["entry_stop_distance"]) == 5.0
+    assert float(row["entry_qty"]) == 2.0
+    assert float(row["exit_qty"]) == 2.0
 
     pnl_price = trade.pnl
     pnl_net = trade.pnl - trade.fees
@@ -90,5 +97,39 @@ def test_trades_csv_legacy_trade_without_risk_metadata(tmp_path: Path) -> None:
     row = rows[0]
     assert row["risk_amount"] == ""
     assert row["stop_distance"] == ""
+    assert row["entry_stop_distance"] == ""
+    assert float(row["entry_qty"]) == 1.0
+    assert float(row["exit_qty"]) == 1.0
     assert row["r_multiple_gross"] == ""
     assert row["r_multiple_net"] == ""
+
+
+def test_trades_csv_supports_distinct_entry_qty_and_exit_qty_for_partial_close(tmp_path: Path) -> None:
+    path = tmp_path / "trades.csv"
+    writer = TradesCsvWriter(path)
+
+    trade = Trade(
+        symbol="BTC",
+        side=Side.BUY,
+        entry_ts=pd.Timestamp("2024-01-01T00:00:00Z"),
+        exit_ts=pd.Timestamp("2024-01-01T01:00:00Z"),
+        entry_price=100.0,
+        exit_price=105.0,
+        qty=0.4,
+        pnl=2.0,
+        fees=0.1,
+        slippage=0.0,
+        mae_price=99.0,
+        mfe_price=106.0,
+        metadata={"entry_qty": 1.0, "risk_amount": 50.0, "stop_distance": 50.0},
+    )
+    writer.write_trade(trade)
+    writer.close()
+
+    with path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    row = rows[0]
+    assert float(row["entry_qty"]) == 1.0
+    assert float(row["exit_qty"]) == 0.4
+    assert float(row["r_multiple_gross"]) == pytest.approx(2.0 / 50.0)

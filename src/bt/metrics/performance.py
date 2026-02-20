@@ -18,7 +18,9 @@ from bt.contracts.schema_versions import PERFORMANCE_SCHEMA_VERSION
 @dataclass(frozen=True)
 class PerformanceReport:
     run_id: str
+    initial_equity: float
     final_equity: float
+    total_return: float
     total_trades: int
     ev_net: float
     ev_gross: float
@@ -436,7 +438,11 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
         raise ValueError("Equity column not found in equity.csv")
 
     equity_series = _coerce_numeric(equity_df[equity_col])
+    initial_equity = float(equity_series.iloc[0]) if not equity_series.empty else 0.0
     final_equity = float(equity_series.iloc[-1]) if not equity_series.empty else 0.0
+    total_return = 0.0
+    if initial_equity != 0.0:
+        total_return = (final_equity / initial_equity) - 1.0
 
     peak = equity_series.cummax()
     dd = equity_series / peak - 1.0 if not equity_series.empty else equity_series
@@ -484,7 +490,6 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
             total_seconds = float((ts_values.iloc[-1] - ts_values.iloc[0]).total_seconds())
             seconds_per_year = 365.25243600 * 24 * 60 * 60
             total_years = total_seconds / seconds_per_year if seconds_per_year > 0 else 0.0
-            initial_equity = float(equity_series.iloc[0])
             if total_years <= 0 or initial_equity <= 0 or final_equity <= 0:
                 cagr = None
             else:
@@ -502,7 +507,9 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
         )
         return PerformanceReport(
             run_id=run_id,
+            initial_equity=initial_equity,
             final_equity=final_equity,
+            total_return=total_return,
             total_trades=0,
             ev_net=0.0,
             ev_gross=0.0,
@@ -611,7 +618,9 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
 
     return PerformanceReport(
         run_id=run_id,
+        initial_equity=initial_equity,
         final_equity=final_equity,
+        total_return=total_return,
         total_trades=total_trades,
         ev_net=ev_net,
         ev_gross=ev_gross,

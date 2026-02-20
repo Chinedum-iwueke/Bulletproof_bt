@@ -60,7 +60,10 @@ class PositionBook:
                 self._position_metadata.pop(fill.symbol, None)
             else:
                 self._position_costs[fill.symbol] = (fill.fee, fill.slippage)
-                self._position_metadata[fill.symbol] = self._extract_risk_metadata(fill.metadata)
+                self._position_metadata[fill.symbol] = self._extract_risk_metadata(
+                    fill.metadata,
+                    entry_qty=position.qty,
+                )
             return position, None
 
         if position.side == fill.side:
@@ -117,7 +120,10 @@ class PositionBook:
                     fill.fee - closing_fee,
                     fill.slippage - closing_slippage,
                 )
-                self._position_metadata[fill.symbol] = self._extract_risk_metadata(fill.metadata)
+                self._position_metadata[fill.symbol] = self._extract_risk_metadata(
+                    fill.metadata,
+                    entry_qty=position.qty,
+                )
         elif remaining_qty == 0.0:
             trade = self._build_trade(
                 position=position,
@@ -216,11 +222,32 @@ class PositionBook:
         return round(qty, 12)
 
     @staticmethod
-    def _extract_risk_metadata(metadata: object) -> dict[str, object]:
+    def _extract_risk_metadata(
+        metadata: object,
+        *,
+        entry_qty: float,
+    ) -> dict[str, object]:
         if not isinstance(metadata, dict):
             return {}
-        keys = ("risk_amount", "stop_distance", "stop_source")
-        return {key: metadata.get(key) for key in keys if key in metadata}
+        extracted: dict[str, object] = {}
+        for key in ("risk_amount", "stop_distance", "stop_source"):
+            if key in metadata:
+                extracted[key] = metadata.get(key)
+
+        normalized_entry_qty = abs(float(entry_qty))
+        extracted["entry_qty"] = normalized_entry_qty
+        extracted["entry_stop_distance"] = extracted.get("stop_distance")
+
+        stop_distance_raw = extracted.get("entry_stop_distance")
+        try:
+            stop_distance = float(stop_distance_raw) if stop_distance_raw is not None else None
+        except (TypeError, ValueError):
+            stop_distance = None
+
+        if stop_distance is not None and stop_distance > 0 and normalized_entry_qty > 0:
+            extracted["risk_amount"] = normalized_entry_qty * stop_distance
+
+        return extracted
 
     @staticmethod
     def _build_trade(

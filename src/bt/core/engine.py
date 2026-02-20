@@ -144,6 +144,7 @@ class BacktestEngine:
         liquidation_reason: str,
     ) -> None:
         liquidation_orders: list[Order] = []
+        is_end_of_run = liquidation_reason == FORCED_LIQUIDATION_END_OF_RUN
         for symbol, position in self._portfolio.position_book.all_positions().items():
             if position.side is None or abs(float(position.qty)) < QTY_EPSILON:
                 continue
@@ -164,10 +165,10 @@ class BacktestEngine:
                     limit_price=None,
                     state=OrderState.NEW,
                     metadata={
-                        "reason": "forced_liquidation",
+                        "reason": "end_of_run_flatten" if is_end_of_run else "forced_liquidation",
                         "close_only": True,
-                        "forced_liquidation": True,
-                        "exit_reason": "forced_liquidation",
+                        "forced_liquidation": not is_end_of_run,
+                        "exit_reason": "end_of_run_flatten" if is_end_of_run else "forced_liquidation",
                         "liquidation_reason": liquidation_reason,
                         "delay_remaining": 0,
                     },

@@ -82,6 +82,37 @@ def test_run_status_execution_metadata_matches_tier3_profile(tmp_path: Path) -> 
 
     assert payload["execution_profile"] == "tier3"
     assert payload["effective_execution"] == TIER3_PRESET
+    assert payload["spread_mode"] == "none"
+    assert "spread_bps" not in payload
+
+
+def test_run_status_execution_metadata_with_fixed_bps_spread_includes_spread_bps(tmp_path: Path) -> None:
+    config_path = tmp_path / "engine_custom_fixed_spread.yaml"
+    _write_config(
+        config_path,
+        execution={
+            "profile": "custom",
+            "maker_fee": 0.0,
+            "taker_fee": 0.0008,
+            "slippage_bps": 5.0,
+            "delay_bars": 1,
+            "spread_bps": 2.5,
+            "spread_mode": "fixed_bps",
+        },
+    )
+
+    run_dir = Path(
+        run_backtest(
+            config_path=str(config_path),
+            data_path="data/curated/sample.csv",
+            out_dir=str(tmp_path / "out"),
+            run_name="custom_fixed_spread",
+        )
+    )
+    payload = _load_run_status(run_dir)
+    assert payload["execution_profile"] == "custom"
+    assert payload["spread_mode"] == "fixed_bps"
+    assert payload["spread_bps"] == 2.5
 
 
 def test_run_status_execution_metadata_is_deterministic(tmp_path: Path) -> None:

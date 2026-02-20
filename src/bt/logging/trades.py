@@ -160,6 +160,8 @@ class TradesCsvWriter:
         "symbol",
         "side",
         "qty",
+        "entry_qty",
+        "exit_qty",
         "entry_price",
         "exit_price",
         "pnl",
@@ -172,6 +174,7 @@ class TradesCsvWriter:
         "mfe_price",
         "risk_amount",
         "stop_distance",
+        "entry_stop_distance",
         "r_multiple_gross",
         "r_multiple_net",
     ]
@@ -202,6 +205,8 @@ class TradesCsvWriter:
         metadata = trade.metadata if isinstance(trade.metadata, dict) else {}
         risk_amount = metadata.get("risk_amount")
         stop_distance = metadata.get("stop_distance")
+        entry_qty = metadata.get("entry_qty", trade.qty)
+        entry_stop_distance = metadata.get("entry_stop_distance", stop_distance)
 
         pnl_price = trade.pnl
         fees_paid = trade.fees
@@ -213,6 +218,9 @@ class TradesCsvWriter:
             "pnl_net": pnl_net,
             "risk_amount": risk_amount,
             "stop_distance": stop_distance,
+            "entry_qty": entry_qty,
+            "exit_qty": trade.qty,
+            "entry_stop_distance": entry_stop_distance,
             "r_multiple_gross": compute_r_multiple(pnl_price, risk_amount),
             "r_multiple_net": compute_r_multiple(pnl_net, risk_amount),
         }
