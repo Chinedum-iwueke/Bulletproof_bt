@@ -48,6 +48,8 @@ Writer `_columns` contract:
 - `symbol`
 - `side`
 - `qty`
+- `entry_qty` *(entry-sized quantity used for risk normalization; defaults to `qty` when unavailable)*
+- `exit_qty` *(realized/closed quantity for the trade row; mirrors `qty`)*
 - `entry_price`
 - `exit_price`
 - `pnl`
@@ -60,6 +62,7 @@ Writer `_columns` contract:
 - `mfe_price`
 - `risk_amount` *(nullable; risk metadata dependent)*
 - `stop_distance` *(nullable; risk metadata dependent)*
+- `entry_stop_distance` *(nullable; initial stop distance used for risk normalization when available)*
 - `r_multiple_gross` *(nullable when risk_amount missing/invalid)*
 - `r_multiple_net` *(nullable when risk_amount missing/invalid)*
 

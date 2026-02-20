@@ -105,7 +105,7 @@ def test_engine_injects_positions_into_strategy_context(tmp_path: Path) -> None:
     assert strategy.captured_positions["AAA"]["qty"] > 0
 
 
-def test_engine_forced_liquidation_at_end_of_run(tmp_path: Path) -> None:
+def test_engine_end_of_run_flatten_is_not_classified_as_forced_liquidation(tmp_path: Path) -> None:
     engine, fills_path, trades_path, _ = _make_engine(tmp_path, EntryOnlyStrategy())
 
     engine.run()
@@ -116,9 +116,10 @@ def test_engine_forced_liquidation_at_end_of_run(tmp_path: Path) -> None:
     fill_rows = [json.loads(line) for line in fills_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert any(
         isinstance(row.get("metadata"), dict)
-        and row["metadata"].get("forced_liquidation") is True
+        and row["metadata"].get("forced_liquidation") is False
         and row["metadata"].get("close_only") is True
-        and row["metadata"].get("reason") == "forced_liquidation"
+        and row["metadata"].get("reason") == "end_of_run_flatten"
+        and row["metadata"].get("exit_reason") == "end_of_run_flatten"
         and row["metadata"].get("liquidation_reason") == "liquidation:end_of_run"
         for row in fill_rows
     )
