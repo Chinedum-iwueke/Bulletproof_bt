@@ -67,13 +67,21 @@ Repo Evidence: `src/bt/execution/profile.py::_PROFILE_OVERRIDE_FIELDS`, `src/bt/
 
 Repo Evidence: `src/bt/execution/effective.py::build_effective_execution_snapshot`, `src/bt/api.py::run_backtest`, `src/bt/experiments/grid_runner.py` status payload creation.
 
+### Spread activation defaults (unambiguous behavior)
+- Explicit `execution.spread_mode` always wins.
+- If `execution.spread_mode` is omitted:
+  - profiles with `spread_bps > 0` default to `spread_mode: fixed_bps`
+  - profiles with `spread_bps == 0` default to `spread_mode: none`
+- In `fixed_bps` mode, omitting `execution.spread_bps` uses the profile `spread_bps` value.
+
+Repo Evidence: `src/bt/execution/effective.py::resolve_spread_settings`, `src/bt/api.py::_build_engine`, `src/bt/core/config_resolver.py::resolve_config`.
+
 ## Copy/paste config examples
 
 ### Preset tier2
 ```yaml
 execution:
   profile: tier2
-  spread_mode: none
   intrabar_mode: worst_case
 ```
 

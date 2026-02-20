@@ -35,6 +35,15 @@ def _load_run_status(run_dir: Path) -> dict[str, object]:
     return json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
 
 
+def _load_fills(run_dir: Path) -> list[dict[str, object]]:
+    fills_path = run_dir / "fills.jsonl"
+    return [
+        json.loads(line)
+        for line in fills_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
 def _scrub_nondeterministic(payload: dict[str, object]) -> dict[str, object]:
     scrubbed = dict(payload)
     for key in ("run_id", "created_at", "timestamp", "started_at", "finished_at"):
@@ -57,7 +66,8 @@ def test_run_status_execution_metadata_appears_with_defaults(tmp_path: Path) -> 
     payload = _load_run_status(run_dir)
 
     assert "execution_profile" in payload
-    assert payload["spread_mode"] == "none"
+    assert payload["spread_mode"] == "fixed_bps"
+    assert payload["spread_bps"] == 1.0
     assert payload["intrabar_mode"] == "worst_case"
 
     effective_execution = payload.get("effective_execution")
@@ -82,6 +92,37 @@ def test_run_status_execution_metadata_matches_tier3_profile(tmp_path: Path) -> 
 
     assert payload["execution_profile"] == "tier3"
     assert payload["effective_execution"] == TIER3_PRESET
+    assert payload["spread_mode"] == "fixed_bps"
+    assert payload["spread_bps"] == 3.0
+
+
+def test_run_status_execution_metadata_with_fixed_bps_spread_includes_spread_bps(tmp_path: Path) -> None:
+    config_path = tmp_path / "engine_custom_fixed_spread.yaml"
+    _write_config(
+        config_path,
+        execution={
+            "profile": "custom",
+            "maker_fee": 0.0,
+            "taker_fee": 0.0008,
+            "slippage_bps": 5.0,
+            "delay_bars": 1,
+            "spread_bps": 2.5,
+            "spread_mode": "fixed_bps",
+        },
+    )
+
+    run_dir = Path(
+        run_backtest(
+            config_path=str(config_path),
+            data_path="data/curated/sample.csv",
+            out_dir=str(tmp_path / "out"),
+            run_name="custom_fixed_spread",
+        )
+    )
+    payload = _load_run_status(run_dir)
+    assert payload["execution_profile"] == "custom"
+    assert payload["spread_mode"] == "fixed_bps"
+    assert payload["spread_bps"] == 2.5
 
 
 def test_run_status_execution_metadata_is_deterministic(tmp_path: Path) -> None:
@@ -108,3 +149,24 @@ def test_run_status_execution_metadata_is_deterministic(tmp_path: Path) -> None:
     payload_a = _scrub_nondeterministic(_load_run_status(run_a))
     payload_b = _scrub_nondeterministic(_load_run_status(run_b))
     assert payload_a == payload_b
+
+
+def test_tier2_default_applies_fixed_bps_spread_to_fills(tmp_path: Path) -> None:
+    config_path = tmp_path / "engine_tier2_spread.yaml"
+    _write_config(config_path, execution={"profile": "tier2"})
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw["strategy"]["p_trade"] = 1.0
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    run_dir = Path(
+        run_backtest(
+            config_path=str(config_path),
+            data_path="data/curated/sample.csv",
+            out_dir=str(tmp_path / "out"),
+            run_name="tier2_spread",
+        )
+    )
+    fills = _load_fills(run_dir)
+    assert fills
+    assert any((row.get("metadata") or {}).get("spread_mode") == "fixed_bps" for row in fills)
+    assert any(float((row.get("metadata") or {}).get("spread_cost", 0.0)) > 0.0 for row in fills)

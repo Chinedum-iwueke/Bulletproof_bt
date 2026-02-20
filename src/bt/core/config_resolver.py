@@ -6,6 +6,7 @@ from typing import Any
 import copy
 
 from bt.core.errors import ConfigError
+from bt.execution.profile import resolve_execution_profile
 from bt.execution.intrabar import parse_intrabar_spec
 
 
@@ -189,13 +190,15 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     # Default execution profile is tier2. We do not implicitly switch to custom
     # when legacy override keys are present. Users must set profile=custom explicitly.
     execution_cfg.setdefault("profile", "tier2")
-    execution_cfg.setdefault("spread_mode", "none")
 
     resolved["execution"] = execution_cfg
     intrabar_spec = parse_intrabar_spec(resolved)
     execution_cfg["intrabar_mode"] = intrabar_spec.mode
 
     spread_mode = execution_cfg.get("spread_mode")
+    if spread_mode is None:
+        spread_mode = "fixed_bps" if resolve_execution_profile(resolved).spread_bps > 0 else "none"
+        execution_cfg["spread_mode"] = spread_mode
     if spread_mode not in {"none", "fixed_bps", "bar_range_proxy"}:
         raise ConfigError(
             "Invalid execution.spread_mode: expected one of "
@@ -204,15 +207,14 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
         )
 
     if spread_mode == "fixed_bps":
-        if "spread_bps" not in execution_cfg:
-            raise ConfigError("execution.spread_bps is required when execution.spread_mode='fixed_bps'")
-        try:
-            spread_bps = float(execution_cfg["spread_bps"])
-        except (TypeError, ValueError) as exc:
-            raise ConfigError("Invalid execution.spread_bps: expected float >= 0") from exc
-        if spread_bps < 0:
-            raise ConfigError("Invalid execution.spread_bps: expected float >= 0")
-        execution_cfg["spread_bps"] = spread_bps
+        if "spread_bps" in execution_cfg:
+            try:
+                spread_bps = float(execution_cfg["spread_bps"])
+            except (TypeError, ValueError) as exc:
+                raise ConfigError("Invalid execution.spread_bps: expected float >= 0") from exc
+            if spread_bps < 0:
+                raise ConfigError("Invalid execution.spread_bps: expected float >= 0")
+            execution_cfg["spread_bps"] = spread_bps
 
     if spread_mode in {"none", "bar_range_proxy"} and "spread_bps" in execution_cfg:
         try:

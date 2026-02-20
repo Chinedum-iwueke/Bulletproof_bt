@@ -31,6 +31,7 @@ def _build_engine(
     from bt.execution.execution_model import ExecutionModel
     from bt.execution.fees import FeeModel
     from bt.execution.profile import resolve_execution_profile
+    from bt.execution.effective import resolve_spread_settings
     from bt.execution.slippage import SlippageModel
     from bt.logging.jsonl import JsonlWriter
     from bt.logging.trades import TradesCsvWriter
@@ -122,12 +123,11 @@ def _build_engine(
         impact_cap=float(config.get("impact_cap", 0.05)),
         fixed_bps=effective_slippage_bps,
     )
-    execution_cfg = config.get("execution") if isinstance(config.get("execution"), dict) else {}
-    raw_spread_mode = execution_cfg.get("spread_mode", "none")
-    spread_mode = raw_spread_mode if isinstance(raw_spread_mode, str) and raw_spread_mode else "none"
-
-    raw_spread_bps = execution_cfg.get("spread_bps", 0.0)
-    spread_bps = 0.0 if raw_spread_bps is None else float(raw_spread_bps)
+    spread_mode, resolved_spread_bps = resolve_spread_settings(
+        config,
+        profile=execution_profile,
+    )
+    spread_bps = 0.0 if resolved_spread_bps is None else float(resolved_spread_bps)
 
     intrabar_spec = parse_intrabar_spec(config)
 

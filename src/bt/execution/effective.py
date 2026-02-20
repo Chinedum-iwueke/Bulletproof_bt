@@ -4,7 +4,7 @@ from dataclasses import asdict
 from typing import Any
 
 from bt.execution.intrabar import parse_intrabar_spec
-from bt.execution.profile import resolve_execution_profile
+from bt.execution.profile import ExecutionProfile, resolve_execution_profile
 
 _VALID_SPREAD_MODES = {"none", "fixed_bps", "bar_range_proxy"}
 
@@ -19,21 +19,53 @@ def _as_spread_bps(value: Any) -> float:
     return parsed
 
 
-def build_effective_execution_snapshot(config: dict[str, Any]) -> dict[str, Any]:
+def resolve_spread_settings(
+    config: dict[str, Any],
+    *,
+    profile: ExecutionProfile | None = None,
+) -> tuple[str, float | None]:
+    """Resolve effective spread mode/bps applied by execution.
+
+    Rules:
+    - explicit execution.spread_mode always wins.
+    - if spread_mode omitted: tier presets with spread_bps>0 default to fixed_bps.
+    - fixed_bps mode without explicit execution.spread_bps inherits profile.spread_bps.
     """
-    Return a deterministic dict describing the effective execution assumptions.
-    """
-    profile = resolve_execution_profile(config)
+    resolved_profile = profile or resolve_execution_profile(config)
     execution_cfg_raw = config.get("execution") if isinstance(config, dict) else None
     execution_cfg = execution_cfg_raw if isinstance(execution_cfg_raw, dict) else {}
 
-    spread_mode_raw = execution_cfg.get("spread_mode", "none")
-    spread_mode = spread_mode_raw if isinstance(spread_mode_raw, str) else "none"
+    spread_mode_raw = execution_cfg.get("spread_mode")
+    if spread_mode_raw is None:
+        spread_mode = "fixed_bps" if resolved_profile.spread_bps > 0 else "none"
+    elif isinstance(spread_mode_raw, str):
+        spread_mode = spread_mode_raw
+    else:
+        spread_mode = "none"
+
     if spread_mode not in _VALID_SPREAD_MODES:
         raise ValueError(
             "Invalid execution.spread_mode: expected one of none|fixed_bps|bar_range_proxy, "
             f"got {spread_mode_raw!r}"
         )
+
+    spread_bps: float | None = None
+    if spread_mode == "fixed_bps":
+        spread_bps_value = execution_cfg.get("spread_bps")
+        spread_bps = (
+            _as_spread_bps(spread_bps_value)
+            if spread_bps_value is not None
+            else float(resolved_profile.spread_bps)
+        )
+    return spread_mode, spread_bps
+
+
+def build_effective_execution_snapshot(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Return a deterministic dict describing the effective execution assumptions.
+    """
+    profile = resolve_execution_profile(config)
+    spread_mode, spread_bps = resolve_spread_settings(config, profile=profile)
 
     snapshot: dict[str, Any] = {
         "execution_profile": profile.name,
@@ -44,11 +76,6 @@ def build_effective_execution_snapshot(config: dict[str, Any]) -> dict[str, Any]
     snapshot["effective_execution"].pop("name", None)
 
     if spread_mode == "fixed_bps":
-        spread_bps_value = execution_cfg.get("spread_bps")
-        if spread_bps_value is None:
-            spread_bps = profile.spread_bps
-        else:
-            spread_bps = _as_spread_bps(spread_bps_value)
         snapshot["spread_bps"] = spread_bps
 
     return snapshot
