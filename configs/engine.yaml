@@ -17,8 +17,8 @@ data:
 execution:
   # profile: tier2              # tier1 | tier2 | tier3 | custom
   intrabar_mode: worst_case     # worst_case | best_case | midpoint
-  spread_mode: none             # none | fixed_bps | bar_range_proxy
-  # spread_bps: 1.0               # only used when spread_mode=fixed_bps
+  spread_mode: fixed_bps        # none | fixed_bps | bar_range_proxy
+  # spread_bps: 1.0             # only used when spread_mode=fixed_bps
 
   # Custom-only profile overrides (used only when execution.profile=custom):
   # maker_fee: 0.0
