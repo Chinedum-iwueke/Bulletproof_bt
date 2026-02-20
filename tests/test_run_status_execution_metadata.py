@@ -115,6 +115,25 @@ def test_run_status_execution_metadata_with_fixed_bps_spread_includes_spread_bps
     assert payload["spread_bps"] == 2.5
 
 
+def test_run_status_tier_fixed_spread_without_explicit_bps_uses_tier_value(tmp_path: Path) -> None:
+    config_path = tmp_path / "engine_tier3_fixed_spread.yaml"
+    _write_config(config_path, execution={"profile": "tier3", "spread_mode": "fixed_bps"})
+
+    run_dir = Path(
+        run_backtest(
+            config_path=str(config_path),
+            data_path="data/curated/sample.csv",
+            out_dir=str(tmp_path / "out"),
+            run_name="tier3_fixed_spread",
+        )
+    )
+    payload = _load_run_status(run_dir)
+
+    assert payload["execution_profile"] == "tier3"
+    assert payload["spread_mode"] == "fixed_bps"
+    assert payload["spread_bps"] == 3.0
+
+
 def test_run_status_execution_metadata_is_deterministic(tmp_path: Path) -> None:
     config_path = tmp_path / "engine_deterministic.yaml"
     _write_config(config_path, execution={"profile": "tier3"})

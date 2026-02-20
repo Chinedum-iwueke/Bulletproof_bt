@@ -69,12 +69,20 @@ Repo Evidence: `src/bt/execution/effective.py::build_effective_execution_snapsho
 
 ## Copy/paste config examples
 
-### Preset tier2
+### Preset tier2 (default spread disabled)
 ```yaml
 execution:
   profile: tier2
   spread_mode: none
   intrabar_mode: worst_case
+```
+
+### Preset tier with fixed spread enabled
+```yaml
+execution:
+  profile: tier3
+  spread_mode: fixed_bps
+  # spread_bps optional; defaults to tier spread_bps (tier3 => 3.0)
 ```
 
 ### Custom execution assumptions
@@ -96,6 +104,9 @@ execution:
 
 - **Why does `spread_bps` still error even if `spread_mode: none`?**  
   The profile resolver checks override fields independent of spread mode for preset tiers; preset tier + explicit `spread_bps` is still forbidden.
+
+- **What happens if I set `spread_mode: fixed_bps` on a tier preset without `spread_bps`?**  
+  Resolver uses the tier preset value (`tier1=0.0`, `tier2=1.0`, `tier3=3.0`).
 
 - **How do I intentionally override?**  
   Set `execution.profile: custom` and provide all required override fields.

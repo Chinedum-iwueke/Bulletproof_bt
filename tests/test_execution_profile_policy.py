@@ -45,3 +45,25 @@ def test_legacy_keys_without_profile_raise() -> None:
 def test_preset_without_overrides_passes() -> None:
     profile = resolve_execution_profile({"execution": {"profile": "tier2"}})
     assert profile.name == "tier2"
+
+
+def test_fixed_bps_allows_missing_spread_bps_for_tier_profile() -> None:
+    resolved = resolve_config({"execution": {"profile": "tier3", "spread_mode": "fixed_bps"}})
+    assert resolved["execution"]["profile"] == "tier3"
+    assert resolved["execution"]["spread_mode"] == "fixed_bps"
+
+
+def test_custom_fixed_bps_still_requires_explicit_spread_bps() -> None:
+    with pytest.raises(ValueError, match="execution.spread_bps"):
+        resolve_config(
+            {
+                "execution": {
+                    "profile": "custom",
+                    "maker_fee": 0.0,
+                    "taker_fee": 0.0008,
+                    "slippage_bps": 5.0,
+                    "delay_bars": 1,
+                    "spread_mode": "fixed_bps",
+                }
+            }
+        )

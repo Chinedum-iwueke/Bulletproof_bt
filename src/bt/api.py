@@ -126,8 +126,11 @@ def _build_engine(
     raw_spread_mode = execution_cfg.get("spread_mode", "none")
     spread_mode = raw_spread_mode if isinstance(raw_spread_mode, str) and raw_spread_mode else "none"
 
-    raw_spread_bps = execution_cfg.get("spread_bps", 0.0)
-    spread_bps = 0.0 if raw_spread_bps is None else float(raw_spread_bps)
+    raw_spread_bps = execution_cfg.get("spread_bps")
+    if spread_mode == "fixed_bps" and raw_spread_bps is None:
+        spread_bps = execution_profile.spread_bps
+    else:
+        spread_bps = 0.0 if raw_spread_bps is None else float(raw_spread_bps)
 
     intrabar_spec = parse_intrabar_spec(config)
 

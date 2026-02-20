@@ -7,6 +7,7 @@ import copy
 
 from bt.core.errors import ConfigError
 from bt.execution.intrabar import parse_intrabar_spec
+from bt.execution.profile import resolve_execution_profile
 
 
 @dataclass(frozen=True)
@@ -204,15 +205,18 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
         )
 
     if spread_mode == "fixed_bps":
-        if "spread_bps" not in execution_cfg:
-            raise ConfigError("execution.spread_bps is required when execution.spread_mode='fixed_bps'")
-        try:
-            spread_bps = float(execution_cfg["spread_bps"])
-        except (TypeError, ValueError) as exc:
-            raise ConfigError("Invalid execution.spread_bps: expected float >= 0") from exc
+        spread_bps_raw = execution_cfg.get("spread_bps")
+        if spread_bps_raw is None:
+            spread_bps = resolve_execution_profile(resolved).spread_bps
+        else:
+            try:
+                spread_bps = float(spread_bps_raw)
+            except (TypeError, ValueError) as exc:
+                raise ConfigError("Invalid execution.spread_bps: expected float >= 0") from exc
         if spread_bps < 0:
             raise ConfigError("Invalid execution.spread_bps: expected float >= 0")
-        execution_cfg["spread_bps"] = spread_bps
+        if "spread_bps" in execution_cfg:
+            execution_cfg["spread_bps"] = spread_bps
 
     if spread_mode in {"none", "bar_range_proxy"} and "spread_bps" in execution_cfg:
         try:
