@@ -27,7 +27,7 @@ def _build_engine(
     sanity_counters: SanityCounters | None = None,
 ):
     from bt.core.engine import BacktestEngine
-    from bt.data.resample import TimeframeResampler
+    from bt.data.resample import TimeframeResampler, normalize_timeframe
     from bt.execution.execution_model import ExecutionModel
     from bt.execution.fees import FeeModel
     from bt.execution.profile import resolve_execution_profile
@@ -68,6 +68,18 @@ def _build_engine(
         **strategy_kwargs,
     )
     strategy = ReadOnlyContextStrategyAdapter(inner=strategy)
+
+    data_cfg = config.get("data") if isinstance(config.get("data"), dict) else {}
+    timeframe_override = data_cfg.get("timeframe") if isinstance(data_cfg, dict) else None
+    if timeframe_override is not None:
+        parsed_timeframe = normalize_timeframe(timeframe_override, key_path="data.timeframe")
+        raw_htf_resampler = config.get("htf_resampler")
+        if isinstance(raw_htf_resampler, dict):
+            htf_cfg = dict(raw_htf_resampler)
+            htf_cfg["timeframes"] = [parsed_timeframe]
+            config["htf_resampler"] = htf_cfg
+        else:
+            config["htf_resampler"] = {"timeframes": [parsed_timeframe], "strict": True}
 
     htf_resampler = config.get("htf_resampler")
     if isinstance(htf_resampler, dict):

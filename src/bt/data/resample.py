@@ -17,10 +17,34 @@ from bt.core.types import Bar
 
 
 _TIMEFRAME_TO_MINUTES: dict[str, int] = {
+    "1m": 1,
+    "3m": 3,
     "5m": 5,
     "15m": 15,
+    "30m": 30,
     "1h": 60,
+    "4h": 240,
+    "1d": 1440,
 }
+
+SUPPORTED_TIMEFRAMES: tuple[str, ...] = tuple(_TIMEFRAME_TO_MINUTES.keys())
+
+
+def normalize_timeframe(value: object, *, key_path: str = "timeframe") -> str:
+    """Normalize and validate a timeframe string against supported values."""
+    if not isinstance(value, str):
+        raise ValueError(
+            f"Invalid {key_path}: expected one of {list(SUPPORTED_TIMEFRAMES)} "
+            f"(got: {value!r})"
+        )
+
+    timeframe = value.strip().lower()
+    if timeframe not in _TIMEFRAME_TO_MINUTES:
+        raise ValueError(
+            f"Invalid {key_path}: {value!r}. Supported examples: "
+            f"{', '.join(SUPPORTED_TIMEFRAMES)}"
+        )
+    return timeframe
 
 
 @dataclass(frozen=True)
@@ -73,12 +97,10 @@ class TimeframeResampler:
         if not timeframes:
             raise ValueError("At least one timeframe is required")
 
-        unsupported = [tf for tf in timeframes if tf not in _TIMEFRAME_TO_MINUTES]
-        if unsupported:
-            raise ValueError(f"Unsupported timeframe(s): {unsupported}")
+        normalized = [normalize_timeframe(tf, key_path="timeframe") for tf in timeframes]
 
         # Preserve declared order while deduplicating.
-        self._timeframes = list(dict.fromkeys(timeframes))
+        self._timeframes = list(dict.fromkeys(normalized))
         self._strict = strict
         self._base_freq = base_freq
 
@@ -139,6 +161,8 @@ class TimeframeResampler:
     @staticmethod
     def _bucket_start(ts: pd.Timestamp, timeframe: str) -> pd.Timestamp:
         minutes = _TIMEFRAME_TO_MINUTES[timeframe]
+        if timeframe == "1d":
+            return ts.floor("1d")
         if timeframe == "1h":
             return ts.floor("1h")
         return ts.floor(f"{minutes}min")
