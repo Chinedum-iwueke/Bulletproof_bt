@@ -12,6 +12,7 @@ data:
   date_range: null              # optional window; may also be {start: ..., end: ...}
   row_limit_per_symbol: null    # optional per-symbol row cap
   chunksize: 50000              # streaming chunk size
+  # timeframe: "15m"            # optional single HTF resample target override (1m,3m,5m,15m,30m,1h,4h,1d)
 
 # Execution and fill-model controls.
 execution:
