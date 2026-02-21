@@ -20,6 +20,43 @@ from bt.contracts.schema_versions import (
 from bt.validation.config_completeness import validate_resolved_config_completeness
 
 
+def _resolve_timeframe_mode(config: dict[str, Any]) -> tuple[str, str | None, str | None, str]:
+    data_cfg = config.get("data") if isinstance(config.get("data"), dict) else {}
+    if not isinstance(data_cfg, dict):
+        raise ValueError("config.data must be a mapping when provided")
+
+    engine_timeframe_raw = data_cfg.get("engine_timeframe")
+    entry_timeframe_raw = data_cfg.get("entry_timeframe")
+    legacy_timeframe_raw = data_cfg.get("timeframe")
+
+    if engine_timeframe_raw is None and entry_timeframe_raw is None and legacy_timeframe_raw is not None:
+        engine_timeframe_raw = legacy_timeframe_raw
+
+    if engine_timeframe_raw is not None and entry_timeframe_raw is not None:
+        raise ValueError("Invalid config: choose one mode (set only one of data.engine_timeframe or data.entry_timeframe)")
+
+    from bt.data.resample import normalize_timeframe
+
+    engine_timeframe = None
+    entry_timeframe = None
+    mode = "default"
+
+    if engine_timeframe_raw is not None:
+        engine_timeframe = normalize_timeframe(engine_timeframe_raw, key_path="data.engine_timeframe")
+        mode = "engine_timeframe"
+    elif entry_timeframe_raw is not None:
+        entry_timeframe = normalize_timeframe(entry_timeframe_raw, key_path="data.entry_timeframe")
+        mode = "entry_timeframe"
+
+    exit_timeframe_raw = data_cfg.get("exit_timeframe", "1m")
+    exit_timeframe = normalize_timeframe(exit_timeframe_raw, key_path="data.exit_timeframe")
+    if mode == "entry_timeframe" and exit_timeframe != "1m":
+        raise ValueError("data.exit_timeframe not supported yet; exits are evaluated every engine bar")
+
+    return mode, engine_timeframe, entry_timeframe, exit_timeframe
+
+
+
 def _build_engine(
     config: dict[str, Any],
     datafeed: Any,
@@ -27,7 +64,8 @@ def _build_engine(
     sanity_counters: SanityCounters | None = None,
 ):
     from bt.core.engine import BacktestEngine
-    from bt.data.resample import TimeframeResampler, normalize_timeframe
+    from bt.data.resample import TimeframeResampler
+    from bt.data.resampled_feed import EntryTimeframeGate
     from bt.execution.execution_model import ExecutionModel
     from bt.execution.fees import FeeModel
     from bt.execution.profile import resolve_execution_profile
@@ -69,9 +107,13 @@ def _build_engine(
     )
     strategy = ReadOnlyContextStrategyAdapter(inner=strategy)
 
+    mode, engine_timeframe, entry_timeframe, _ = _resolve_timeframe_mode(config)
+
     data_cfg = config.get("data") if isinstance(config.get("data"), dict) else {}
     timeframe_override = data_cfg.get("timeframe") if isinstance(data_cfg, dict) else None
-    if timeframe_override is not None:
+    if timeframe_override is not None and mode == "default":
+        from bt.data.resample import normalize_timeframe
+
         parsed_timeframe = normalize_timeframe(timeframe_override, key_path="data.timeframe")
         raw_htf_resampler = config.get("htf_resampler")
         if isinstance(raw_htf_resampler, dict):
@@ -92,6 +134,9 @@ def _build_engine(
 
     signal_conflict_policy = strategy_cfg.get("signal_conflict_policy", "reject")
     strategy = SignalConflictPolicyStrategyAdapter(inner=strategy, policy=str(signal_conflict_policy))
+
+    if entry_timeframe is not None:
+        strategy = EntryTimeframeGate(inner=strategy, entry_timeframe=entry_timeframe)
 
     if not isinstance(config.get("risk"), dict):
         raise ValueError("risk.mode and risk.r_per_trade are required")
@@ -258,6 +303,18 @@ def run_backtest(
             benchmark_tracker = BenchmarkTracker(benchmark_spec)
 
         datafeed = load_feed(data_path, config)
+        mode, engine_timeframe, _, _ = _resolve_timeframe_mode(config)
+        if mode == "engine_timeframe" and engine_timeframe is not None:
+            from bt.data.resampled_feed import ResampledDataFeed
+
+            strict = True
+            data_cfg = config.get("data") if isinstance(config.get("data"), dict) else {}
+            if isinstance(data_cfg, dict) and "resample_strict" in data_cfg:
+                strict = bool(data_cfg.get("resample_strict"))
+            elif isinstance(config.get("htf_resampler"), dict):
+                strict = bool(config["htf_resampler"].get("strict", True))
+            datafeed = ResampledDataFeed(inner_feed=datafeed, timeframe=engine_timeframe, strict=strict)
+
         benchmark_metrics: dict[str, Any] | None = None
         if benchmark_tracker is not None:
             datafeed = BenchmarkTrackingFeed(inner_feed=datafeed, tracker=benchmark_tracker)

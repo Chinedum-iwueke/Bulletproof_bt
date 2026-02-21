@@ -81,4 +81,5 @@ def test_reservation_blocks_second_signal_same_timestamp(tmp_path: Path) -> None
     assert len(rejected) == 1
     assert rejected[0]["reason"] == "risk_rejected:max_positions_reached"
     assert len(fills) == 2
-    assert sum(1 for fill in fills if fill.get("metadata", {}).get("forced_liquidation") is True) == 1
+    assert sum(1 for fill in fills if fill.get("metadata", {}).get("forced_liquidation") is True) == 0
+    assert any(fill.get("metadata", {}).get("reason") == "end_of_run_flatten" for fill in fills)
