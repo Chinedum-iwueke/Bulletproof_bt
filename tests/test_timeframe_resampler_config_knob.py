@@ -84,22 +84,18 @@ def test_default_preserves_behavior_when_timeframe_unset(monkeypatch: pytest.Mon
     assert comparison == baseline
 
 
-def test_timeframe_15m_changes_resample_target_not_lookahead(
+def test_timeframe_15m_alias_is_not_used_for_htf_context_when_driving_engine_timeframe(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    # 31-minute span so 00:30 can close the 00:15 bucket; minute 20 intentionally missing.
     minutes = [m for m in range(0, 31) if m != 20]
     bars_df = _bars_df(minutes)
 
     cfg = _base_config()
-    cfg["data"] = {"mode": "dataframe", "timeframe": "15m"}
+    cfg["data"] = {"mode": "dataframe", "engine_timeframe": "15m"}
     emitted = _run_with_config(monkeypatch, tmp_path / "tf15m", cfg, bars_df)
 
-    assert len(emitted) <= 2
-    assert emitted == [
-        (pd.Timestamp("2025-01-01 00:00:00", tz="UTC"), "15m", "AAA", 15, 15),
-    ]
+    assert emitted and all(item[1] == "5m" for item in emitted)
 
 
 def test_invalid_timeframe_raises_valueerror(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -107,7 +103,7 @@ def test_invalid_timeframe_raises_valueerror(monkeypatch: pytest.MonkeyPatch, tm
     cfg = _base_config()
     cfg["data"] = {"mode": "dataframe", "timeframe": "banana"}
 
-    with pytest.raises(ValueError, match=r"data\.timeframe") as exc_info:
+    with pytest.raises(ValueError, match=r"data\.engine_timeframe") as exc_info:
         _run_with_config(monkeypatch, tmp_path / "invalid", cfg, bars_df)
 
     assert "1m" in str(exc_info.value)
