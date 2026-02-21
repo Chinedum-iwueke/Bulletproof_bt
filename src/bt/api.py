@@ -20,6 +20,25 @@ from bt.contracts.schema_versions import (
 from bt.validation.config_completeness import validate_resolved_config_completeness
 
 
+def _apply_data_timeframe_override(config: dict[str, Any]) -> None:
+    """Apply data.timeframe to htf_resampler in-place when present."""
+    from bt.data.resample import normalize_timeframe
+
+    data_cfg = config.get("data") if isinstance(config.get("data"), dict) else {}
+    timeframe_override = data_cfg.get("timeframe") if isinstance(data_cfg, dict) else None
+    if timeframe_override is None:
+        return
+
+    parsed_timeframe = normalize_timeframe(timeframe_override, key_path="data.timeframe")
+    raw_htf_resampler = config.get("htf_resampler")
+    if isinstance(raw_htf_resampler, dict):
+        htf_cfg = dict(raw_htf_resampler)
+        htf_cfg["timeframes"] = [parsed_timeframe]
+        config["htf_resampler"] = htf_cfg
+    else:
+        config["htf_resampler"] = {"timeframes": [parsed_timeframe], "strict": True}
+
+
 def _build_engine(
     config: dict[str, Any],
     datafeed: Any,
@@ -27,7 +46,7 @@ def _build_engine(
     sanity_counters: SanityCounters | None = None,
 ):
     from bt.core.engine import BacktestEngine
-    from bt.data.resample import TimeframeResampler, normalize_timeframe
+    from bt.data.resample import TimeframeResampler
     from bt.execution.execution_model import ExecutionModel
     from bt.execution.fees import FeeModel
     from bt.execution.profile import resolve_execution_profile
@@ -69,17 +88,7 @@ def _build_engine(
     )
     strategy = ReadOnlyContextStrategyAdapter(inner=strategy)
 
-    data_cfg = config.get("data") if isinstance(config.get("data"), dict) else {}
-    timeframe_override = data_cfg.get("timeframe") if isinstance(data_cfg, dict) else None
-    if timeframe_override is not None:
-        parsed_timeframe = normalize_timeframe(timeframe_override, key_path="data.timeframe")
-        raw_htf_resampler = config.get("htf_resampler")
-        if isinstance(raw_htf_resampler, dict):
-            htf_cfg = dict(raw_htf_resampler)
-            htf_cfg["timeframes"] = [parsed_timeframe]
-            config["htf_resampler"] = htf_cfg
-        else:
-            config["htf_resampler"] = {"timeframes": [parsed_timeframe], "strict": True}
+    _apply_data_timeframe_override(config)
 
     htf_resampler = config.get("htf_resampler")
     if isinstance(htf_resampler, dict):
@@ -231,6 +240,7 @@ def run_backtest(
     for override_path in resolve_paths_relative_to(Path(config_path).parent, override_paths):
         config = deep_merge(config, load_yaml(override_path))
     config = resolve_config(config)
+    _apply_data_timeframe_override(config)
     validate_resolved_config_completeness(config)
 
     resolved_run_name = run_name or make_run_id()
@@ -359,6 +369,7 @@ def run_grid(
         config = deep_merge(config, load_yaml(override_path))
 
     config = resolve_config(config)
+    _apply_data_timeframe_override(config)
     validate_resolved_config_completeness(config)
 
     experiment_cfg = load_yaml(experiment_path)
