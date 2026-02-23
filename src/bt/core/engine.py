@@ -23,6 +23,13 @@ from bt.portfolio.portfolio import Portfolio
 from bt.risk.risk_engine import RiskEngine
 from bt.strategy.base import Strategy
 from bt.universe.universe import UniverseEngine
+from bt.audit.audit_manager import AuditManager
+from bt.audit.signal_audit import inspect_signal_context
+from bt.audit.order_audit import inspect_order
+from bt.audit.fill_audit import inspect_fill
+from bt.audit.position_audit import inspect_position
+from bt.audit.portfolio_audit import inspect_portfolio
+from bt.audit.alignment_audit import inspect_alignment
 
 
 class BacktestEngine:
@@ -43,6 +50,7 @@ class BacktestEngine:
         equity_path: Path,
         config: dict,
         sanity_counters: SanityCounters | None = None,
+        audit_manager: AuditManager | None = None,
     ) -> None:
         self._datafeed = datafeed
         self._universe = universe
@@ -58,6 +66,7 @@ class BacktestEngine:
         self._order_counter = 0
         self._indicators: dict[str, dict[str, Indicator]] = {}
         self._sanity_counters = sanity_counters
+        self._audit = audit_manager
 
     def _positions_context(self) -> dict[str, dict[str, Any]]:
         positions_ctx: dict[str, dict[str, Any]] = {}
@@ -284,6 +293,12 @@ class BacktestEngine:
                     "tradeable": tradeable,
                 }
                 signals = self._strategy.on_bars(ts, bars_by_symbol, tradeable, self._ctx_with_positions(ctx))
+                if self._audit is not None and self._audit.enabled:
+                    for violation in inspect_alignment(ts=ts, bars_by_symbol=bars_by_symbol):
+                        self._audit.record_event("alignment_audit", violation, violation=True)
+                    for symbol, indicators in indicators_snapshot.items():
+                        for violation in inspect_signal_context(symbol=symbol, ts=ts, indicators=indicators):
+                            self._audit.record_event("signal_audit", violation, violation=True)
                 if self._sanity_counters is not None:
                     self._sanity_counters.signals_emitted += len(signals)
 
@@ -347,6 +362,11 @@ class BacktestEngine:
                         metadata=dict(order_intent.metadata),
                     )
                     open_orders.append(order)
+                    if self._audit is not None and self._audit.enabled:
+                        intent, violations = inspect_order(ts=ts, order=order)
+                        self._audit.record_event("order_audit", {"order": intent}, violation=False)
+                        for violation in violations:
+                            self._audit.record_event("order_audit", violation, violation=True)
 
                     total_required = float(order_intent.metadata.get("total_required", 0.0))
                     if total_required <= 0:
@@ -396,6 +416,11 @@ class BacktestEngine:
                 ]
 
                 self._handle_fills(fills)
+                if self._audit is not None and self._audit.enabled:
+                    for fill in fills:
+                        bar = bars_by_symbol.get(fill.symbol)
+                        for violation in inspect_fill(ts=ts, fill=fill, bar=bar):
+                            self._audit.record_event("fill_audit", violation, violation=True)
                 self._assert_post_fill_margin_invariants(fills)
 
                 self._portfolio.mark_to_market(bars_by_symbol)
@@ -426,6 +451,17 @@ class BacktestEngine:
                 )
                 handle.flush()
 
+                if self._audit is not None and self._audit.enabled:
+                    for symbol, position in self._portfolio.position_book.all_positions().items():
+                        for violation in inspect_position(symbol, position):
+                            self._audit.record_event("position_audit", violation, violation=True)
+                    for violation in inspect_portfolio(
+                        cash=self._portfolio.cash,
+                        equity=self._portfolio.equity,
+                        used_margin=self._portfolio.used_margin,
+                    ):
+                        self._audit.record_event("portfolio_audit", violation, violation=True)
+
             if last_ts is not None:
                 self._force_liquidate_open_positions(
                     ts=last_ts,
@@ -438,3 +474,5 @@ class BacktestEngine:
         self._decisions_writer.close()
         self._fills_writer.close()
         self._trades_writer.close()
+        if self._audit is not None:
+            self._audit.write_summary()

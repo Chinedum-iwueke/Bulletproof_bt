@@ -10,10 +10,11 @@ from bt.data.resample import TimeframeResampler, normalize_timeframe
 class ResampledDataFeed:
     """Wrap a base 1m feed and emit only closed bars for a target timeframe."""
 
-    def __init__(self, *, inner_feed: Any, timeframe: str, strict: bool = True) -> None:
+    def __init__(self, *, inner_feed: Any, timeframe: str, strict: bool = True, audit_manager: Any | None = None) -> None:
         self._inner_feed = inner_feed
         self._timeframe = normalize_timeframe(timeframe, key_path="data.engine_timeframe")
         self._resampler = TimeframeResampler(timeframes=[self._timeframe], strict=bool(strict))
+        self._audit = audit_manager
 
     def symbols(self) -> list[str]:
         if hasattr(self._inner_feed, "symbols"):
@@ -40,6 +41,19 @@ class ResampledDataFeed:
             for bar in bars_list:
                 emitted = self._resampler.update(bar)
                 for htf_bar in emitted:
+                    if self._audit is not None and self._audit.enabled:
+                        self._audit.record_event(
+                            "resample_audit",
+                            {
+                                "symbol": htf_bar.symbol,
+                                "timeframe": htf_bar.timeframe,
+                                "ts": htf_bar.ts,
+                                "n_bars": htf_bar.n_bars,
+                                "expected_bars": htf_bar.expected_bars,
+                                "is_complete": htf_bar.is_complete,
+                            },
+                            violation=not bool(htf_bar.is_complete),
+                        )
                     emitted_by_symbol[htf_bar.symbol] = Bar(
                         ts=htf_bar.ts,
                         symbol=htf_bar.symbol,

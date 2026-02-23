@@ -193,6 +193,13 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     execution_cfg.setdefault("spread_mode", "none")
 
     resolved["execution"] = execution_cfg
+
+    audit_cfg = _ensure_mapping(resolved.get("audit"), name="audit")
+    audit_cfg.setdefault("enabled", False)
+    audit_cfg.setdefault("level", "basic")
+    audit_cfg.setdefault("max_events_per_file", 5000)
+    audit_cfg.setdefault("determinism_check", False)
+    resolved["audit"] = audit_cfg
     intrabar_spec = parse_intrabar_spec(resolved)
     execution_cfg["intrabar_mode"] = intrabar_spec.mode
 
