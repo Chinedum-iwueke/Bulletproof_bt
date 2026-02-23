@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 import csv
 from typing import Any, Mapping
 
@@ -15,7 +16,7 @@ from bt.indicators.atr import ATR
 from bt.indicators.ema import EMA
 from bt.indicators.vwap import VWAP
 from bt.logging.jsonl import JsonlWriter
-from bt.orders.side import side_from_signed_qty
+from bt.orders.side import resolve_order_side, validate_order_side_consistency
 from bt.logging.sanity import SanityCounters
 from bt.logging.trades import TradesCsvWriter
 from bt.portfolio.constants import QTY_EPSILON
@@ -160,7 +161,7 @@ class BacktestEngine:
                 continue
             signed_position_qty = float(position.qty) if position.side == Side.BUY else -float(position.qty)
             close_qty = -signed_position_qty
-            close_side = side_from_signed_qty(close_qty)
+            close_side = resolve_order_side(close_qty)
             liquidation_orders.append(
                 Order(
                     id=self._next_order_id(),
@@ -218,6 +219,48 @@ class BacktestEngine:
     def _next_order_id(self) -> str:
         self._order_counter += 1
         return f"order_{self._order_counter}"
+
+
+    def _emit_decision_record(self, record: dict[str, Any]) -> None:
+        order = record.get("order")
+        if order is not None:
+            order_qty = float(record.get("order_qty", 0.0))
+            validate_order_side_consistency(
+                side=order.side,
+                qty=float(order.qty),
+                signed_qty=order_qty,
+                where="BacktestEngine._emit_decision_record",
+            )
+            signal = record.get("signal")
+            if signal is not None and getattr(signal, "side", None) != order.side:
+                record = dict(record)
+                record["signal"] = replace(signal, side=order.side)
+            if self._audit is not None and self._audit.enabled:
+                self._audit.record_event(
+                    "order_normalization_check",
+                    {
+                        "ts": str(record.get("ts")),
+                        "symbol": record.get("symbol"),
+                        "approved": bool(record.get("approved")),
+                        "order_side": order.side.name,
+                        "order_qty": order_qty,
+                    },
+                    violation=False,
+                )
+        elif self._audit is not None and self._audit.enabled:
+            self._audit.record_event(
+                "order_normalization_check",
+                {
+                    "ts": str(record.get("ts")),
+                    "symbol": record.get("symbol"),
+                    "approved": bool(record.get("approved")),
+                    "order_side": None,
+                    "order_qty": None,
+                },
+                violation=False,
+            )
+
+        self._decisions_writer.write(record)
 
     def _write_equity_header(self, writer: csv.writer) -> None:
         writer.writerow(
@@ -309,7 +352,7 @@ class BacktestEngine:
                     bar = bars_by_symbol.get(signal.symbol)
                     if bar is None:
                         decision_reason = "risk_rejected:no_bar"
-                        self._decisions_writer.write(
+                        self._emit_decision_record(
                             {
                                 "ts": ts,
                                 "symbol": signal.symbol,
@@ -336,7 +379,7 @@ class BacktestEngine:
                     )
 
                     if order_intent is None:
-                        self._decisions_writer.write(
+                        self._emit_decision_record(
                             {
                                 "ts": ts,
                                 "symbol": signal.symbol,
@@ -349,7 +392,7 @@ class BacktestEngine:
                             self._sanity_counters.record_decision(approved=False, reason=decision_reason)
                         continue
 
-                    order_side = side_from_signed_qty(order_intent.qty)
+                    order_side = resolve_order_side(order_intent.qty)
                     order = Order(
                         id=self._next_order_id(),
                         ts_submitted=ts,
@@ -384,7 +427,7 @@ class BacktestEngine:
                     if current_qty == 0:
                         reserved_open_positions += 1
 
-                    self._decisions_writer.write(
+                    self._emit_decision_record(
                         {
                             "ts": ts,
                             "symbol": signal.symbol,

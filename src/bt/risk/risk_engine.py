@@ -33,7 +33,7 @@ from bt.risk.stop_spec import normalize_stop_spec
 from bt.risk.margin_math import compute_snapshot, initial_margin_required
 from bt.risk.spec import parse_risk_spec
 from bt.risk.stop_distance import resolve_stop_distance
-from bt.orders.side import side_from_signed_qty
+from bt.orders.side import resolve_order_side
 
 
 class RiskEngine:
@@ -414,7 +414,7 @@ class RiskEngine:
 
         if close_only and cur_qty != 0:
             order_qty = -cur_qty
-            order_side = side_from_signed_qty(order_qty)
+            order_side = resolve_order_side(order_qty)
             if not self._qty_sign_invariant_ok(
                 signal_side=signal.side,
                 current_qty=cur_qty,
@@ -544,19 +544,20 @@ class RiskEngine:
         if free_margin <= 0:
             return None, INSUFFICIENT_FREE_MARGIN
 
+        order_side = resolve_order_side(order_qty)
         mark_price_used_for_margin = bar.close
-        if signal.side == Side.BUY:
+        if order_side == Side.BUY:
             mark_price_used_for_margin = bar.high
-        elif signal.side == Side.SELL:
+        elif order_side == Side.SELL:
             mark_price_used_for_margin = bar.low
 
         notional = abs(order_qty) * mark_price_used_for_margin
         fee_buffer, slippage_buffer = self._estimate_buffers(notional)
         adverse_move_per_unit = 0.0
         tier_multiplier = self._margin_adverse_move_tier_multiplier()
-        if signal.side == Side.BUY:
+        if order_side == Side.BUY:
             adverse_move_per_unit = max(bar.high - bar.close, 0.0) * tier_multiplier
-        elif signal.side == Side.SELL:
+        elif order_side == Side.SELL:
             adverse_move_per_unit = max(bar.close - bar.low, 0.0) * tier_multiplier
         adverse_move_buffer = abs(order_qty) * max(adverse_move_per_unit, 0.0)
         maintenance_free_margin_pct = self._maintenance_free_margin_pct()
@@ -656,7 +657,6 @@ class RiskEngine:
             }
         )
         signal_with_metadata = replace(signal, metadata=metadata)
-        order_side = side_from_signed_qty(order_qty)
 
         order_intent = OrderIntent(
             ts=ts,

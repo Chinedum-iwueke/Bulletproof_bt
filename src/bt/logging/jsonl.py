@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from bt.orders.side import coerce_side, validate_order_side_consistency
+from bt.orders.side import coerce_side, resolve_order_side, validate_order_side_consistency
 
 def _is_fill_record(record: dict[str, Any]) -> bool:
     return "order_id" in record and "qty" in record and "price" in record
@@ -56,6 +56,55 @@ def _extract_field(container: Any, name: str) -> Any:
     return getattr(container, name, None)
 
 
+def _coerce_position_sign(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"buy", "long", "+", "+1", "1", "positive"}:
+            return 1
+        if normalized in {"sell", "short", "-", "-1", "negative"}:
+            return -1
+        if normalized in {"0", "flat", "none"}:
+            return 0
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric > 0:
+        return 1
+    if numeric < 0:
+        return -1
+    return 0
+
+
+def _validate_exit_reduction_invariant(*, record: dict[str, Any], signed_qty: float | None, where: str) -> None:
+    if signed_qty is None:
+        return
+    signal = record.get("signal")
+    metadata = _extract_field(signal, "metadata")
+    is_exit_intent = False
+    if isinstance(metadata, dict):
+        is_exit_intent = bool(metadata.get("is_exit") or metadata.get("reduce_only") or metadata.get("close_only"))
+    signal_type = str(_extract_field(signal, "signal_type") or "")
+    if signal_type.endswith("_exit"):
+        is_exit_intent = True
+    if not is_exit_intent:
+        return
+
+    position_before = record.get("position_before") if isinstance(record.get("position_before"), dict) else {}
+    position_sign = _coerce_position_sign(position_before.get("sign"))
+    if position_sign is None or position_sign == 0:
+        return
+
+    delta_sign = 1 if float(signed_qty) > 0 else -1
+    allows_flip = bool(position_before.get("allow_flip") or (metadata.get("allow_flip") if isinstance(metadata, dict) else False))
+    if delta_sign == position_sign and not allows_flip:
+        raise ValueError(
+            f"{where}: exit intent must reduce exposure (position_before.sign={position_sign}, order_qty={signed_qty})"
+        )
+
+
 def _validate_order_record(record: dict[str, Any], *, where: str) -> None:
     order_obj = record.get("order")
     if order_obj is None:
@@ -76,14 +125,22 @@ def _validate_order_record(record: dict[str, Any], *, where: str) -> None:
     if isinstance(metadata, dict):
         reduce_only = bool(metadata.get("close_only") or metadata.get("reduce_only"))
 
+    normalized_signed_qty = None if signed_qty is None else float(signed_qty)
     validate_order_side_consistency(
         side=side,
         qty=float(qty),
-        signed_qty=None if signed_qty is None else float(signed_qty),
+        signed_qty=normalized_signed_qty,
         signal_side=signal_side,
         reduce_only=reduce_only,
         where=where,
     )
+    if normalized_signed_qty is not None:
+        canonical_side = resolve_order_side(normalized_signed_qty)
+        if canonical_side != side:
+            raise ValueError(
+                f"{where}: canonical side mismatch from order_qty (expected={canonical_side.name}, actual={side.name})"
+            )
+    _validate_exit_reduction_invariant(record=record, signed_qty=normalized_signed_qty, where=where)
 
 def to_jsonable(obj: Any) -> Any:
     """Convert Python objects into JSON-serializable equivalents."""

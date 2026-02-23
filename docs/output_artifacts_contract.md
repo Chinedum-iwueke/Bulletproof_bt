@@ -87,3 +87,8 @@ Repo Evidence: `src/bt/contracts/schema_versions.py`, `src/bt/metrics/performanc
   No, parse by header names; rely on stable column names above.
 
 Repo Evidence: `src/bt/logging/run_contract.py`, `src/bt/logging/artifacts_manifest.py`, `src/bt/logging/summary.py`.
+
+## Order side derivation rule
+
+Order direction is canonically derived from signed `order_qty` (delta quantity): positive => `BUY`, negative => `SELL`, zero is invalid. Decision logging and JSONL write-boundary invariants enforce that `order.side`, `order_qty` sign, and `signal.side` (when present) are aligned before persistence.
+
