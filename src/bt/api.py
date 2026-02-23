@@ -62,6 +62,7 @@ def _build_engine(
     datafeed: Any,
     run_dir: Path,
     sanity_counters: SanityCounters | None = None,
+    audit_manager: AuditManager | None = None,
 ):
     from bt.core.engine import BacktestEngine
     from bt.data.resample import TimeframeResampler
@@ -222,6 +223,7 @@ def _build_engine(
         equity_path=run_dir / "equity.csv",
         config=config,
         sanity_counters=sanity_counters,
+        audit_manager=audit_manager,
     )
 
 
@@ -268,6 +270,8 @@ def run_backtest(
     from bt.metrics.reconcile import reconcile_execution_costs
     from bt.execution.profile import resolve_execution_profile
 
+    from bt.audit.audit_manager import AuditManager
+
     base_config = load_yaml(config_path)
     fees_config = load_yaml("configs/fees.yaml")
     slippage_config = load_yaml("configs/slippage.yaml")
@@ -281,6 +285,7 @@ def run_backtest(
     resolved_run_name = run_name or make_run_id()
     run_dir = prepare_run_dir(Path(out_dir), resolved_run_name)
     sanity_counters = SanityCounters(run_id=resolved_run_name)
+    audit_manager = AuditManager(run_dir=run_dir, config=config, run_id=resolved_run_name)
 
     try:
         write_config_used(run_dir, config)
@@ -303,6 +308,12 @@ def run_backtest(
             benchmark_tracker = BenchmarkTracker(benchmark_spec)
 
         datafeed = load_feed(data_path, config)
+        if audit_manager.enabled and hasattr(datafeed, "_bars"):
+            from bt.audit.data_audit import run_data_audit
+
+            data_report = run_data_audit(datafeed._bars)
+            audit_manager.write_json("data_audit.json", data_report)
+
         mode, engine_timeframe, _, _ = _resolve_timeframe_mode(config)
         if mode == "engine_timeframe" and engine_timeframe is not None:
             from bt.data.resampled_feed import ResampledDataFeed
@@ -313,13 +324,32 @@ def run_backtest(
                 strict = bool(data_cfg.get("resample_strict"))
             elif isinstance(config.get("htf_resampler"), dict):
                 strict = bool(config["htf_resampler"].get("strict", True))
-            datafeed = ResampledDataFeed(inner_feed=datafeed, timeframe=engine_timeframe, strict=strict)
+            datafeed = ResampledDataFeed(
+                inner_feed=datafeed,
+                timeframe=engine_timeframe,
+                strict=strict,
+                audit_manager=audit_manager,
+            )
 
         benchmark_metrics: dict[str, Any] | None = None
         if benchmark_tracker is not None:
             datafeed = BenchmarkTrackingFeed(inner_feed=datafeed, tracker=benchmark_tracker)
 
-        engine = _build_engine(config, datafeed, run_dir, sanity_counters=sanity_counters)
+        try:
+            engine = _build_engine(
+                config,
+                datafeed,
+                run_dir,
+                sanity_counters=sanity_counters,
+                audit_manager=audit_manager,
+            )
+        except TypeError:
+            engine = _build_engine(
+                config,
+                datafeed,
+                run_dir,
+                sanity_counters=sanity_counters,
+            )
         engine.run()
 
         if benchmark_tracker is not None:
@@ -349,6 +379,35 @@ def run_backtest(
             )
             comparison_summary["schema_version"] = COMPARISON_SUMMARY_SCHEMA_VERSION
             write_json_deterministic(run_dir / "comparison_summary.json", comparison_summary)
+
+        if bool((config.get("audit") or {}).get("determinism_check", False)):
+            from bt.audit.determinism import build_output_hashes, compare_hashes
+            rerun_dir = prepare_run_dir(Path(out_dir), f"{resolved_run_name}_determinism")
+            write_config_used(rerun_dir, config)
+            write_data_scope(
+                rerun_dir,
+                config=config,
+                dataset_dir=data_path if Path(data_path).is_dir() else None,
+            )
+            datafeed2 = load_feed(data_path, config)
+            try:
+                engine2 = _build_engine(
+                    config,
+                    datafeed2,
+                    rerun_dir,
+                    sanity_counters=SanityCounters(run_id=f"{resolved_run_name}_determinism"),
+                    audit_manager=None,
+                )
+            except TypeError:
+                engine2 = _build_engine(
+                    config,
+                    datafeed2,
+                    rerun_dir,
+                    sanity_counters=SanityCounters(run_id=f"{resolved_run_name}_determinism"),
+                )
+            engine2.run()
+            report_det = compare_hashes(build_output_hashes(run_dir), build_output_hashes(rerun_dir))
+            audit_manager.write_json("determinism_report.json", report_det)
 
         execution_snapshot = build_effective_execution_snapshot(config)
         _write_run_status(
