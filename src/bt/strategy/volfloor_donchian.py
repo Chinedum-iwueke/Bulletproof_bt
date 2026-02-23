@@ -143,7 +143,7 @@ class VolFloorDonchianStrategy(Strategy):
         return current
 
     @staticmethod
-    def _percentile_rank(reference: list[float], value: float) -> float:
+    def _percentile_rank(reference: tuple[float, ...], value: float) -> float:
         if not reference:
             return 0.0
         count = sum(1 for item in reference if item <= value)
@@ -171,8 +171,8 @@ class VolFloorDonchianStrategy(Strategy):
                 continue
             symbol_state.last_htf_ts = htf_bar.ts
 
-            prev_highs = list(symbol_state.highs)
-            prev_lows = list(symbol_state.lows)
+            prev_highs = tuple(symbol_state.highs)
+            prev_lows = tuple(symbol_state.lows)
 
             symbol_state.atr.update(htf_bar)
             symbol_state.adx.update(htf_bar)
@@ -187,13 +187,15 @@ class VolFloorDonchianStrategy(Strategy):
             vol_rank: float | None = None
             if atr_value is not None and htf_bar.close > 0:
                 natr_value = atr_value / htf_bar.close
-                vol_rank = self._percentile_rank(list(symbol_state.natr_history), natr_value)
+                if len(symbol_state.natr_history) >= self._vol_lookback_bars:
+                    vol_rank = self._percentile_rank(tuple(symbol_state.natr_history), natr_value)
 
             entry_high = max(prev_highs[-self._entry_lookback :]) if len(prev_highs) >= self._entry_lookback else None
             entry_low = min(prev_lows[-self._entry_lookback :]) if len(prev_lows) >= self._entry_lookback else None
             exit_high = max(prev_highs[-self._exit_lookback :]) if len(prev_highs) >= self._exit_lookback else None
             exit_low = min(prev_lows[-self._exit_lookback :]) if len(prev_lows) >= self._exit_lookback else None
 
+            exited_this_bar = False
             if symbol_state.position == Side.BUY and exit_low is not None and htf_bar.close < exit_low:
                 signals.append(
                     Signal(
@@ -214,6 +216,7 @@ class VolFloorDonchianStrategy(Strategy):
                     )
                 )
                 symbol_state.position = None
+                exited_this_bar = True
             elif symbol_state.position == Side.SELL and exit_high is not None and htf_bar.close > exit_high:
                 signals.append(
                     Signal(
@@ -234,6 +237,7 @@ class VolFloorDonchianStrategy(Strategy):
                     )
                 )
                 symbol_state.position = None
+                exited_this_bar = True
 
             adx_ok = adx_value is not None and adx_value >= self._adx_min
             vol_ok = (
@@ -241,7 +245,7 @@ class VolFloorDonchianStrategy(Strategy):
                 and len(symbol_state.natr_history) >= self._vol_lookback_bars
                 and vol_rank >= self._vol_floor_pct
             )
-            if symbol_state.position is None and adx_ok and vol_ok:
+            if not exited_this_bar and symbol_state.position is None and adx_ok and vol_ok:
                 long_bias_ok = plus_di is None or minus_di is None or plus_di > minus_di
                 short_bias_ok = plus_di is None or minus_di is None or minus_di > plus_di
 
