@@ -211,3 +211,40 @@ def test_entry_exit_symmetry_sanity() -> None:
         pd.Timestamp("2024-01-01 00:30:00", tz="UTC"),
         pd.Timestamp("2024-01-01 00:45:00", tz="UTC"),
     ]
+
+
+def test_exit_takes_precedence_over_same_bar_entry() -> None:
+    strategy = VolFloorDonchianStrategy(
+        timeframe="15m",
+        donchian_entry_lookback=2,
+        donchian_exit_lookback=2,
+        adx_min=0.0,
+        vol_floor_pct=0.0,
+        atr_period=1,
+        vol_lookback_bars=1,
+    )
+
+    state = strategy._state_for("AAA")
+    _pin_trend_gate(strategy)
+
+    # Pre-load prior bars so the current bar can satisfy both:
+    # - long exit (close < exit_low)
+    # - short entry (close < entry_low)
+    state.highs.extend([10.0, 9.0])
+    state.lows.extend([9.0, 8.0])
+    state.natr_history = deque([0.01], maxlen=1)
+    state.position = Side.BUY
+    state.atr._prev_close = 8.2
+
+    htf_bar = _htf_bar("2024-01-01 01:00:00", high=8.5, low=7.0, close=7.5)
+    emitted = strategy.on_bars(
+        htf_bar.ts,
+        {"AAA": _bar("2024-01-01 01:00:00", high=8.5, low=7.0, close=7.5)},
+        {"AAA"},
+        {"htf": {"15m": {"AAA": htf_bar}}},
+    )
+
+    assert len(emitted) == 1
+    assert emitted[0].signal_type == "h1_volfloor_donchian_exit"
+    assert emitted[0].side == Side.SELL
+    assert state.position is None
