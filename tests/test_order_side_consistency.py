@@ -10,7 +10,7 @@ from bt.api import run_backtest
 from bt.core.enums import OrderState, OrderType, Side
 from bt.core.types import Bar, Order, Signal
 from bt.logging.jsonl import JsonlWriter
-from bt.orders.side import side_from_signed_qty, validate_order_side_consistency
+from bt.orders.side import resolve_order_side, side_from_signed_qty, validate_order_side_consistency
 from bt.risk.risk_engine import RiskEngine
 
 
@@ -170,3 +170,84 @@ def test_integration_logged_orders_obey_side_qty_invariants(tmp_path: Path) -> N
         side = order["side"]
         expected = "BUY" if signed_qty > 0 else "SELL"
         assert side == expected
+
+
+def test_exit_signal_with_mismatched_signal_side_is_rejected_at_write_boundary(tmp_path: Path) -> None:
+    writer = JsonlWriter(tmp_path / "decisions.jsonl")
+    ts = pd.Timestamp("2024-01-01T00:00:00Z")
+    order = Order(
+        id="o-2",
+        ts_submitted=ts,
+        symbol="BTC",
+        side=Side.SELL,
+        qty=1.0,
+        order_type=OrderType.MARKET,
+        limit_price=None,
+        state=OrderState.NEW,
+        metadata={"close_only": True},
+    )
+    signal = Signal(ts=ts, symbol="BTC", side=Side.BUY, signal_type="coinflip_exit", confidence=1.0, metadata={"close_only": True})
+    with pytest.raises(ValueError, match="disagrees"):
+        writer.write({"ts": ts, "order_qty": -1.0, "order": order, "signal": signal})
+    writer.close()
+
+
+def test_partial_exit_long_produces_sell_negative_delta() -> None:
+    assert resolve_order_side(-0.5) == Side.SELL
+
+
+def test_partial_exit_short_produces_buy_positive_delta() -> None:
+    assert resolve_order_side(0.25) == Side.BUY
+
+
+def test_cross_zero_flip_disallowed_in_write_boundary(tmp_path: Path) -> None:
+    writer = JsonlWriter(tmp_path / "decisions-side-test.jsonl")
+    ts = pd.Timestamp("2024-01-01T00:00:00Z")
+    order = Order(
+        id="o-3",
+        ts_submitted=ts,
+        symbol="BTC",
+        side=Side.BUY,
+        qty=2.0,
+        order_type=OrderType.MARKET,
+        limit_price=None,
+        state=OrderState.NEW,
+        metadata={"close_only": True},
+    )
+    signal = Signal(ts=ts, symbol="BTC", side=Side.BUY, signal_type="manual_exit", confidence=1.0, metadata={"is_exit": True})
+    with pytest.raises(ValueError, match="reduce exposure"):
+        writer.write({
+            "ts": ts,
+            "order_qty": 2.0,
+            "order": order,
+            "signal": signal,
+            "position_before": {"sign": 1, "allow_flip": False},
+        })
+    writer.close()
+
+
+def test_cross_zero_flip_allowed_writes_record(tmp_path: Path) -> None:
+    writer = JsonlWriter(tmp_path / "decisions.jsonl")
+    ts = pd.Timestamp("2024-01-01T00:00:00Z")
+    order = Order(
+        id="o-4",
+        ts_submitted=ts,
+        symbol="BTC",
+        side=Side.BUY,
+        qty=2.0,
+        order_type=OrderType.MARKET,
+        limit_price=None,
+        state=OrderState.NEW,
+        metadata={"close_only": True, "allow_flip": True, "flip": True},
+    )
+    signal = Signal(ts=ts, symbol="BTC", side=Side.BUY, signal_type="manual_exit", confidence=1.0, metadata={"is_exit": True, "allow_flip": True})
+    writer.write({
+        "ts": ts,
+        "order_qty": 2.0,
+        "order": order,
+        "signal": signal,
+        "position_before": {"sign": 1, "allow_flip": True},
+    })
+    writer.close()
+    lines = (tmp_path / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1

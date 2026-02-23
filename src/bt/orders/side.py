@@ -1,4 +1,12 @@
-"""Canonical order-side mapping helpers."""
+"""Canonical order-side mapping helpers.
+
+Rule of truth for side derivation:
+    * delta_qty > 0 => BUY
+    * delta_qty < 0 => SELL
+    * delta_qty == 0 => invalid order
+
+All order and decision records should derive side from this one mapping.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -6,14 +14,19 @@ from typing import Any
 from bt.core.enums import Side
 
 
-def side_from_signed_qty(qty: float) -> Side:
-    """Map signed quantity to side."""
-    numeric_qty = float(qty)
+def resolve_order_side(delta_qty: float) -> Side:
+    """Resolve order side from canonical signed delta quantity."""
+    numeric_qty = float(delta_qty)
     if numeric_qty > 0:
         return Side.BUY
     if numeric_qty < 0:
         return Side.SELL
     raise ValueError("Order quantity must be non-zero")
+
+
+def side_from_signed_qty(qty: float) -> Side:
+    """Backwards-compatible alias for :func:`resolve_order_side`."""
+    return resolve_order_side(qty)
 
 
 def signed_qty_from_side(side: Side, abs_qty: float) -> float:
@@ -43,7 +56,7 @@ def validate_order_side_consistency(
         raise ValueError(f"{where}: order.qty must be non-zero")
 
     effective_signed_qty = float(signed_qty) if signed_qty is not None else signed_qty_from_side(side, abs_qty)
-    expected_side = side_from_signed_qty(effective_signed_qty)
+    expected_side = resolve_order_side(effective_signed_qty)
     if side != expected_side:
         raise ValueError(
             f"{where}: side/qty sign mismatch (side={side.name}, signed_qty={effective_signed_qty})"
