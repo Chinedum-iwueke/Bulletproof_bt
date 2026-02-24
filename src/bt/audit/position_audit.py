@@ -6,10 +6,8 @@ from typing import Any
 def inspect_position(symbol: str, position: Any) -> list[dict[str, Any]]:
     violations: list[dict[str, Any]] = []
     qty = float(position.qty)
-    if qty > 0 and position.side is not None and position.side.value != "buy":
-        violations.append({"type": "sign_side_mismatch", "symbol": symbol, "qty": qty, "side": position.side.value})
-    if qty < 0:
-        violations.append({"type": "negative_qty_internal", "symbol": symbol, "qty": qty})
+    if qty > 0 and position.side is None:
+        violations.append({"type": "missing_side_for_open_position", "symbol": symbol, "qty": qty})
     if qty == 0 and float(position.avg_entry_price) != 0.0:
         violations.append({"type": "zero_qty_nonzero_entry", "symbol": symbol, "avg_entry_price": position.avg_entry_price})
     return violations
