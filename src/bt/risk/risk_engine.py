@@ -34,6 +34,8 @@ from bt.risk.margin_math import compute_snapshot, initial_margin_required
 from bt.risk.spec import parse_risk_spec
 from bt.risk.stop_distance import resolve_stop_distance
 from bt.orders.side import resolve_order_side
+from bt.instruments.registry import resolve_instrument_spec
+from bt.risk.instrument_sizing import size_position_from_risk
 
 
 class RiskEngine:
@@ -71,6 +73,44 @@ class RiskEngine:
         if rounding == "round":
             return round(qty, 8)
         raise ValueError(f"Invalid risk.qty_rounding={rounding!r}")
+
+    def _risk_cfg(self) -> dict[str, Any]:
+        risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
+        return risk_cfg if isinstance(risk_cfg, dict) else {}
+
+    def _resolve_instrument_for_symbol(self, symbol: str):
+        try:
+            return resolve_instrument_spec(self._config, symbol=symbol)
+        except ValueError:
+            return None
+
+    def _fx_lot_step(self) -> float | None:
+        fx_cfg = self._risk_cfg().get("fx")
+        if not isinstance(fx_cfg, dict):
+            return None
+        value = fx_cfg.get("lot_step")
+        return None if value is None else float(value)
+
+    def _fx_pip_value_override(self) -> float | None:
+        fx_cfg = self._risk_cfg().get("fx")
+        if not isinstance(fx_cfg, dict):
+            return None
+        value = fx_cfg.get("pip_value_override")
+        return None if value is None else float(value)
+
+    def _margin_leverage_override(self) -> float | None:
+        margin_cfg = self._risk_cfg().get("margin")
+        if not isinstance(margin_cfg, dict):
+            return None
+        value = margin_cfg.get("leverage")
+        return None if value is None else float(value)
+
+    def _entry_notional_for_qty(self, *, qty: float, price: float, symbol: str) -> float:
+        instrument = self._resolve_instrument_for_symbol(symbol)
+        if instrument is not None and instrument.type == "forex":
+            contract_size = float(instrument.contract_size or 0.0)
+            return abs(qty) * contract_size * price
+        return abs(qty) * price
 
     def _stop_resolution_mode(self) -> str:
         # risk.stop_resolution applies only to ENTRY / increase-risk signals.
@@ -235,15 +275,42 @@ class RiskEngine:
             stop_distance = max(stop_distance, min_stop_distance)
             risk_meta["stop_distance"] = stop_distance
 
-        qty = risk_amount / stop_distance
-        risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
-        qty_rounding = "none"
-        if isinstance(risk_cfg, dict):
+        instrument = self._resolve_instrument_for_symbol(symbol)
+        if instrument is None or instrument.type == "crypto":
+            qty = risk_amount / stop_distance
+            risk_cfg = self._risk_cfg()
             qty_rounding = str(risk_cfg.get("qty_rounding", "none"))
-        qty = self._round_qty(qty, qty_rounding)
-        if not math.isfinite(qty) or qty <= 0:
-            raise ValueError(f"{symbol}: invalid qty computed: {qty}")
-        return qty, risk_meta
+            qty = self._round_qty(qty, qty_rounding)
+            if not math.isfinite(qty) or qty <= 0:
+                raise ValueError(f"{symbol}: invalid qty computed: {qty}")
+            risk_meta.update(
+                {
+                    "qty_rounding_unit": 0.0,
+                    "instrument_type": "crypto" if instrument is None else instrument.type,
+                    "notional": abs(qty) * entry_price,
+                    "margin_required": None,
+                }
+            )
+            return qty, risk_meta
+
+        sizing = size_position_from_risk(
+            instrument=instrument,
+            entry_price=entry_price,
+            stop_price=float(risk_meta["stop_price"]),
+            risk_amount=risk_amount,
+            account_leverage=self._margin_leverage_override(),
+            fx_lot_step=self._fx_lot_step(),
+            fx_pip_value_override=self._fx_pip_value_override(),
+        )
+        risk_meta.update(
+            {
+                "qty_rounding_unit": sizing.rounding_unit,
+                "instrument_type": instrument.type,
+                "notional": sizing.notional,
+                "margin_required": sizing.margin_required,
+            }
+        )
+        return sizing.qty_rounded, risk_meta
 
     def _min_stop_distance_pct(self) -> float:
         risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
@@ -324,21 +391,44 @@ class RiskEngine:
         if min_stop_distance is not None:
             stop_distance = max(stop_distance, min_stop_distance)
 
-        qty = risk_amount / stop_distance
-        risk_cfg = self._config.get("risk", {}) if isinstance(self._config, dict) else {}
-        qty_rounding = "none"
-        if isinstance(risk_cfg, dict):
+        instrument = self._resolve_instrument_for_symbol(symbol)
+        if instrument is None or instrument.type == "crypto":
+            qty = risk_amount / stop_distance
+            risk_cfg = self._risk_cfg()
             qty_rounding = str(risk_cfg.get("qty_rounding", "none"))
-        qty = self._round_qty(qty, qty_rounding)
-        if not math.isfinite(qty) or qty <= 0:
-            raise ValueError(f"{symbol}: invalid qty computed: {qty}")
+            qty = self._round_qty(qty, qty_rounding)
+            if not math.isfinite(qty) or qty <= 0:
+                raise ValueError(f"{symbol}: invalid qty computed: {qty}")
 
-        return qty, {
+            return qty, {
+                "risk_amount": risk_amount,
+                "stop_distance": stop_distance,
+                "stop_source": stop_result.source,
+                "stop_details": stop_result.details,
+                "r_metrics_valid": bool(stop_result.source) and stop_distance > 0,
+            }
+
+        stop_price = entry_price - stop_distance if side == "long" else entry_price + stop_distance
+        sizing = size_position_from_risk(
+            instrument=instrument,
+            entry_price=entry_price,
+            stop_price=stop_price,
+            risk_amount=risk_amount,
+            account_leverage=self._margin_leverage_override(),
+            fx_lot_step=self._fx_lot_step(),
+            fx_pip_value_override=self._fx_pip_value_override(),
+        )
+
+        return sizing.qty_rounded, {
             "risk_amount": risk_amount,
             "stop_distance": stop_distance,
             "stop_source": stop_result.source,
             "stop_details": stop_result.details,
             "r_metrics_valid": bool(stop_result.source) and stop_distance > 0,
+            "qty_rounding_unit": sizing.rounding_unit,
+            "notional": sizing.notional,
+            "margin_required": sizing.margin_required,
+            "instrument_type": instrument.type,
         }
 
     def estimate_required_margin(
@@ -431,7 +521,7 @@ class RiskEngine:
                     "desired_qty": 0.0,
                     "flip": False,
                     "close_only": True,
-                    "notional_est": abs(order_qty) * bar.close,
+                    "notional_est": self._entry_notional_for_qty(qty=order_qty, price=bar.close, symbol=signal.symbol),
                     "cap_applied": False,
                     "margin_required": 0.0,
                     "margin_fee_buffer": 0.0,
@@ -500,7 +590,7 @@ class RiskEngine:
             if stop_distance_pct < min_stop_distance_pct:
                 return None, MIN_STOP_DISTANCE_VIOLATION
 
-        desired_notional = abs(desired_qty) * bar.close
+        desired_notional = self._entry_notional_for_qty(qty=desired_qty, price=bar.close, symbol=signal.symbol)
         cap_applied = False
         cap_reason: str | None = None
         max_notional: float | None = None
@@ -508,15 +598,15 @@ class RiskEngine:
         if self.max_notional_per_symbol is not None and desired_notional > self.max_notional_per_symbol:
             scale = self.max_notional_per_symbol / desired_notional
             desired_qty *= scale
-            desired_notional = abs(desired_qty) * bar.close
+            desired_notional = self._entry_notional_for_qty(qty=desired_qty, price=bar.close, symbol=signal.symbol)
             cap_applied = True
             cap_reason = "max_notional_per_symbol"
             max_notional = float(self.max_notional_per_symbol)
 
         max_notional_equity = equity * self._max_notional_pct_equity()
         if desired_notional > max_notional_equity:
-            desired_qty = math.copysign(max_notional_equity / bar.close, desired_qty)
-            desired_notional = abs(desired_qty) * bar.close
+            desired_qty = math.copysign(max_notional_equity / max(self._entry_notional_for_qty(qty=1.0, price=bar.close, symbol=signal.symbol), self.eps), desired_qty)
+            desired_notional = self._entry_notional_for_qty(qty=desired_qty, price=bar.close, symbol=signal.symbol)
             cap_applied = True
             cap_reason = "max_notional_pct_equity"
             max_notional = max_notional_equity
@@ -551,7 +641,8 @@ class RiskEngine:
         elif order_side == Side.SELL:
             mark_price_used_for_margin = bar.low
 
-        notional = abs(order_qty) * mark_price_used_for_margin
+        margin_leverage_used = self._margin_leverage_override() if self._margin_leverage_override() is not None else max_leverage
+        notional = self._entry_notional_for_qty(qty=order_qty, price=mark_price_used_for_margin, symbol=signal.symbol)
         fee_buffer, slippage_buffer = self._estimate_buffers(notional)
         adverse_move_per_unit = 0.0
         tier_multiplier = self._margin_adverse_move_tier_multiplier()
@@ -564,7 +655,7 @@ class RiskEngine:
         snapshot = compute_snapshot(
             equity=equity,
             notional=notional,
-            max_leverage=max_leverage,
+            max_leverage=margin_leverage_used,
             maintenance_free_margin_pct=maintenance_free_margin_pct,
             fee_buffer=fee_buffer,
             slippage_buffer=slippage_buffer,
@@ -579,7 +670,7 @@ class RiskEngine:
             adverse_move_per_notional = adverse_move_buffer / notional if notional > 0 else 0.0
 
             total_required_per_notional = (
-                (1.0 / max(max_leverage, self.eps))
+                (1.0 / max(margin_leverage_used, self.eps))
                 + (fee_buffer / notional if notional > 0 else 0.0)
                 + (slippage_buffer / notional if notional > 0 else 0.0)
                 + adverse_move_per_notional
@@ -588,7 +679,7 @@ class RiskEngine:
             if max_affordable_notional <= 0:
                 return None, INSUFFICIENT_FREE_MARGIN
 
-            max_affordable_qty = max_affordable_notional / max(mark_price_used_for_margin, self.eps)
+            max_affordable_qty = max_affordable_notional / max(self._entry_notional_for_qty(qty=1.0, price=mark_price_used_for_margin, symbol=signal.symbol), self.eps)
             if max_affordable_qty <= 0:
                 return None, INSUFFICIENT_FREE_MARGIN
 
@@ -597,13 +688,13 @@ class RiskEngine:
                 scaled_by_margin = True
                 if abs(order_qty) <= 0:
                     return None, INSUFFICIENT_FREE_MARGIN
-                notional = abs(order_qty) * mark_price_used_for_margin
+                notional = self._entry_notional_for_qty(qty=order_qty, price=mark_price_used_for_margin, symbol=signal.symbol)
                 fee_buffer, slippage_buffer = self._estimate_buffers(notional)
                 adverse_move_buffer = abs(order_qty) * max(adverse_move_per_unit, 0.0)
                 snapshot = compute_snapshot(
                     equity=equity,
                     notional=notional,
-                    max_leverage=max_leverage,
+                    max_leverage=margin_leverage_used,
                     maintenance_free_margin_pct=maintenance_free_margin_pct,
                     fee_buffer=fee_buffer,
                     slippage_buffer=slippage_buffer,
@@ -624,6 +715,10 @@ class RiskEngine:
                 "stop_dist": stop_dist,
                 "risk_amount": risk_meta["risk_amount"],
                 "stop_distance": risk_meta["stop_distance"],
+                "qty_rounding_unit": risk_meta.get("qty_rounding_unit"),
+                "instrument_type": risk_meta.get("instrument_type"),
+                "sizing_notional": risk_meta.get("notional"),
+                "sizing_margin_required": risk_meta.get("margin_required"),
                 "stop_source": risk_meta["stop_source"],
                 "stop_details": risk_meta["stop_details"],
                 "stop_reason_code": risk_meta.get("stop_reason_code"),
@@ -635,7 +730,7 @@ class RiskEngine:
                 "current_qty": cur_qty,
                 "desired_qty": desired_qty,
                 "flip": flip,
-                "notional_est": abs(order_qty) * bar.close,
+                "notional_est": self._entry_notional_for_qty(qty=order_qty, price=bar.close, symbol=signal.symbol),
                 "cap_applied": cap_applied,
                 "cap_reason": cap_reason,
                 "max_notional": max_notional,
@@ -645,6 +740,7 @@ class RiskEngine:
                 "margin_adverse_move_buffer": adverse_move_buffer,
                 "free_margin": free_margin,
                 "max_leverage": max_leverage,
+                "margin_leverage_used": margin_leverage_used,
                 "scaled_by_margin": scaled_by_margin,
                 "maintenance_free_margin_pct": maintenance_free_margin_pct,
                 "max_total_required": max_total_required,

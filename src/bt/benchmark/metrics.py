@@ -77,6 +77,7 @@ def compute_benchmark_metrics(
     equity_points: Iterable[tuple[datetime, float]] | Iterable[object],
     risk_free_rate: float = 0.0,
     annualization_factor: Optional[float] = None,
+    benchmark_type: str | None = None,
 ) -> dict[str, Any]:
     """Compute benchmark metrics from (ts, equity) series."""
     ts_list: list[datetime] = []
@@ -162,4 +163,7 @@ def compute_benchmark_metrics(
         sortino=sortino,
         cagr=cagr,
     )
-    return asdict(metrics)
+    payload = asdict(metrics)
+    if benchmark_type is not None:
+        payload["benchmark_type"] = benchmark_type
+    return payload

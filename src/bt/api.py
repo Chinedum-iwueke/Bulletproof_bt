@@ -67,10 +67,12 @@ def _build_engine(
     from bt.core.engine import BacktestEngine
     from bt.data.resample import TimeframeResampler
     from bt.data.resampled_feed import EntryTimeframeGate
+    from bt.execution.commission import CommissionSpec
     from bt.execution.execution_model import ExecutionModel
     from bt.execution.fees import FeeModel
     from bt.execution.profile import resolve_execution_profile
     from bt.execution.slippage import SlippageModel
+    from bt.instruments.registry import resolve_instrument_spec
     from bt.logging.jsonl import JsonlWriter
     from bt.logging.trades import TradesCsvWriter
     from bt.portfolio.portfolio import Portfolio
@@ -152,6 +154,8 @@ def _build_engine(
             risk_cfg_for_spec["r_per_trade"] = config["risk_per_trade_pct"]
     risk_spec = parse_risk_spec({"risk": risk_cfg_for_spec})
 
+    instrument = resolve_instrument_spec(config, symbol=None)
+
     execution_profile = resolve_execution_profile(config)
     effective_slippage_bps = execution_profile.slippage_bps + execution_profile.spread_bps
 
@@ -189,6 +193,15 @@ def _build_engine(
         spread_bps = execution_profile.spread_bps
     else:
         spread_bps = 0.0 if raw_spread_bps is None else float(raw_spread_bps)
+    spread_pips = None if execution_cfg.get("spread_pips") is None else float(execution_cfg.get("spread_pips"))
+
+    commission_cfg = execution_cfg.get("commission") if isinstance(execution_cfg.get("commission"), dict) else {}
+    commission_spec = CommissionSpec(
+        mode=str(commission_cfg.get("mode", "none")),
+        per_trade=commission_cfg.get("per_trade"),
+        per_share=commission_cfg.get("per_share"),
+        per_lot=commission_cfg.get("per_lot"),
+    )
 
     intrabar_spec = parse_intrabar_spec(config)
 
@@ -197,8 +210,11 @@ def _build_engine(
         slippage_model=slippage_model,
         spread_mode=spread_mode,
         spread_bps=spread_bps,
+        spread_pips=spread_pips,
         intrabar_mode=intrabar_spec.mode,
         delay_bars=execution_profile.delay_bars,
+        instrument=instrument,
+        commission=commission_spec,
     )
 
     portfolio_max_leverage = risk_spec.max_leverage
@@ -299,7 +315,7 @@ def run_backtest(
         benchmark_tracker: BenchmarkTracker | None = None
         if benchmark_spec.enabled:
             benchmark_symbol = benchmark_spec.symbol
-            if Path(data_path).is_dir():
+            if Path(data_path).is_dir() and benchmark_symbol is not None:
                 manifest = load_dataset_manifest(data_path, config)
                 if benchmark_symbol not in manifest.symbols:
                     raise ValueError(
@@ -360,7 +376,7 @@ def run_backtest(
             )
             benchmark_points = benchmark_tracker.finalize(initial_equity=benchmark_initial_equity)
             write_benchmark_equity_csv(benchmark_points, run_dir / "benchmark_equity.csv")
-            benchmark_metrics = compute_benchmark_metrics(equity_points=benchmark_points)
+            benchmark_metrics = compute_benchmark_metrics(equity_points=benchmark_points, benchmark_type=benchmark_spec.mode)
             benchmark_metrics["schema_version"] = BENCHMARK_METRICS_SCHEMA_VERSION
             write_json_deterministic(run_dir / "benchmark_metrics.json", benchmark_metrics)
 

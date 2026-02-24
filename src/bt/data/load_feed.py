@@ -52,7 +52,7 @@ def load_feed(data_path: str, config: dict[str, Any]):
             # backward-compatible with single-file smoke/test inputs.
             effective_mode = "dataframe"
 
-        bars_df = load_dataset(data_path)
+        bars_df = load_dataset(data_path, market_config=config)
         return HistoricalDataFeed(bars_df)
 
     raise ValueError(f"Data path not found: {data_path}")

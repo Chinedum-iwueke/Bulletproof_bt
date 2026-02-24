@@ -26,6 +26,11 @@ def _is_numeric(value: Any) -> bool:
     return isinstance(value, Real) and not isinstance(value, bool)
 
 
+def _as_float_or_none(value: Any) -> float | None:
+    if not _is_numeric(value):
+        return None
+    return float(value)
+
 def compare_strategy_vs_benchmark(
     *,
     strategy_perf: Mapping[str, Any],
@@ -79,9 +84,26 @@ def compare_strategy_vs_benchmark(
         if field in strategy_perf:
             strategy[field] = strategy_perf[field]
 
+    strategy_return = _as_float_or_none(strategy.get("total_return"))
+    benchmark_return = _as_float_or_none(benchmark.get("total_return"))
+    strategy_drawdown = _as_float_or_none(strategy.get("max_drawdown"))
+    benchmark_drawdown = _as_float_or_none(benchmark.get("max_drawdown"))
+
+    alpha = None
+    if strategy_return is not None and benchmark_return is not None:
+        alpha = strategy_return - benchmark_return
+
+    relative_drawdown_delta = None
+    if strategy_drawdown is not None and benchmark_drawdown is not None:
+        relative_drawdown_delta = strategy_drawdown - benchmark_drawdown
+
     return {
         "strategy": strategy,
         "benchmark": benchmark,
         "delta": delta,
+        "strategy_return": strategy_return,
+        "benchmark_return": benchmark_return,
+        "alpha": alpha,
+        "relative_drawdown_delta": relative_drawdown_delta,
     }
 

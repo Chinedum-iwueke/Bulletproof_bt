@@ -83,6 +83,42 @@ def _ensure_mapping(value: Any, *, name: str) -> dict[str, Any]:
     return value
 
 
+
+
+def _resolve_instrument(resolved: dict[str, Any]) -> None:
+    instrument_raw = resolved.get("instrument")
+    if instrument_raw is None:
+        return
+    instrument_cfg = _ensure_mapping(instrument_raw, name="instrument")
+    instrument_cfg.setdefault("type", "crypto")
+
+    allowed_types = {"crypto", "forex", "equity", "futures"}
+    instrument_type = instrument_cfg.get("type")
+    if instrument_type not in allowed_types:
+        raise ConfigError(
+            "instrument.type must be one of "
+            f"{sorted(allowed_types)} (got: {instrument_type!r})"
+        )
+
+    symbol = instrument_cfg.get("symbol")
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise ConfigError(f"instrument.symbol must be a non-empty string (got: {symbol!r})")
+
+    for key in ("tick_size", "contract_size", "pip_size", "pip_value"):
+        raw = instrument_cfg.get(key)
+        if raw is None:
+            continue
+        try:
+            parsed = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"instrument.{key} must be > 0 (got: {raw!r})") from exc
+        if parsed <= 0:
+            raise ConfigError(f"instrument.{key} must be > 0 (got: {raw!r})")
+        instrument_cfg[key] = parsed
+
+    resolved["instrument"] = instrument_cfg
+
+
 def _resolve_risk_value(
     *,
     resolved: dict[str, Any],
@@ -181,6 +217,7 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     data_cfg.setdefault("chunksize", 50000)
     resolved["data"] = data_cfg
     _resolve_data_symbols_alias(resolved)
+    _resolve_instrument(resolved)
 
     strategy_cfg = _ensure_mapping(resolved.get("strategy"), name="strategy")
     strategy_cfg.setdefault("name", "coinflip")
@@ -204,10 +241,10 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     execution_cfg["intrabar_mode"] = intrabar_spec.mode
 
     spread_mode = execution_cfg.get("spread_mode")
-    if spread_mode not in {"none", "fixed_bps", "bar_range_proxy"}:
+    if spread_mode not in {"none", "fixed_bps", "bar_range_proxy", "fixed_pips"}:
         raise ConfigError(
             "Invalid execution.spread_mode: expected one of "
-            "{'none', 'fixed_bps', 'bar_range_proxy'} "
+            "{'none', 'fixed_bps', 'bar_range_proxy', 'fixed_pips'} "
             f"got {spread_mode!r}"
         )
 
@@ -225,6 +262,16 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
         if "spread_bps" in execution_cfg:
             execution_cfg["spread_bps"] = spread_bps
 
+    if spread_mode == "fixed_pips":
+        raw_spread_pips = execution_cfg.get("spread_pips")
+        try:
+            spread_pips = float(raw_spread_pips)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"execution.spread_pips must be > 0 (got: {raw_spread_pips!r})") from exc
+        if spread_pips <= 0:
+            raise ConfigError(f"execution.spread_pips must be > 0 (got: {raw_spread_pips!r})")
+        execution_cfg["spread_pips"] = spread_pips
+
     if spread_mode in {"none", "bar_range_proxy"} and "spread_bps" in execution_cfg:
         try:
             execution_cfg["spread_bps"] = float(execution_cfg["spread_bps"])
@@ -233,7 +280,89 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
         if execution_cfg["spread_bps"] < 0:
             raise ConfigError("Invalid execution.spread_bps: expected float >= 0")
 
+    commission_cfg = _ensure_mapping(execution_cfg.get("commission"), name="execution.commission")
+    commission_mode = commission_cfg.get("mode", "none")
+    if commission_mode not in {"none", "per_trade", "per_share", "per_lot"}:
+        raise ConfigError(
+            "execution.commission.mode must be one of {'none', 'per_trade', 'per_share', 'per_lot'} "
+            f"(got: {commission_mode!r})"
+        )
+    commission_cfg["mode"] = commission_mode
+    for key in ("per_trade", "per_share", "per_lot"):
+        if key in commission_cfg and commission_cfg[key] is not None:
+            try:
+                parsed = float(commission_cfg[key])
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(f"execution.commission.{key} must be >= 0 (got: {commission_cfg[key]!r})") from exc
+            if parsed < 0:
+                raise ConfigError(f"execution.commission.{key} must be >= 0 (got: {commission_cfg[key]!r})")
+            commission_cfg[key] = parsed
+    execution_cfg["commission"] = commission_cfg
+
+    instrument_cfg = resolved.get("instrument") if isinstance(resolved.get("instrument"), dict) else None
+    instrument_type = instrument_cfg.get("type") if isinstance(instrument_cfg, dict) else None
+    if instrument_type == "forex" and spread_mode == "none":
+        raise ConfigError(
+            "execution.spread_mode: FX V1 requires spread modeling: "
+            "set execution.spread_mode=fixed_pips (or fixed_bps). Current execution.spread_mode=none."
+        )
+    if spread_mode == "fixed_pips" and instrument_type != "forex":
+        raise ConfigError(
+            "execution.spread_mode=fixed_pips is FX-only. "
+            "Set instrument.type=forex or set execution.spread_mode=fixed_bps."
+        )
+    if commission_mode == "per_lot" and instrument_type != "forex":
+        raise ConfigError(
+            "execution.commission.mode=per_lot requires instrument.type=forex. "
+            "Set instrument.type=forex or use execution.commission.mode=per_trade."
+        )
+    if commission_mode == "per_share" and instrument_type != "equity":
+        raise ConfigError(
+            "execution.commission.mode=per_share requires instrument.type=equity. "
+            "Set instrument.type=equity or use execution.commission.mode=per_trade."
+        )
+
     resolved["execution"] = execution_cfg
+
+    benchmark_cfg = _ensure_mapping(resolved.get("benchmark"), name="benchmark")
+    enabled_raw = benchmark_cfg.get("enabled", False)
+    if not isinstance(enabled_raw, bool):
+        raise ConfigError(f"benchmark.enabled must be a bool (got: {enabled_raw!r})")
+    benchmark_cfg["enabled"] = enabled_raw
+
+    benchmark_type = benchmark_cfg.get("type")
+    if enabled_raw and benchmark_type is None:
+        benchmark_type = "buy_hold"
+    elif benchmark_type is None:
+        benchmark_type = "buy_hold"
+    if benchmark_type not in {"buy_hold", "flat", "baseline_strategy"}:
+        raise ConfigError(
+            "benchmark.type must be one of {'buy_hold', 'flat', 'baseline_strategy'} "
+            f"(got: {benchmark_type!r})"
+        )
+    benchmark_cfg["type"] = benchmark_type
+
+    symbol = benchmark_cfg.get("symbol")
+    if benchmark_type == "buy_hold" and enabled_raw:
+        if not isinstance(symbol, str) or not symbol.strip():
+            raise ConfigError(
+                "benchmark.symbol is required when benchmark.enabled=true and benchmark.type=buy_hold"
+            )
+
+    baseline_cfg = _ensure_mapping(benchmark_cfg.get("baseline_strategy"), name="benchmark.baseline_strategy")
+    if benchmark_type == "baseline_strategy" and enabled_raw:
+        baseline_name = baseline_cfg.get("name")
+        if not isinstance(baseline_name, str) or not baseline_name.strip():
+            raise ConfigError(
+                "benchmark.baseline_strategy.name is required when benchmark.type=baseline_strategy"
+            )
+        params = baseline_cfg.get("params", {})
+        if not isinstance(params, dict):
+            raise ConfigError("benchmark.baseline_strategy.params must be a mapping when provided")
+        baseline_cfg["params"] = params
+    benchmark_cfg["baseline_strategy"] = baseline_cfg
+
+    resolved["benchmark"] = benchmark_cfg
 
     if "htf_timeframes" in resolved or "htf_strict" in resolved:
         htf_resampler_cfg = _ensure_mapping(resolved.get("htf_resampler"), name="htf_resampler")
@@ -302,6 +431,14 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
 
     risk_cfg = resolved.get("risk", {})
     risk_cfg.setdefault("mode", "equity_pct")
+    fx_cfg = _ensure_mapping(risk_cfg.get("fx"), name="risk.fx")
+    fx_cfg.setdefault("lot_step", None)
+    fx_cfg.setdefault("pip_value_override", None)
+    risk_cfg["fx"] = fx_cfg
+
+    margin_cfg = _ensure_mapping(risk_cfg.get("margin"), name="risk.margin")
+    margin_cfg.setdefault("leverage", None)
+    risk_cfg["margin"] = margin_cfg
     stop_resolution = risk_cfg.get("stop_resolution")
     if stop_resolution not in {"safe", "strict", "allow_legacy_proxy"}:
         raise ConfigError(
@@ -405,6 +542,55 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
             "Set it to 0.01 for a 1% maintenance free-margin floor."
         )
     risk_cfg["maintenance_free_margin_pct"] = maintenance_free_margin_pct
+
+    fx_cfg = _ensure_mapping(risk_cfg.get("fx"), name="risk.fx")
+    lot_step = fx_cfg.get("lot_step")
+    if lot_step is not None:
+        try:
+            lot_step_value = float(lot_step)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"risk.fx.lot_step must be > 0 (got: {lot_step!r})") from exc
+        if lot_step_value <= 0:
+            raise ConfigError(f"risk.fx.lot_step must be > 0 (got: {lot_step!r})")
+        fx_cfg["lot_step"] = lot_step_value
+
+    pip_value_override = fx_cfg.get("pip_value_override")
+    if pip_value_override is not None:
+        try:
+            pip_value = float(pip_value_override)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"risk.fx.pip_value_override must be > 0 (got: {pip_value_override!r})") from exc
+        if pip_value <= 0:
+            raise ConfigError(f"risk.fx.pip_value_override must be > 0 (got: {pip_value_override!r})")
+        fx_cfg["pip_value_override"] = pip_value
+    risk_cfg["fx"] = fx_cfg
+
+    margin_cfg = _ensure_mapping(risk_cfg.get("margin"), name="risk.margin")
+    margin_leverage = margin_cfg.get("leverage")
+    if margin_leverage is not None:
+        try:
+            margin_leverage_value = float(margin_leverage)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"risk.margin.leverage must be > 0 (got: {margin_leverage!r})") from exc
+        if margin_leverage_value <= 0:
+            raise ConfigError(f"risk.margin.leverage must be > 0 (got: {margin_leverage!r})")
+        margin_cfg["leverage"] = margin_leverage_value
+    risk_cfg["margin"] = margin_cfg
+
+    instrument_cfg = resolved.get("instrument") if isinstance(resolved.get("instrument"), dict) else None
+    instrument_type = instrument_cfg.get("type") if isinstance(instrument_cfg, dict) else None
+    if instrument_type == "forex":
+        contract_size = instrument_cfg.get("contract_size") if isinstance(instrument_cfg, dict) else None
+        if contract_size is None:
+            raise ConfigError(
+                "instrument.contract_size is required when instrument.type=forex. "
+                "Set instrument.contract_size (e.g., 100000)."
+            )
+        if fx_cfg.get("lot_step") is None:
+            raise ConfigError(
+                "risk.fx.lot_step is required when instrument.type=forex. "
+                "Set risk.fx.lot_step (e.g., 0.01 for micro lots)."
+            )
 
     resolved["risk"] = risk_cfg
 

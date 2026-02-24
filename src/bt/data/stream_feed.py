@@ -7,6 +7,7 @@ from typing import Any, Iterator
 from bt.core.types import Bar
 from bt.data.config_utils import parse_date_range
 from bt.data.dataset import DatasetManifest
+from bt.data.market_rules import parse_market_rules
 from bt.data.symbol_source import RowTuple, SymbolDataSource
 
 
@@ -24,6 +25,7 @@ class StreamingHistoricalDataFeed:
         self._manifest = manifest
         self._config = config or {}
         self._symbols = list(manifest.symbols)
+        self._market_rules = parse_market_rules(self._config)
 
         self._iter_by_symbol: dict[str, Iterator[RowTuple]] = {}
         self._buf_by_symbol: dict[str, RowTuple] = {}
@@ -78,6 +80,7 @@ class StreamingHistoricalDataFeed:
                 date_range=date_range,
                 row_limit=row_limit,
                 chunksize=chunksize,
+                market_rules=self._market_rules,
             )
             iterator = iter(source)
             self._iter_by_symbol[symbol] = iterator
