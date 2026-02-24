@@ -99,6 +99,28 @@ class BacktestEngine:
 
     def _handle_fills(self, fills: list[Any]) -> None:
         for fill in fills:
+            fill_qty = float(fill.qty)
+            if fill_qty <= 0:
+                raise ValueError(
+                    f"BacktestEngine._handle_fills: fill.qty must be > 0 (symbol={fill.symbol}, qty={fill_qty})"
+                )
+
+            position_before = self._portfolio.position_book.get(fill.symbol)
+            signed_position_before = self._signed_position_qty(position_before)
+            signed_fill_delta = fill_qty if fill.side == Side.BUY else -fill_qty
+            metadata = fill.metadata if isinstance(fill.metadata, dict) else {}
+            if bool(metadata.get("close_only") or metadata.get("reduce_only")):
+                if signed_position_before == 0.0:
+                    raise ValueError(
+                        "BacktestEngine._handle_fills: close/reduce fill while flat "
+                        f"(symbol={fill.symbol}, side={fill.side.name}, qty={fill_qty})"
+                    )
+                if signed_position_before * signed_fill_delta >= 0:
+                    raise ValueError(
+                        "BacktestEngine._handle_fills: close/reduce fill must oppose current exposure "
+                        f"(symbol={fill.symbol}, pos_before={signed_position_before}, delta={signed_fill_delta})"
+                    )
+
             self._fills_writer.write(
                 {
                     "ts": fill.ts,
@@ -145,6 +167,16 @@ class BacktestEngine:
                     f"adverse_buffer={metadata.get('margin_adverse_move_buffer')} "
                     f"free_margin_post={free_margin_post}"
                 )
+
+    @staticmethod
+    def _signed_position_qty(position: Any) -> float:
+        qty = float(getattr(position, "qty", 0.0) or 0.0)
+        side = getattr(position, "side", None)
+        if side == Side.SELL:
+            return -abs(qty)
+        if side == Side.BUY:
+            return abs(qty)
+        return 0.0
 
     def _force_liquidate_open_positions(
         self,
@@ -366,7 +398,7 @@ class BacktestEngine:
                         continue
 
                     position = self._portfolio.position_book.get(signal.symbol)
-                    current_qty = position.qty
+                    current_qty = self._signed_position_qty(position)
                     order_intent, decision_reason = self._risk.signal_to_order_intent(
                         ts=ts,
                         signal=signal,
