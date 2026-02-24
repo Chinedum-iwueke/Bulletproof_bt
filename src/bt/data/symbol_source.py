@@ -7,6 +7,7 @@ from typing import Any, Iterator
 
 import pandas as pd
 
+from bt.data.market_rules import MarketRules, parse_market_rules, validate_market_timestamp
 from bt.data.parquet_io import ensure_pyarrow_parquet
 
 
@@ -45,6 +46,7 @@ class SymbolDataSource:
         date_range: dict[str, Any] | tuple[Any, Any] | None = None,
         row_limit: int | None = None,
         chunksize: int = 50_000,
+        market_rules: MarketRules | None = None,
     ) -> None:
         if not symbol:
             raise ValueError("symbol must be a non-empty string")
@@ -60,6 +62,7 @@ class SymbolDataSource:
         self._row_limit = row_limit
         self._chunksize = chunksize
         self._date_range = self._parse_date_range(date_range)
+        self._market_rules = market_rules or parse_market_rules({"data": {"market": "crypto_24x7"}})
 
     def _parse_date_range(self, date_range: dict[str, Any] | tuple[Any, Any] | None) -> DateRange:
         if date_range is None:
@@ -156,6 +159,13 @@ class SymbolDataSource:
             raise ValueError(
                 f"{self._symbol}: non-monotonic ts in {self._path}; row {row_number} has {ts}"
             )
+
+        validate_market_timestamp(
+            market_rules=self._market_rules,
+            symbol=self._symbol,
+            ts_utc=ts.to_pydatetime(),
+            path=str(self._path),
+        )
 
         start, end = self._date_range.start, self._date_range.end
         if start is not None and ts < start:

@@ -9,6 +9,7 @@ import pandas as pd
 import yaml
 
 from bt.core.errors import DataError
+from bt.data.market_rules import parse_market_rules, validate_market_timestamp
 from bt.data.parquet_io import ensure_pyarrow_parquet
 from bt.data.schema import BAR_COLUMNS, DTYPES, normalize_columns
 from bt.data.validation import validate_bars_df
@@ -24,7 +25,19 @@ def _ensure_utc(ts: pd.Series) -> None:
     raise DataError("ts must be timezone-aware UTC")
 
 
-def load_bars(path: str | Path) -> pd.DataFrame:
+
+
+def _validate_market_rules(df: pd.DataFrame, *, market_config: dict[str, Any], path: str) -> None:
+    rules = parse_market_rules(market_config)
+    for row in df[["ts", "symbol"]].itertuples(index=False):
+        validate_market_timestamp(
+            market_rules=rules,
+            symbol=str(row.symbol),
+            ts_utc=pd.Timestamp(row.ts).to_pydatetime(),
+            path=path,
+        )
+
+def load_bars(path: str | Path, *, market_config: dict[str, Any] | None = None) -> pd.DataFrame:
     path = Path(path)
     if path.suffix == ".parquet":
         ensure_pyarrow_parquet()
@@ -48,11 +61,12 @@ def load_bars(path: str | Path) -> pd.DataFrame:
             df[col] = df[col].astype(DTYPES[col])
 
     df = df.sort_values(["symbol", "ts"], kind="mergesort").reset_index(drop=True)
+    _validate_market_rules(df, market_config=market_config or {}, path=str(path))
     validate_bars_df(df)
     return df
 
 
-def _normalize_and_validate(df: pd.DataFrame, *, sort_columns: list[str]) -> pd.DataFrame:
+def _normalize_and_validate(df: pd.DataFrame, *, sort_columns: list[str], market_config: dict[str, Any], path: str) -> pd.DataFrame:
     df = normalize_columns(df)
     if "ts" not in df.columns:
         raise DataError("Missing ts column after normalization")
@@ -67,6 +81,7 @@ def _normalize_and_validate(df: pd.DataFrame, *, sort_columns: list[str]) -> pd.
             df[col] = df[col].astype(DTYPES[col])
 
     df = df.sort_values(sort_columns, kind="mergesort").reset_index(drop=True)
+    _validate_market_rules(df, market_config=market_config, path=path)
     validate_bars_df(df)
     return df
 
@@ -148,11 +163,11 @@ def _parse_manifest(manifest_path: Path) -> _ParsedManifest:
     return _ParsedManifest(manifest_type="legacy_per_symbol", file_list=resolved_files)
 
 
-def load_dataset(dataset_path: str) -> pd.DataFrame:
+def load_dataset(dataset_path: str, *, market_config: dict[str, Any] | None = None) -> pd.DataFrame:
     """Load either a single bars file or a manifest-based parquet dataset directory."""
     path = Path(dataset_path)
     if path.is_file():
-        return load_bars(path)
+        return load_bars(path, market_config=market_config)
 
     if not path.is_dir():
         raise DataError(f"Dataset path does not exist or is not a file/directory: {dataset_path}")
@@ -173,4 +188,4 @@ def load_dataset(dataset_path: str) -> pd.DataFrame:
     # TODO: Add chunked loading/streaming concat for huge universes.
     # TODO: Add optional symbol-subset loading.
     # TODO: Read manifest counts metadata for quick sanity checks.
-    return _normalize_and_validate(combined, sort_columns=["ts", "symbol"])
+    return _normalize_and_validate(combined, sort_columns=["ts", "symbol"], market_config=market_config or {}, path=str(path))

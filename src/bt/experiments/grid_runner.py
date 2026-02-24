@@ -358,7 +358,7 @@ def run_grid(
             benchmark_tracker: BenchmarkTracker | None = None
             if benchmark_spec.enabled:
                 benchmark_symbol = benchmark_spec.symbol
-                if Path(data_path).is_dir():
+                if Path(data_path).is_dir() and benchmark_symbol is not None:
                     manifest = load_dataset_manifest(data_path, run_cfg)
                     if benchmark_symbol not in manifest.symbols:
                         raise ValueError(
@@ -382,7 +382,7 @@ def run_grid(
                 )
                 benchmark_points = benchmark_tracker.finalize(initial_equity=benchmark_initial_equity)
                 write_benchmark_equity_csv(benchmark_points, run_dir / "benchmark_equity.csv")
-                benchmark_metrics = compute_benchmark_metrics(equity_points=benchmark_points)
+                benchmark_metrics = compute_benchmark_metrics(equity_points=benchmark_points, benchmark_type=benchmark_spec.mode)
                 benchmark_metrics["schema_version"] = BENCHMARK_METRICS_SCHEMA_VERSION
                 write_json_deterministic(run_dir / "benchmark_metrics.json", benchmark_metrics)
 

@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from bt.benchmark.buy_hold import EquityPoint, compute_buy_hold_equity
-from bt.logging.formatting import FLOAT_DECIMALS_CSV
 from bt.benchmark.spec import BenchmarkSpec
+from bt.logging.formatting import FLOAT_DECIMALS_CSV
 
 
 @dataclass
@@ -16,21 +16,32 @@ class BenchmarkTracker:
     _started: bool = False
     _found_any: bool = False
     _bars: list[object] | None = None
+    _all_timestamps: list[datetime] | None = None
+    _baseline_symbol: str | None = None
 
     def __post_init__(self) -> None:
         self._bars = []
+        self._all_timestamps = []
 
     def on_tick(self, ts: datetime, bars_by_symbol: dict[str, object]) -> None:
-        """
-        Called once per engine tick (outside engine loop via existing orchestration point).
-        If benchmark symbol is present in bars_by_symbol at this ts, append that bar to internal list.
-        Must not synthesize or resample; only store what appears.
-        """
         if not self.spec.enabled:
             return
 
         self._started = True
+        self._all_timestamps.append(ts)
+
+        if self.spec.mode == "flat":
+            return
+
         benchmark_symbol = self.spec.symbol
+        if self.spec.mode == "baseline_strategy" and benchmark_symbol is None:
+            keys = sorted(str(k) for k in bars_by_symbol.keys())
+            if not keys:
+                return
+            if self._baseline_symbol is None:
+                self._baseline_symbol = keys[0]
+            benchmark_symbol = self._baseline_symbol
+
         if benchmark_symbol is None:
             return
 
@@ -41,13 +52,74 @@ class BenchmarkTracker:
         self._found_any = True
         self._bars.append(bar)
 
+    def _finalize_flat(self, *, initial_equity: float) -> list[EquityPoint]:
+        points: list[EquityPoint] = []
+        for ts in self._all_timestamps or []:
+            points.append(EquityPoint(ts=ts, equity=float(initial_equity)))
+        if not points:
+            raise ValueError("benchmark.type=flat produced no timestamps from strategy run")
+        return points
+
+    def _finalize_baseline_strategy(self, *, initial_equity: float) -> list[EquityPoint]:
+        if not self._found_any:
+            raise ValueError("benchmark.type=baseline_strategy but no bars were observed in scoped data")
+        if self.spec.baseline_strategy_name != "ma_cross":
+            raise ValueError(
+                "Unsupported benchmark.baseline_strategy.name: "
+                f"{self.spec.baseline_strategy_name!r}. Supported names: ['ma_cross']"
+            )
+
+        params = self.spec.baseline_strategy_params or {}
+        fast_raw = params.get("fast", 20)
+        slow_raw = params.get("slow", 50)
+        try:
+            fast = int(fast_raw)
+            slow = int(slow_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"benchmark.baseline_strategy.params.fast/slow must be positive ints (got: fast={fast_raw!r}, slow={slow_raw!r})"
+            ) from exc
+        if fast <= 0 or slow <= 0 or fast >= slow:
+            raise ValueError(
+                "benchmark.baseline_strategy.params require 0 < fast < slow. "
+                f"Got fast={fast!r}, slow={slow!r}."
+            )
+
+        closes: list[float] = [float(getattr(bar, self.spec.price_field)) for bar in self._bars or []]
+        timestamps: list[datetime] = [getattr(bar, "ts") for bar in self._bars or []]
+
+        cash = float(initial_equity)
+        units = 0.0
+        points: list[EquityPoint] = []
+
+        for idx, (ts, close) in enumerate(zip(timestamps, closes)):
+            if idx + 1 >= slow:
+                fast_ma = sum(closes[idx - fast + 1 : idx + 1]) / fast
+                slow_ma = sum(closes[idx - slow + 1 : idx + 1]) / slow
+                if units == 0.0 and fast_ma > slow_ma:
+                    units = cash / close
+                    cash = 0.0
+                elif units > 0.0 and fast_ma < slow_ma:
+                    cash = units * close
+                    units = 0.0
+
+            equity = cash + (units * close)
+            points.append(EquityPoint(ts=ts, equity=equity))
+
+        if not points:
+            raise ValueError("benchmark.type=baseline_strategy produced no equity points")
+        return points
+
     def finalize(self, *, initial_equity: float) -> list[EquityPoint]:
-        """
-        Compute buy&hold curve using stored bars.
-        Raise ValueError if enabled but no bars were observed.
-        """
         if not self.spec.enabled:
             return []
+
+        if self.spec.mode == "flat":
+            return self._finalize_flat(initial_equity=initial_equity)
+
+        if self.spec.mode == "baseline_strategy":
+            return self._finalize_baseline_strategy(initial_equity=initial_equity)
+
         if not self._found_any:
             raise ValueError(f"benchmark.enabled=true but no bars found for symbol={self.spec.symbol}")
 
@@ -67,7 +139,6 @@ def write_benchmark_equity_csv(points: list[EquityPoint], path: Path) -> None:
         writer.writerow(["ts", "equity"])
         for point in points:
             writer.writerow([point.ts.isoformat(), f"{point.equity:.{FLOAT_DECIMALS_CSV}f}"])
-
 
 
 class BenchmarkTrackingFeed:

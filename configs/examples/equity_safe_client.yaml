@@ -1,0 +1,12 @@
+instrument:
+  type: equity
+  symbol: AAPL
+  quote_currency: USD
+  account_currency: USD
+
+execution:
+  spread_mode: fixed_bps
+  spread_bps: 1.0
+  commission:
+    mode: per_share
+    per_share: 0.005

@@ -8,117 +8,58 @@
 | `MARKET` | ✅ supported |
 | `LIMIT` | ❌ defined in enums, but execution rejects non-market orders in v1 |
 
-Repo Evidence: `src/bt/core/enums.py::OrderType`, `src/bt/execution/execution_model.py::ExecutionModel.process`.
-
 ### Fill timing semantics
 - `delay_bars` means an order waits that many bars before it becomes fill-eligible.
 - Delay countdown is tracked in order metadata (`delay_remaining`).
 
-Repo Evidence: `src/bt/execution/execution_model.py::ExecutionModel.process`.
-
 ### Intrabar mode options
-- `worst_case`:
-  - BUY fills at bar high
-  - SELL fills at bar low
-- `best_case`:
-  - BUY fills at bar low
-  - SELL fills at bar high
-- `midpoint`: fills at `(high + low)/2`
+- `worst_case`: BUY at high, SELL at low.
+- `best_case`: BUY at low, SELL at high.
+- `midpoint`: `(high + low) / 2`.
 
-Default intrabar mode is `worst_case` when unset.
+Default intrabar mode is `worst_case`.
 
-Repo Evidence: `src/bt/execution/intrabar.py::parse_intrabar_spec`, `src/bt/execution/intrabar.py::market_fill_price`.
+## Cost model pipeline (deterministic)
+1. Intrabar raw market fill price.
+2. Spread application (`execution.spread_mode`).
+3. Slippage application.
+4. Exchange fee on final notional.
+5. Instrument commission (if configured).
 
-### Cost model pipeline (execution order)
-1. Intrabar raw market fill price
-2. Spread application (`apply_spread`)
-3. Slippage application (`estimate_slippage`)
-4. Fee application on final notional (`fee_for_notional`)
+No randomized behavior is introduced.
 
-Repo Evidence: `src/bt/execution/execution_model.py::ExecutionModel.process`, `src/bt/execution/spread.py::apply_spread`, `src/bt/execution/slippage.py::SlippageModel.estimate_slippage`, `src/bt/execution/fees.py::FeeModel.fee_for_notional`.
+## Spread semantics by instrument
 
-## Execution tiers and override policy
+- `execution.spread_mode=none`: no spread adjustment.
+- `execution.spread_mode=fixed_bps`: total spread = `price * spread_bps / 10000`.
+- `execution.spread_mode=bar_range_proxy`: deterministic bar-range proxy spread.
+- `execution.spread_mode=fixed_pips`: **FX-only** spread mode.
+  - Uses `execution.spread_pips` and `instrument.pip_size`.
+  - Fallback: `instrument.tick_size` if `pip_size` is absent (pip-as-tick fallback).
 
-### Tier reference table (exact preset values)
-| Profile name | Intended use case / realism | maker_fee | taker_fee | slippage_bps | spread_bps | delay_bars | intrabar default influenced by tier? | Override policy |
-| --- | --- | ---:| ---:| ---:| ---:| ---:| --- | --- |
-| tier1 | optimistic / low-friction | 0.0 | 0.0004 | 0.5 | 0.0 | 0 | No (intrabar remains independent, default worst_case) | Preset fields locked |
-| tier2 (default) | baseline realistic default | 0.0 | 0.0006 | 2.0 | 1.0 | 1 | No | Preset fields locked |
-| tier3 | conservative / higher friction | 0.0 | 0.0008 | 5.0 | 3.0 | 1 | No | Preset fields locked |
-| custom | explicit user assumptions | required explicit | required explicit | required explicit | required explicit | required explicit | No | Only profile that allows these fields |
+Spread is always adverse to the trader:
+- BUY: `price + half_spread`
+- SELL: `price - half_spread`
 
-Repo Evidence: `src/bt/execution/profile.py::_BUILTIN_PROFILES`, `src/bt/execution/profile.py::resolve_execution_profile`, `tests/test_execution_profile_resolution.py::test_builtin_profile_values_exact`.
+FX V1 guardrail:
+- If `instrument.type=forex`, spread modeling is required (`fixed_pips` or `fixed_bps`).
 
-### Preset override rule
-- `tier1|tier2|tier3` reject explicit overrides for:
-  - `maker_fee`, `taker_fee`, `slippage_bps`, `delay_bars`, `spread_bps`
-- `custom` requires **all** those fields.
+## Commission semantics by instrument
 
-Typical client error:
-- `execution.profile=tier2 forbids overrides. Remove override keys or set execution.profile=custom...`
+`execution.commission.mode` options:
+- `none`: 0
+- `per_trade`: fixed value per fill (`execution.commission.per_trade`)
+- `per_share`: equity-only, `abs(qty) * per_share`
+- `per_lot`: forex-only, `abs(qty) * per_lot`
 
-Repo Evidence: `src/bt/execution/profile.py::_PROFILE_OVERRIDE_FIELDS`, `src/bt/execution/profile.py::resolve_execution_profile`, `tests/test_execution_profile_override_policy.py`.
+Compatibility guardrails:
+- `per_share` requires `instrument.type=equity`
+- `per_lot` requires `instrument.type=forex`
 
-### “What’s in my tier?” verification
-- Check `run_status.json`:
-  - `execution_profile`
-  - `effective_execution` snapshot (`maker_fee`, `taker_fee`, `slippage_bps`, `delay_bars`, `spread_bps`)
-- Check `config_used.yaml` for resolved config inputs.
+## Tier profiles and overrides
 
-Repo Evidence: `src/bt/execution/effective.py::build_effective_execution_snapshot`, `src/bt/api.py::run_backtest`, `src/bt/experiments/grid_runner.py` status payload creation.
+Execution tier presets (`tier1`, `tier2`, `tier3`) and `custom` override policy remain unchanged:
+- preset tiers still lock override fields (`maker_fee`, `taker_fee`, `slippage_bps`, `delay_bars`, `spread_bps`)
+- `custom` still requires all override fields
 
-## Copy/paste config examples
-
-### Preset tier2 (default spread disabled)
-```yaml
-execution:
-  profile: tier2
-  spread_mode: none
-  intrabar_mode: worst_case
-```
-
-### Preset tier with fixed spread enabled
-```yaml
-execution:
-  profile: tier3
-  spread_mode: fixed_bps
-  # spread_bps optional; defaults to tier spread_bps (tier3 => 3.0)
-```
-
-### Custom execution assumptions
-```yaml
-execution:
-  profile: custom
-  maker_fee: 0.0
-  taker_fee: 0.0010
-  slippage_bps: 3.0
-  spread_bps: 1.5
-  delay_bars: 1
-  spread_mode: fixed_bps
-  intrabar_mode: midpoint
-```
-
-## FAQ / common failure modes
-- **Why am I getting “tier forbids overrides”?**  
-  Because preset tiers lock execution fields. Move to `execution.profile: custom` if you need explicit values.
-
-- **Why does `spread_bps` still error even if `spread_mode: none`?**  
-  The profile resolver checks override fields independent of spread mode for preset tiers; preset tier + explicit `spread_bps` is still forbidden.
-
-- **What happens if I set `spread_mode: fixed_bps` on a tier preset without `spread_bps`?**  
-  Resolver uses the tier preset value (`tier1=0.0`, `tier2=1.0`, `tier3=3.0`).
-
-- **How do I intentionally override?**  
-  Set `execution.profile: custom` and provide all required override fields.
-
-Repo Evidence: `src/bt/execution/profile.py::resolve_execution_profile`, `src/bt/core/config_resolver.py::resolve_config`.
-
-## Repo Evidence index
-- `src/bt/execution/profile.py::resolve_execution_profile`
-- `src/bt/execution/profile.py::_BUILTIN_PROFILES`
-- `src/bt/execution/execution_model.py::ExecutionModel.process`
-- `src/bt/execution/intrabar.py`
-- `src/bt/execution/spread.py`
-- `src/bt/execution/slippage.py`
-- `src/bt/execution/fees.py`
-- `src/bt/execution/effective.py::build_effective_execution_snapshot`
+New spread/commission knobs are additive execution controls and do not change tier enforcement behavior.

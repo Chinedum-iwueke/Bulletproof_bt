@@ -1,0 +1,11 @@
+instrument:
+  type: forex
+  # symbol should be set by the client config per strategy/dataset
+  pip_size: 0.0001
+
+execution:
+  spread_mode: fixed_pips
+  spread_pips: 1.5
+  commission:
+    mode: per_lot
+    per_lot: 0.0

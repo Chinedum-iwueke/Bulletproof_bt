@@ -1,0 +1,14 @@
+instrument:
+  type: forex
+  symbol: EURUSD
+  pip_size: 0.0001
+  base_currency: EUR
+  quote_currency: USD
+  account_currency: USD
+
+execution:
+  spread_mode: fixed_pips
+  spread_pips: 1.2
+  commission:
+    mode: per_lot
+    per_lot: 0.0

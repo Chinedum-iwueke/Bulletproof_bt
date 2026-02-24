@@ -135,6 +135,36 @@ experiment_dir = run_grid(
 - Do **not** mutate `ctx`.
 - Do **not** access portfolio/execution internals from a strategy.
 
+
+## Data market modes
+
+Crypto defaults (no market key needed):
+
+```yaml
+data:
+  mode: streaming
+```
+
+FX 24x5 example:
+
+```yaml
+data:
+  market: fx_24x5
+  allow_weekend_bars: false
+```
+
+Equity session example:
+
+```yaml
+data:
+  market: equity_session
+  equity_session:
+    timezone: America/New_York
+    open_time: "09:30"
+    close_time: "16:00"
+    trading_days: [Mon, Tue, Wed, Thu, Fri]
+```
+
 ## Streaming indicator library
 
 All indicators are stateful and updated bar-by-bar (`update(bar)`), with explicit warmups (`warmup_bars`) and no lookahead.
@@ -207,6 +237,7 @@ for bar in bars:
 ## Client contracts
 
 - [docs/dataset_contract.md](docs/dataset_contract.md)
+- [docs/data_market_contract.md](docs/data_market_contract.md)
 - [docs/execution_model_contract.md](docs/execution_model_contract.md)
 - [docs/strategy_contract.md](docs/strategy_contract.md)
 - [docs/portfolio_risk_contract.md](docs/portfolio_risk_contract.md)

@@ -1,0 +1,7 @@
+instrument:
+  type: crypto
+
+execution:
+  spread_mode: none
+  commission:
+    mode: none

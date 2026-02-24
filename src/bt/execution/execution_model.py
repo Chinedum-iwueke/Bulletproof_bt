@@ -8,10 +8,12 @@ import pandas as pd
 
 from bt.core.enums import OrderState, OrderType, Side
 from bt.core.types import Bar, Fill, Order
+from bt.execution.commission import CommissionSpec, compute_commission
 from bt.execution.fees import FeeModel
 from bt.execution.intrabar import IntrabarMode, IntrabarSpec, market_fill_price
 from bt.execution.slippage import SlippageModel
-from bt.execution.spread import SpreadMode, apply_spread
+from bt.execution.spread import SpreadMode, apply_instrument_spread
+from bt.instruments.spec import InstrumentSpec
 
 
 class ExecutionModel:
@@ -22,21 +24,30 @@ class ExecutionModel:
         slippage_model: SlippageModel,
         spread_mode: SpreadMode = "none",
         spread_bps: float = 0.0,
+        spread_pips: float | None = None,
         intrabar_mode: IntrabarMode = "worst_case",
         delay_bars: int = 1,
+        instrument: InstrumentSpec | None = None,
+        commission: CommissionSpec | None = None,
     ) -> None:
         if delay_bars < 0:
             raise ValueError("delay_bars must be >= 0")
         if spread_bps < 0:
             raise ValueError("spread_bps must be >= 0")
-        if spread_mode not in {"none", "fixed_bps", "bar_range_proxy"}:
+        if spread_mode not in {"none", "fixed_bps", "bar_range_proxy", "fixed_pips"}:
             raise ValueError(f"Unsupported spread_mode: {spread_mode}")
+        if spread_pips is not None and float(spread_pips) <= 0:
+            raise ValueError("spread_pips must be > 0 when provided")
+
         self._fee_model = fee_model
         self._slippage_model = slippage_model
         self._spread_mode = spread_mode
         self._spread_bps = spread_bps
+        self._spread_pips = spread_pips
         self._intrabar_spec = IntrabarSpec(mode=intrabar_mode)
         self._delay_bars = delay_bars
+        self._instrument = instrument
+        self._commission = commission or CommissionSpec(mode="none")
 
     def process(
         self,
@@ -74,13 +85,17 @@ class ExecutionModel:
                 continue
 
             fill_price = market_fill_price(side=updated_order.side, bar=bar, intrabar_spec=self._intrabar_spec)
-            spread_adjusted_fill_price = apply_spread(
-                mode=self._spread_mode,
-                spread_bps=self._spread_bps,
+            spread_adjusted_fill_price = apply_instrument_spread(
                 price=fill_price,
-                bar_high=bar.high,
-                bar_low=bar.low,
                 side=updated_order.side.value,
+                spread={
+                    "mode": self._spread_mode,
+                    "spread_bps": self._spread_bps,
+                    "spread_pips": self._spread_pips,
+                    "bar_high": bar.high,
+                    "bar_low": bar.low,
+                },
+                instrument=self._instrument,
             )
             spread_cost = abs(updated_order.qty) * abs(spread_adjusted_fill_price - fill_price)
             fill_price = spread_adjusted_fill_price
@@ -95,7 +110,13 @@ class ExecutionModel:
                 raise ValueError(f"Unsupported side: {updated_order.side}")
 
             notional = abs(updated_order.qty) * fill_price
-            fee = self._fee_model.fee_for_notional(notional=notional, is_maker=False)
+            exchange_fee = self._fee_model.fee_for_notional(notional=notional, is_maker=False)
+            commission_fee = compute_commission(
+                instrument=self._instrument,
+                qty=updated_order.qty,
+                commission=self._commission,
+            )
+            fee = exchange_fee + commission_fee
 
             fill_metadata = dict(updated_order.metadata)
             fill_metadata.update(
@@ -104,7 +125,11 @@ class ExecutionModel:
                     "delay_bars": self._delay_bars,
                     "spread_mode": self._spread_mode,
                     "spread_bps": self._spread_bps,
+                    "spread_pips": self._spread_pips,
                     "spread_cost": spread_cost,
+                    "exchange_fee": exchange_fee,
+                    "commission_fee": commission_fee,
+                    "commission_mode": self._commission.mode,
                 }
             )
 
