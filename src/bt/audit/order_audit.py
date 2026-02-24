@@ -12,7 +12,9 @@ def inspect_order(*, ts: Any, order: Any, min_qty: float = 0.0, min_notional: fl
         violations.append({"type": "min_qty_violation", "order_id": order.id, "qty": order.qty, "min_qty": min_qty})
     if min_notional > 0 and notional_est < min_notional:
         violations.append({"type": "min_notional_violation", "order_id": order.id, "notional": notional_est, "min_notional": min_notional})
-    if "price_reference" not in order.metadata:
+    # Market orders can execute at bar-derived prices where an explicit
+    # price reference field is not required.
+    if order.limit_price is not None and "price_reference" not in order.metadata:
         violations.append({"type": "missing_price_reference", "order_id": order.id})
     intent = {
         "ts": ts,
