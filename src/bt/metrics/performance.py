@@ -636,10 +636,10 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
         slippage_drag_pct_of_gross = None
 
     bucket_series = None
-    if "vol_bucket" in trades_df.columns:
-        bucket_series = trades_df["vol_bucket"]
-    elif "regime_bucket" in trades_df.columns:
-        bucket_series = trades_df["regime_bucket"]
+    for bucket_column in ("vol_bucket", "regime_bucket", "bucket"):
+        if bucket_column in trades_df.columns:
+            bucket_series = trades_df[bucket_column]
+            break
 
     ev_by_bucket, trades_by_bucket = _bucket_metrics(pnl_net, bucket_series)
 
