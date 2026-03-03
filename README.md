@@ -5,9 +5,17 @@ Scaffold for an event-driven, bar-by-bar backtesting engine.
 ## Install
 
 ```bash
+git clone https://github.com/Chinedum-iwueke/Bulletproof_bt.git
+cd Bulletproof_bt
+
 python -m venv .venv
 source .venv/bin/activate
+
 pip install -e ".[dev]"
+```
+Run tests to verify installation:
+
+```bash
 pytest -q
 ```
 
