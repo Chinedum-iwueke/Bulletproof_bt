@@ -218,6 +218,8 @@ tests/
 
 Core engine modules remain instrument-agnostic. Market differences are handled through instrument specs and execution adapters.
 
+---
+
 ## Prerequisites
 
 ### System Requirements
