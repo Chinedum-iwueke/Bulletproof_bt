@@ -7,7 +7,7 @@ Scans run directories, extracts key artifacts, and produces:
   2) leaderboard_top.csv (quick triage)
   3) heatmap_cells.csv (pivot-ready)
   4) monotonicity_summary.csv (EV vs vol_floor)
-  5) pivots/*.csv (ev_net pivot per group)
+  5) pivots/*.csv (ev_r_net pivot per group)
 
 PLUS Tail Diagnostics to decide if Chandelier can help:
   6) runs_tail_stats.csv (quantiles, max, skew, etc. from trade_returns.csv)
@@ -160,7 +160,8 @@ class RunSummary:
     n_trades: Optional[int]
     win_rate: Optional[float]
     avg_trade: Optional[float]
-    ev_net: Optional[float]
+    ev_r_net: Optional[float]
+    ev_r_gross: Optional[float]
     sharpe: Optional[float]
     sortino: Optional[float]
     mar: Optional[float]
@@ -324,7 +325,8 @@ def _extract_perf(perf: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
             "n_trades": None,
             "win_rate": None,
             "avg_trade": None,
-            "ev_net": None,
+            "ev_r_net": None,
+            "ev_r_gross": None,
             "sharpe": None,
             "sortino": None,
             "mar": None,
@@ -336,7 +338,30 @@ def _extract_perf(perf: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
     n_trades = _coerce_int(_first_existing_key(perf, [["n_trades"], ["total_trades"], ["trades", "count"], ["summary", "n_trades"]]))
     win_rate = _coerce_float(_first_existing_key(perf, [["win_rate"], ["summary", "win_rate"], ["trades", "win_rate"]]))
     avg_trade = _coerce_float(_first_existing_key(perf, [["avg_trade_return"], ["avg_trade"], ["summary", "avg_trade_return"], ["summary", "avg_trade"]]))
-    ev_net = _coerce_float(_first_existing_key(perf, [["ev_net"], ["expectancy_net"], ["summary", "ev_net"], ["summary", "expectancy_net"], ["metrics", "ev_net"]]))
+    ev_r_net = _coerce_float(
+        _first_existing_key(
+            perf,
+            [
+                ["ev_r_net"],
+                ["summary", "ev_r_net"],
+                ["metrics", "ev_r_net"],
+                ["ev_net"],
+                ["expectancy_net"],
+            ],
+        )
+    )
+    ev_r_gross = _coerce_float(
+        _first_existing_key(
+            perf,
+            [
+                ["ev_r_gross"],
+                ["summary", "ev_r_gross"],
+                ["metrics", "ev_r_gross"],
+                ["ev_gross"],
+                ["expectancy_gross"],
+            ],
+        )
+    )
     sharpe = _coerce_float(_first_existing_key(perf, [["sharpe_annualized"], ["sharpe"], ["summary", "sharpe"], ["metrics", "sharpe"]]))
     sortino = _coerce_float(_first_existing_key(perf, [["sortino_annualized"], ["sortino"], ["summary", "sortino"], ["metrics", "sortino"]]))
     mar = _coerce_float(_first_existing_key(perf, [["mar_ratio"], ["mar"], ["summary", "mar"], ["metrics", "mar"]]))
@@ -348,7 +373,8 @@ def _extract_perf(perf: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
         "n_trades": float(n_trades) if n_trades is not None else None,
         "win_rate": win_rate,
         "avg_trade": avg_trade,
-        "ev_net": ev_net,
+        "ev_r_net": ev_r_net,
+        "ev_r_gross": ev_r_gross,
         "sharpe": sharpe,
         "sortino": sortino,
         "mar": mar,
@@ -360,7 +386,7 @@ def _extract_perf(perf: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
 
 def _derive_perf_from_trade_returns(tr: Optional[pd.DataFrame]) -> Dict[str, Optional[float]]:
     if tr is None or tr.empty:
-        return {"n_trades": None, "win_rate": None, "avg_trade": None, "ev_net": None}
+        return {"n_trades": None, "win_rate": None, "avg_trade": None, "ev_r_net": None}
 
     candidates = ["r", "r_multiple", "r_mult", "return", "ret", "net_return", "pnl_pct", "pnl_return"]
     col = None
@@ -373,17 +399,17 @@ def _derive_perf_from_trade_returns(tr: Optional[pd.DataFrame]) -> Dict[str, Opt
         if num_cols:
             col = num_cols[0]
     if col is None:
-        return {"n_trades": None, "win_rate": None, "avg_trade": None, "ev_net": None}
+        return {"n_trades": None, "win_rate": None, "avg_trade": None, "ev_r_net": None}
 
     s = pd.to_numeric(tr[col], errors="coerce").dropna()
     if s.empty:
-        return {"n_trades": None, "win_rate": None, "avg_trade": None, "ev_net": None}
+        return {"n_trades": None, "win_rate": None, "avg_trade": None, "ev_r_net": None}
 
     n = int(s.shape[0])
     win_rate = float((s > 0).mean())
     avg_trade = float(s.mean())
-    ev_net = avg_trade
-    return {"n_trades": float(n), "win_rate": win_rate, "avg_trade": avg_trade, "ev_net": ev_net}
+    ev_r_net = avg_trade
+    return {"n_trades": float(n), "win_rate": win_rate, "avg_trade": avg_trade, "ev_r_net": ev_r_net}
 
 
 def _extract_costs(cost: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
@@ -422,7 +448,8 @@ def _summarize_run(run_dir: Path) -> RunSummary:
     n_trades = pick(perf_vals["n_trades"], derived["n_trades"])
     win_rate = pick(perf_vals["win_rate"], derived["win_rate"])
     avg_trade = pick(perf_vals["avg_trade"], derived["avg_trade"])
-    ev_net = pick(perf_vals["ev_net"], derived["ev_net"])
+    ev_r_net = pick(perf_vals["ev_r_net"], derived["ev_r_net"])
+    ev_r_gross = perf_vals["ev_r_gross"]
 
     costs = _extract_costs(cost)
 
@@ -441,7 +468,8 @@ def _summarize_run(run_dir: Path) -> RunSummary:
         n_trades=_coerce_int(n_trades),
         win_rate=win_rate,
         avg_trade=avg_trade,
-        ev_net=ev_net,
+        ev_r_net=ev_r_net,
+        ev_r_gross=ev_r_gross,
         sharpe=perf_vals["sharpe"],
         sortino=perf_vals["sortino"],
         mar=perf_vals["mar"],
@@ -458,14 +486,14 @@ def _summarize_run(run_dir: Path) -> RunSummary:
 # -----------------------------
 # Scrap / keep heuristic (triage)
 # -----------------------------
-def _scrap_signal(ev_net: Optional[float], n_trades: Optional[int], max_dd: Optional[float]) -> str:
-    if ev_net is None or (isinstance(ev_net, float) and math.isnan(ev_net)):
+def _scrap_signal(ev_r_net: Optional[float], n_trades: Optional[int], max_dd: Optional[float]) -> str:
+    if ev_r_net is None or (isinstance(ev_r_net, float) and math.isnan(ev_r_net)):
         return "UNKNOWN"
     n = n_trades or 0
 
     if n < 200:
-        return "BORDERLINE_LOW_SAMPLE" if ev_net > 0 else "SCRAP_LOW_SAMPLE"
-    if ev_net <= 0:
+        return "BORDERLINE_LOW_SAMPLE" if ev_r_net > 0 else "SCRAP_LOW_SAMPLE"
+    if ev_r_net <= 0:
         return "SCRAP"
     # DD sanity (handles both negative or positive representations)
     if max_dd is not None and not (isinstance(max_dd, float) and math.isnan(max_dd)):
@@ -721,7 +749,9 @@ def main() -> int:
             "n_trades": s.n_trades,
             "win_rate": s.win_rate,
             "avg_trade": s.avg_trade,
-            "ev_net": s.ev_net,
+            "ev_r_net": s.ev_r_net,
+            "ev_r_gross": s.ev_r_gross,
+            "cost_drag": (s.ev_r_gross - s.ev_r_net) if (s.ev_r_gross is not None and s.ev_r_net is not None) else None,
             "pnl_net": s.pnl_net,
             "sharpe": s.sharpe,
             "sortino": s.sortino,
@@ -737,7 +767,7 @@ def main() -> int:
             f"{row['strategy']}|exit={row['exit_type']}|tier={row['tier']}|tf={row['timeframe']}|"
             f"X={row['vol_floor']}|adx={row['adx_min']}|ds={row['dataset_name']}"
         )
-        row["scrap_label"] = _scrap_signal(row.get("ev_net"), row.get("n_trades"), row.get("max_dd"))
+        row["scrap_label"] = _scrap_signal(row.get("ev_r_net"), row.get("n_trades"), row.get("max_dd"))
         row["config_compact_json"] = json.dumps(cfg_compact, default=str, sort_keys=True)
 
         rows.append(row)
@@ -778,7 +808,7 @@ def main() -> int:
         return 3
 
     # Normalize numeric
-    for c in ["win_rate", "avg_trade", "ev_net", "pnl_net", "sharpe", "sortino", "mar", "max_dd", "dd_duration"]:
+    for c in ["win_rate", "avg_trade", "ev_r_net", "ev_r_gross", "cost_drag", "pnl_net", "sharpe", "sortino", "mar", "max_dd", "dd_duration"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
@@ -789,13 +819,13 @@ def main() -> int:
     df_lb = df.copy()
     df_lb["dd_mag"] = pd.to_numeric(df_lb["max_dd"], errors="coerce").abs()
     df_lb = df_lb.sort_values(
-        ["scrap_label", "ev_net", "sharpe", "dd_mag", "n_trades"],
+        ["scrap_label", "ev_r_net", "sharpe", "dd_mag", "n_trades"],
         ascending=[True, False, False, True, False],
     )
 
     lb_cols = [
         "scrap_label",
-        "ev_net",
+        "ev_r_net",
         "sharpe",
         "max_dd",
         "n_trades",
@@ -814,7 +844,7 @@ def main() -> int:
     df_lb[lb_cols].head(args.top).to_csv(outdir / "leaderboard_top.csv", index=False)
 
     # Heatmap-friendly cells
-    heat_cols = ["dataset_name", "strategy", "exit_type", "tier", "timeframe", "vol_floor", "adx_min", "ev_net", "sharpe", "max_dd", "n_trades"]
+    heat_cols = ["dataset_name", "strategy", "exit_type", "tier", "timeframe", "vol_floor", "adx_min", "ev_r_net", "ev_r_gross", "cost_drag", "sharpe", "max_dd", "n_trades"]
     df[heat_cols].to_csv(outdir / "heatmap_cells.csv", index=False)
 
     # Pivots
@@ -823,7 +853,7 @@ def main() -> int:
     for (ds, strat, ex, tier, tf), g in df.groupby(["dataset_name", "strategy", "exit_type", "tier", "timeframe"], dropna=False):
         if g["vol_floor"].isna().all() or g["adx_min"].isna().all():
             continue
-        pivot = g.pivot_table(index="vol_floor", columns="adx_min", values="ev_net", aggfunc="max").sort_index()
+        pivot = g.pivot_table(index="vol_floor", columns="adx_min", values="ev_r_net", aggfunc="max").sort_index()
         fname = f"pivot_ev__ds={ds}__strat={strat}__exit={ex}__tier={tier}__tf={tf}.csv"
         fname = re.sub(r"[^A-Za-z0-9._=-]+", "_", fname)
         pivot.to_csv(pivots_dir / fname)
@@ -833,11 +863,11 @@ def main() -> int:
     dmono = df.dropna(subset=["vol_floor"]).copy()
     dmono["vol_floor"] = pd.to_numeric(dmono["vol_floor"], errors="coerce")
     for keys, g in dmono.groupby(["dataset_name", "strategy", "exit_type", "tier", "timeframe"], dropna=False):
-        g = g.dropna(subset=["vol_floor", "ev_net"])
+        g = g.dropna(subset=["vol_floor", "ev_r_net"])
         if g.empty:
             continue
         rep = (
-            g.sort_values(["vol_floor", "ev_net"], ascending=[True, False])
+            g.sort_values(["vol_floor", "ev_r_net"], ascending=[True, False])
              .groupby("vol_floor", as_index=False)
              .head(1)
              .sort_values("vol_floor")
@@ -845,12 +875,12 @@ def main() -> int:
         if rep.shape[0] < 3:
             spearman = float("nan")
         else:
-            spearman = rep["vol_floor"].corr(rep["ev_net"], method="spearman")
+            spearman = rep["vol_floor"].corr(rep["ev_r_net"], method="spearman")
 
         low = rep[rep["vol_floor"].isin([40, 50])]
         high = rep[rep["vol_floor"].isin([70, 80])]
-        low_mean = float(low["ev_net"].mean()) if not low.empty else float("nan")
-        high_mean = float(high["ev_net"].mean()) if not high.empty else float("nan")
+        low_mean = float(low["ev_r_net"].mean()) if not low.empty else float("nan")
+        high_mean = float(high["ev_r_net"].mean()) if not high.empty else float("nan")
         delta = high_mean - low_mean if (not math.isnan(low_mean) and not math.isnan(high_mean)) else float("nan")
 
         mono_rows.append({
@@ -861,9 +891,9 @@ def main() -> int:
             "timeframe": keys[4],
             "n_cells": int(g.shape[0]),
             "n_floors_present": int(rep.shape[0]),
-            "spearman_volfloor_ev": spearman,
-            "ev_low_40_50": low_mean,
-            "ev_high_70_80": high_mean,
+            "spearman_volfloor_ev_r_net": spearman,
+            "ev_r_net_low_40_50": low_mean,
+            "ev_r_net_high_70_80": high_mean,
             "delta_high_low": delta,
         })
 
