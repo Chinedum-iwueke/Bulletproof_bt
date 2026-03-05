@@ -216,8 +216,8 @@ def _extract_identity(config: Dict[str, Any]) -> Tuple[str, str, str, str, str, 
         _first_existing_key(
             config,
             [
-                ["strategy", "params", "exit_type"],
                 ["strategy", "exit_type"],
+                ["strategy", "params", "exit_type"],
                 ["exit_type"],
             ],
         )
@@ -229,7 +229,10 @@ def _extract_identity(config: Dict[str, Any]) -> Tuple[str, str, str, str, str, 
         _first_existing_key(
             config,
             [
+                ["strategy", "timeframe"],
+                ["strategy", "entry_timeframe"],
                 ["data", "timeframe"],
+                ["data", "entry_timeframe"],
                 ["timeframe"],
                 ["engine", "timeframe"],
                 ["bars", "timeframe"],
@@ -243,6 +246,7 @@ def _extract_identity(config: Dict[str, Any]) -> Tuple[str, str, str, str, str, 
         _first_existing_key(
             config,
             [
+                ["execution", "profile"],
                 ["execution", "tier"],
                 ["execution_tier"],
                 ["engine", "execution_tier"],
@@ -274,6 +278,7 @@ def _extract_identity(config: Dict[str, Any]) -> Tuple[str, str, str, str, str, 
             [
                 ["data", "dataset_name"],
                 ["data", "name"],
+                ["dataset", "name"],
                 ["dataset_name"],
             ],
         )
@@ -285,6 +290,8 @@ def _extract_identity(config: Dict[str, Any]) -> Tuple[str, str, str, str, str, 
         _first_existing_key(
             config,
             [
+                ["strategy", "vol_floor_pct"],
+                ["strategy", "vol_floor"],
                 ["strategy", "params", "vol_floor"],
                 ["strategy", "params", "vol_floor_pct"],
                 ["strategy", "params", "vol_pct_floor"],
@@ -299,6 +306,7 @@ def _extract_identity(config: Dict[str, Any]) -> Tuple[str, str, str, str, str, 
         _first_existing_key(
             config,
             [
+                ["strategy", "adx_min"],
                 ["strategy", "params", "adx_min"],
                 ["strategy", "params", "adx_threshold"],
                 ["adx_min"],
@@ -325,16 +333,16 @@ def _extract_perf(perf: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
             "pnl_net": None,
         }
 
-    n_trades = _coerce_int(_first_existing_key(perf, [["n_trades"], ["trades", "count"], ["summary", "n_trades"]]))
+    n_trades = _coerce_int(_first_existing_key(perf, [["n_trades"], ["total_trades"], ["trades", "count"], ["summary", "n_trades"]]))
     win_rate = _coerce_float(_first_existing_key(perf, [["win_rate"], ["summary", "win_rate"], ["trades", "win_rate"]]))
     avg_trade = _coerce_float(_first_existing_key(perf, [["avg_trade_return"], ["avg_trade"], ["summary", "avg_trade_return"], ["summary", "avg_trade"]]))
     ev_net = _coerce_float(_first_existing_key(perf, [["ev_net"], ["expectancy_net"], ["summary", "ev_net"], ["summary", "expectancy_net"], ["metrics", "ev_net"]]))
-    sharpe = _coerce_float(_first_existing_key(perf, [["sharpe"], ["summary", "sharpe"], ["metrics", "sharpe"]]))
-    sortino = _coerce_float(_first_existing_key(perf, [["sortino"], ["summary", "sortino"], ["metrics", "sortino"]]))
-    mar = _coerce_float(_first_existing_key(perf, [["mar"], ["summary", "mar"], ["metrics", "mar"]]))
-    max_dd = _coerce_float(_first_existing_key(perf, [["max_drawdown"], ["max_dd"], ["summary", "max_drawdown"], ["summary", "max_dd"], ["drawdown", "max"]]))
-    dd_duration = _coerce_float(_first_existing_key(perf, [["max_drawdown_duration"], ["dd_duration"], ["drawdown", "max_duration"]]))
-    pnl_net = _coerce_float(_first_existing_key(perf, [["pnl_net"], ["net_pnl"], ["summary", "pnl_net"], ["summary", "net_pnl"]]))
+    sharpe = _coerce_float(_first_existing_key(perf, [["sharpe_annualized"], ["sharpe"], ["summary", "sharpe"], ["metrics", "sharpe"]]))
+    sortino = _coerce_float(_first_existing_key(perf, [["sortino_annualized"], ["sortino"], ["summary", "sortino"], ["metrics", "sortino"]]))
+    mar = _coerce_float(_first_existing_key(perf, [["mar_ratio"], ["mar"], ["summary", "mar"], ["metrics", "mar"]]))
+    max_dd = _coerce_float(_first_existing_key(perf, [["max_drawdown_pct"], ["max_drawdown"], ["max_dd"], ["summary", "max_drawdown"], ["summary", "max_dd"], ["drawdown", "max"]]))
+    dd_duration = _coerce_float(_first_existing_key(perf, [["max_drawdown_duration_bars"], ["max_drawdown_duration"], ["dd_duration"], ["drawdown", "max_duration"]]))
+    pnl_net = _coerce_float(_first_existing_key(perf, [["net_pnl"], ["pnl_net"], ["summary", "pnl_net"], ["summary", "net_pnl"]]))
 
     return {
         "n_trades": float(n_trades) if n_trades is not None else None,
@@ -381,10 +389,19 @@ def _derive_perf_from_trade_returns(tr: Optional[pd.DataFrame]) -> Dict[str, Opt
 def _extract_costs(cost: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
     if not cost:
         return {"fees_paid": None, "slippage_paid": None, "spread_paid": None}
-    fees = _coerce_float(_first_existing_key(cost, [["fees"], ["fees_paid"], ["total_fees"], ["summary", "fees"]]))
-    slip = _coerce_float(_first_existing_key(cost, [["slippage"], ["slippage_paid"], ["total_slippage"], ["summary", "slippage"]]))
-    sprd = _coerce_float(_first_existing_key(cost, [["spread"], ["spread_paid"], ["total_spread"], ["summary", "spread"]]))
+    fees = _coerce_float(_first_existing_key(cost, [["fee_total"], ["fees"], ["fees_paid"], ["total_fees"], ["summary", "fees"]]))
+    slip = _coerce_float(_first_existing_key(cost, [["slippage_total"], ["slippage"], ["slippage_paid"], ["total_slippage"], ["summary", "slippage"]]))
+    sprd = _coerce_float(_first_existing_key(cost, [["spread_total"], ["spread"], ["spread_paid"], ["total_spread"], ["summary", "spread"]]))
     return {"fees_paid": fees, "slippage_paid": slip, "spread_paid": sprd}
+
+
+def _sorted_or_empty(df: pd.DataFrame, sort_cols: List[str]) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=sort_cols)
+    missing = [c for c in sort_cols if c not in df.columns]
+    for c in missing:
+        df[c] = pd.NA
+    return df.sort_values(sort_cols)
 
 
 def _summarize_run(run_dir: Path) -> RunSummary:
@@ -850,7 +867,7 @@ def main() -> int:
             "delta_high_low": delta,
         })
 
-    mono = pd.DataFrame(mono_rows).sort_values(["dataset_name", "strategy", "exit_type", "tier", "timeframe"])
+    mono = _sorted_or_empty(pd.DataFrame(mono_rows), ["dataset_name", "strategy", "exit_type", "tier", "timeframe"])
     mono.to_csv(outdir / "monotonicity_summary.csv", index=False)
 
     # Tail outputs
