@@ -42,7 +42,7 @@ python scripts/run_parallel_grid.py \
   --manifest outputs/volfloor_donchian_parallel/manifests/volfloor_donchian_grid_36.csv \
   --base-config configs/engine.yaml \
   --data data/crypto_5m_sample \
-  --max-workers 10 \
+  --max-workers 6 \
   --skip-completed
 ```
 
@@ -64,4 +64,4 @@ python scripts/grid_status.py \
 
 - Parallelism is **across runs** only; each run remains single-process engine execution.
 - The runner reuses the existing run entrypoint (`scripts/run_backtest.py`) and engine APIs.
-- Recommended starting point on a 36-core / 60 GB VM: `--max-workers 10`.
+- Recommended starting point on a 36-core / 60 GB VM: `--max-workers 6`.

@@ -120,28 +120,114 @@ def read_manifest_csv(manifest_path: Path) -> list[dict[str, str]]:
 
 
 def build_override_payload(row: dict[str, str]) -> dict[str, Any]:
+    strategy_name = row["strategy_name"]
+    if strategy_name == "volfloor_donchian":
+        base_payload: dict[str, Any] = {
+            "data": {
+                "mode": "streaming",
+                "chunksize": 50000,
+                "symbols_subset": None,
+                "max_symbols": None,
+                "date_range": {
+                    "start": "2023-01-01",
+                    "end": None,
+                },
+                "entry_timeframe": "15m",
+                "exit_timeframe": "1m",
+            },
+            "benchmark": {
+                "enabled": False,
+                "symbol": "BTCUSDT",
+            },
+            "execution": {
+                "profile": "tier2",
+                "intrabar_mode": "worst_case",
+            },
+            "strategy": {
+                "name": "volfloor_donchian",
+                "timeframe": "15m",
+                "donchian_entry_lookback": 20,
+                "donchian_exit_lookback": 10,
+                "atr_period": 14,
+                "vol_lookback_bars": 2880,
+                "stop_mode": "atr",
+                "atr_stop_multiple": 2.0,
+                "exit_type": "donchian_reversal",
+            },
+            "risk": {
+                "mode": "equity_pct",
+                "r_per_trade": 0.005,
+                "max_positions": 5,
+                "max_leverage": 1.5,
+                "stop_resolution": "strict",
+            },
+            "audit": {
+                "enabled": False,
+                "level": "full",
+                "max_events_per_file": 200000,
+                "determinism_check": False,
+            },
+        }
+    elif strategy_name == "volfloor_ema_pullback":
+        base_payload = {
+            "data": {
+                "mode": "streaming",
+                "chunksize": 50000,
+                "symbols_subset": None,
+                "max_symbols": None,
+                "date_range": None,
+                "entry_timeframe": "15m",
+                "exit_timeframe": "1m",
+            },
+            "benchmark": {
+                "enabled": False,
+                "symbol": "BTCUSDT",
+            },
+            "execution": {
+                "profile": "tier2",
+                "intrabar_mode": "worst_case",
+            },
+            "strategy": {
+                "name": "volfloor_ema_pullback",
+                "signal_conflict_policy": "reject",
+                "timeframe": "15m",
+                "atr_period": 14,
+                "vol_lookback_bars": 2880,
+                "ema_fast_period": 20,
+                "ema_slow_period": 50,
+                "stop_atr_mult": 2.0,
+                "exit_type": "ema_trend_end",
+            },
+            "risk": {
+                "mode": "equity_pct",
+                "r_per_trade": 0.005,
+                "max_positions": 5,
+                "max_leverage": 1.5,
+                "stop_resolution": "strict",
+            },
+            "audit": {
+                "enabled": False,
+                "level": "full",
+                "max_events_per_file": 200000,
+                "determinism_check": False,
+            },
+            "htf_resampler": {
+                "timeframes": ["15m"],
+                "strict": True,
+            },
+            "htf_timeframes": ["15m"],
+        }
+    else:
+        raise ValueError(f"Unsupported strategy_name={strategy_name!r}")
+
+    base_payload["execution"]["profile"] = row["execution_tier"]
+    base_payload["strategy"]["exit_type"] = row["exit_type"]
+    base_payload["strategy"]["vol_floor_pct"] = float(row["vol_floor"])
+    base_payload["strategy"]["adx_min"] = float(row["adx_min"])
+    base_payload["strategy"]["er_min"] = float(row["er_min"])
+    base_payload["strategy"]["er_lookback"] = int(row["er_lookback"])
     return {
-        "data": {
-            "mode": "streaming",
-            "chunksize": 50000,
-            "symbols_subset": None,
-            "max_symbols": None,
-            "date_range": None,
-            "entry_timeframe": row["timeframe"],
-            "exit_timeframe": "1m",
-        },
-        "execution": {
-            "profile": row["execution_tier"],
-        },
-        "strategy": {
-            "name": row["strategy_name"],
-            "exit_type": row["exit_type"],
-            "variant": "B",
-            "vol_floor_pct": float(row["vol_floor"]),
-            "adx_min": float(row["adx_min"]),
-            "er_min": float(row["er_min"]),
-            "er_lookback": int(row["er_lookback"]),
-        },
+        **base_payload,
     }
 
 
@@ -423,7 +509,7 @@ def cli_run_parallel_grid(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--base-config", required=True)
     parser.add_argument("--data", required=True)
-    parser.add_argument("--max-workers", type=int, default=10)
+    parser.add_argument("--max-workers", type=int, default=6)
     parser.add_argument("--skip-completed", action="store_true")
     parser.add_argument("--retry-failed", action="store_true")
     parser.add_argument("--dry-run", action="store_true")

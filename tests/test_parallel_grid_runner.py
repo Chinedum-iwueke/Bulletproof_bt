@@ -4,6 +4,7 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from bt.experiments.parallel_grid import (
@@ -47,15 +48,40 @@ def test_override_payload_injects_expected_keys() -> None:
     payload = build_override_payload(row)
 
     assert payload["data"]["entry_timeframe"] == "15m"
+    assert payload["data"]["date_range"] == {"start": "2023-01-01", "end": None}
+    assert payload["benchmark"]["enabled"] is False
     assert payload["execution"]["profile"] == "tier2"
+    assert payload["execution"]["intrabar_mode"] == "worst_case"
     assert payload["strategy"]["name"] == "volfloor_donchian"
     assert payload["strategy"]["exit_type"] == "donchian_reversal"
     assert payload["strategy"]["er_lookback"] == 16
     assert payload["strategy"]["er_min"] == 0.35
+    assert payload["risk"]["stop_resolution"] == "strict"
+    assert payload["audit"]["max_events_per_file"] == 200000
 
     dumped = yaml.safe_dump(payload)
     loaded = yaml.safe_load(dumped)
     assert loaded["strategy"]["vol_floor_pct"] == 60.0
+
+
+def test_override_payload_for_ema_contains_htf_and_default_exit() -> None:
+    row = {
+        "run_id": "run_001__vol60_adx18_er035_n16",
+        "strategy_name": "volfloor_ema_pullback",
+        "exit_type": "ema_trend_end",
+        "timeframe": "15m",
+        "execution_tier": "tier2",
+        "vol_floor": "60",
+        "adx_min": "18",
+        "er_min": "0.35",
+        "er_lookback": "16",
+    }
+    payload = build_override_payload(row)
+
+    assert payload["data"]["date_range"] is None
+    assert payload["strategy"]["stop_atr_mult"] == 2.0
+    assert payload["htf_resampler"] == {"timeframes": ["15m"], "strict": True}
+    assert payload["htf_timeframes"] == ["15m"]
 
 
 def test_completion_detection_success_failure_incomplete(tmp_path: Path) -> None:
@@ -112,3 +138,32 @@ def test_runner_command_construction() -> None:
         "--override",
         "outputs/exp/overrides/run_001__vol60_adx18_er035_n16.yaml",
     ]
+
+
+def test_cli_default_max_workers_is_6(monkeypatch: pytest.MonkeyPatch) -> None:
+    from bt.experiments import parallel_grid
+
+    captured: dict[str, int] = {}
+
+    monkeypatch.setattr(parallel_grid, "read_manifest_csv", lambda _path: [])
+
+    def _fake_run_manifest_in_parallel(**kwargs):
+        captured["max_workers"] = kwargs["max_workers"]
+        return [], []
+
+    monkeypatch.setattr(parallel_grid, "run_manifest_in_parallel", _fake_run_manifest_in_parallel)
+
+    args = [
+        "--experiment-root",
+        "outputs/x",
+        "--manifest",
+        "outputs/x/manifests/a.csv",
+        "--base-config",
+        "configs/engine.yaml",
+        "--data",
+        "data",
+        "--dry-run",
+    ]
+    exit_code = parallel_grid.cli_run_parallel_grid(args)
+    assert exit_code == 0
+    assert captured["max_workers"] == 6
