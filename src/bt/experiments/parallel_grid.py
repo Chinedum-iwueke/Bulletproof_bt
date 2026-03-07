@@ -131,7 +131,7 @@ def build_override_payload(row: dict[str, str]) -> dict[str, Any]:
                 "max_symbols": None,
                 "date_range": {
                     "start": "2023-01-01",
-                    "end": None,
+                    "end": "2025-05-05",
                 },
                 "entry_timeframe": "15m",
                 "exit_timeframe": "1m",
@@ -176,7 +176,10 @@ def build_override_payload(row: dict[str, str]) -> dict[str, Any]:
                 "chunksize": 50000,
                 "symbols_subset": None,
                 "max_symbols": None,
-                "date_range": None,
+                "date_range": {
+                    "start": "2023-01-01",
+                    "end": "2025-05-05",
+                },
                 "entry_timeframe": "15m",
                 "exit_timeframe": "1m",
             },
