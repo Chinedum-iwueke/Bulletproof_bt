@@ -25,8 +25,8 @@ class GridSpec:
     timeframe: str = "15m"
     execution_tier: str = "tier2"
     vol_floors: tuple[int, ...] = (60, 70, 80, 85)
-    adx_mins: tuple[int, ...] = (18, 22, 25)
-    er_mins: tuple[float, ...] = (0.35, 0.45, 0.55)
+    adx_mins: tuple[int, ...] = (22, 25)
+    er_mins: tuple[float, ...] = (0.55)
     er_lookback: int = 16
 
 
