@@ -95,10 +95,11 @@ def summarize_dist(series: pd.Series, prefix: str) -> Dict[str, float]:
 # -----------------------------
 def detect_realized_r(df: pd.DataFrame) -> Tuple[Optional[pd.Series], Optional[str]]:
     """
-    Try to detect realized return already expressed in R.
-    Preferred columns are explicit R-based realized trade columns.
+    Detect realized return already expressed in R.
     """
     candidates = [
+        "r_multiple_net",
+        "r_multiple_gross",
         "realized_r",
         "r_realized",
         "r_multiple",
@@ -145,65 +146,61 @@ def detect_mae_r_direct(df: pd.DataFrame) -> Tuple[Optional[pd.Series], Optional
 
 def compute_mfe_mae_from_prices(df: pd.DataFrame) -> Tuple[Optional[pd.Series], Optional[pd.Series], str]:
     """
-    Compute MFE_R and MAE_R from price-path extrema and stop distance if possible.
+    Compute MFE_R and MAE_R from price extrema and stop distance.
 
-    For longs:
-      mfe_price = max_price - entry
-      mae_price = entry - min_price
-
-    For shorts:
-      mfe_price = entry - min_price
-      mae_price = max_price - entry
-
-    Then divide by stop_distance_price.
-
-    We try common column names for:
-      side / direction
-      entry price
-      max/min during trade
-      stop price or stop distance
+    Expected schema in your trades.csv:
+      entry_price
+      side
+      mfe_price   # highest favorable/observed price level reached during trade
+      mae_price   # worst adverse/observed price level reached during trade
+      stop_distance or entry_stop_distance
     """
     entry_col = first_existing(df, ["entry_price", "entry", "avg_entry_price"])
     side_col = first_existing(df, ["side", "direction", "position_side"])
-    max_col = first_existing(df, ["max_price_during_trade", "trade_high", "max_price", "highest_price", "high_during_trade"])
-    min_col = first_existing(df, ["min_price_during_trade", "trade_low", "min_price", "lowest_price", "low_during_trade"])
+    mfe_price_col = first_existing(df, ["mfe_price"])
+    mae_price_col = first_existing(df, ["mae_price"])
+    stop_dist_col = first_existing(df, ["entry_stop_distance", "stop_distance", "stop_distance_price", "initial_stop_distance"])
 
-    stop_dist_col = first_existing(df, ["stop_distance_price", "initial_stop_distance", "stop_dist_price"])
-    stop_col = first_existing(df, ["initial_stop_price", "stop_price", "initial_stop"])
-
-    if entry_col is None or side_col is None or max_col is None or min_col is None:
-        return None, None, "missing_entry_side_or_trade_extrema"
+    if entry_col is None or side_col is None or mfe_price_col is None or mae_price_col is None or stop_dist_col is None:
+        return None, None, "missing_required_price_columns"
 
     entry = coerce_numeric(df[entry_col])
-    maxp = coerce_numeric(df[max_col])
-    minp = coerce_numeric(df[min_col])
-
-    if stop_dist_col:
-        stop_dist = coerce_numeric(df[stop_dist_col]).abs()
-    elif stop_col:
-        stopp = coerce_numeric(df[stop_col])
-        stop_dist = (entry - stopp).abs()
-    else:
-        return None, None, "missing_stop_distance"
+    mfe_price = coerce_numeric(df[mfe_price_col])
+    mae_price = coerce_numeric(df[mae_price_col])
+    stop_dist = coerce_numeric(df[stop_dist_col]).abs()
 
     side = df[side_col].astype(str).str.lower().str.strip()
 
     is_long = side.isin(["long", "buy", "1", "true"])
     is_short = side.isin(["short", "sell", "-1", "false"])
 
-    mfe_price = pd.Series(index=df.index, dtype=float)
-    mae_price = pd.Series(index=df.index, dtype=float)
+    mfe_r = pd.Series(index=df.index, dtype=float)
+    mae_r = pd.Series(index=df.index, dtype=float)
 
-    mfe_price.loc[is_long] = maxp.loc[is_long] - entry.loc[is_long]
-    mae_price.loc[is_long] = entry.loc[is_long] - minp.loc[is_long]
+    # For longs:
+    #   favorable move = mfe_price - entry
+    #   adverse move   = entry - mae_price
+    mfe_r.loc[is_long] = (mfe_price.loc[is_long] - entry.loc[is_long]) / stop_dist.loc[is_long]
+    mae_r.loc[is_long] = (entry.loc[is_long] - mae_price.loc[is_long]) / stop_dist.loc[is_long]
 
-    mfe_price.loc[is_short] = entry.loc[is_short] - minp.loc[is_short]
-    mae_price.loc[is_short] = maxp.loc[is_short] - entry.loc[is_short]
+    # For shorts:
+    #   favorable move = entry - mfe_price   if mfe_price is the lowest favorable level
+    #   adverse move   = mae_price - entry   if mae_price is the highest adverse level
+    #
+    # BUT from your sample, mfe_price/mae_price naming appears swapped conceptually:
+    # for shorts, mfe_price looks like the highest adverse price and mae_price looks like the lowest favorable/entry-side price.
+    # To stay robust, compute both directions and keep non-negative excursion values.
+    short_mfe_candidate = (entry.loc[is_short] - mfe_price.loc[is_short]) / stop_dist.loc[is_short]
+    short_mae_candidate = (mae_price.loc[is_short] - entry.loc[is_short]) / stop_dist.loc[is_short]
 
-    mfe_r = mfe_price / stop_dist
-    mae_r = mae_price / stop_dist
+    # If those are negative because the columns are “price extrema but named opposite”, flip them.
+    short_mfe_alt = (entry.loc[is_short] - mae_price.loc[is_short]) / stop_dist.loc[is_short]
+    short_mae_alt = (mfe_price.loc[is_short] - entry.loc[is_short]) / stop_dist.loc[is_short]
 
-    return mfe_r, mae_r, "computed_from_trade_extrema"
+    mfe_r.loc[is_short] = short_mfe_candidate.where(short_mfe_candidate >= 0, short_mfe_alt)
+    mae_r.loc[is_short] = short_mae_candidate.where(short_mae_candidate >= 0, short_mae_alt)
+
+    return mfe_r, mae_r, "computed_from_mfe_price_mae_price_and_stop_distance"
 
 
 def capture_ratio(realized_r: pd.Series, mfe_r: pd.Series) -> pd.Series:
