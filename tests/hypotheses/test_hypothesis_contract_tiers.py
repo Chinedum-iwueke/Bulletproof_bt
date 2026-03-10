@@ -28,7 +28,7 @@ def test_default_tiers_enforced_when_missing() -> None:
 
 
 def test_missing_required_tier_fails_loudly() -> None:
-    contract = HypothesisContract.from_yaml("research/hypotheses/l1_h2.yaml")
+    contract = HypothesisContract.from_yaml("research/hypotheses/l1_h2_compression_mean_reversion.yaml")
     with pytest.raises(MissingRequiredTierError):
         run_hypothesis_contract(
             contract,
