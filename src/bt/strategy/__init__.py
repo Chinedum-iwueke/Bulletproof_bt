@@ -40,6 +40,7 @@ from bt.strategy.volfloor_donchian import VolFloorDonchianStrategy  # noqa: E402
 from bt.strategy.volfloor_ema_pullback import VolFloorEmaPullbackStrategy  # noqa: E402
 from bt.strategy.l1_h1_vol_floor_trend import L1H1VolFloorTrendStrategy  # noqa: E402
 from bt.strategy.l1_h2_compression_mean_reversion import L1H2CompressionMeanReversionStrategy  # noqa: E402
+from bt.strategy.l1_h3_har_rv_gate_trend import L1H3HarRVGateTrendStrategy  # noqa: E402
 
 __all__ = [
     "STRATEGY_REGISTRY",
@@ -50,4 +51,5 @@ __all__ = [
     "VolFloorEmaPullbackStrategy",
     "L1H1VolFloorTrendStrategy",
     "L1H2CompressionMeanReversionStrategy",
+    "L1H3HarRVGateTrendStrategy",
 ]

@@ -243,6 +243,32 @@ def _build_engine(
     )
 
 
+
+
+def _extract_strategy_artifacts(strategy: Any) -> dict[str, Any] | None:
+    current = strategy
+    for _ in range(8):
+        if hasattr(current, "strategy_artifacts") and callable(getattr(current, "strategy_artifacts")):
+            payload = current.strategy_artifacts()
+            if isinstance(payload, dict):
+                return payload
+            return None
+        inner = getattr(current, "_inner", None)
+        if inner is None:
+            break
+        current = inner
+    return None
+
+
+def _write_strategy_artifacts(*, strategy: Any, run_dir: Path) -> None:
+    payload = _extract_strategy_artifacts(strategy)
+    if not payload:
+        return
+    from bt.logging.formatting import write_json_deterministic
+
+    for name, value in payload.items():
+        write_json_deterministic(run_dir / f"{name}.json", value if isinstance(value, dict) else {"value": value})
+
 def _read_data_scope_for_sanity(run_dir: Path) -> dict[str, Any] | None:
     data_scope_path = run_dir / "data_scope.json"
     if not data_scope_path.exists():
@@ -367,6 +393,7 @@ def run_backtest(
                 sanity_counters=sanity_counters,
             )
         engine.run()
+        _write_strategy_artifacts(strategy=getattr(engine, "_strategy", None), run_dir=run_dir)
 
         if benchmark_tracker is not None:
             benchmark_initial_equity = (
