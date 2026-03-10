@@ -14,6 +14,11 @@ from bt.config import load_yaml
 from bt.hypotheses.contract import HypothesisContract
 from bt.hypotheses.exceptions import MissingRequiredTierError
 from bt.hypotheses.logging import make_log_row
+from bt.logging.artifacts_manifest import write_artifacts_manifest
+from bt.logging.run_contract import validate_run_artifacts
+from bt.logging.run_manifest import write_run_manifest
+from bt.logging.summary import write_summary_txt
+from bt.metrics.per_symbol import write_per_symbol_metrics
 
 
 def resolve_phase_tiers(contract: HypothesisContract, phase: str) -> tuple[str, ...]:
@@ -127,6 +132,27 @@ def build_runtime_override(contract: HypothesisContract, spec: dict[str, Any], t
     }
 
 
+
+
+def _postprocess_run_artifacts(run_dir: Path, *, data_path: str) -> None:
+    validate_run_artifacts(run_dir)
+    write_per_symbol_metrics(run_dir)
+
+    config_path = run_dir / "config_used.yaml"
+    try:
+        loaded_config = load_yaml(config_path)
+    except Exception as exc:  # pragma: no cover - defensive user-facing guard
+        raise ValueError(f"Unable to read config_used.yaml from run_dir={run_dir}: {exc}") from exc
+    if not isinstance(loaded_config, dict):
+        raise ValueError(f"Invalid config_used.yaml format in run_dir={run_dir}; expected mapping.")
+
+    config: dict[str, Any] = loaded_config
+    try:
+        write_summary_txt(run_dir)
+        write_run_manifest(run_dir, config=config, data_path=data_path)
+    finally:
+        write_artifacts_manifest(run_dir, config=config)
+
 def _read_run_metrics(run_dir: Path) -> dict[str, Any]:
     performance_path = run_dir / "performance.json"
     payload = json.loads(performance_path.read_text(encoding="utf-8")) if performance_path.exists() else {}
@@ -179,6 +205,7 @@ def execute_hypothesis_variant(
     finally:
         Path(runtime_override_path).unlink(missing_ok=True)
 
+    _postprocess_run_artifacts(run_dir, data_path=data_path)
     metrics = _read_run_metrics(run_dir)
     metrics["run_dir"] = str(run_dir)
     return metrics
