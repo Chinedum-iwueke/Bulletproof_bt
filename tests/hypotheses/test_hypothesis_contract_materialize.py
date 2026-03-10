@@ -7,7 +7,7 @@ from bt.hypotheses.exceptions import InvalidHypothesisSchemaError
 
 
 def test_deterministic_grid_materialization_and_hashes() -> None:
-    contract = HypothesisContract.from_yaml("research/hypotheses/l1_h2.yaml")
+    contract = HypothesisContract.from_yaml("research/hypotheses/l1_h2_compression_mean_reversion.yaml")
     one = contract.materialize_grid()
     two = contract.materialize_grid()
     assert one == two

@@ -1,0 +1,107 @@
+hypothesis_id: "L1-H2"
+title: "Compression Regime Favours Mean Reversion"
+description: "During volatility compression, SessionVWAP deviation fades target mean reversion under a frozen ATR stop and signal-bar time stop."
+research_layer: "L1"
+hypothesis_family: "mean_reversion"
+version: "1.0.0"
+author: "Bulletproof_bt"
+created_at: "2026-03-10T00:00:00Z"
+
+required_indicators:
+  - atr
+  - session_vwap
+
+indicator_defaults:
+  atr_period: 14
+  vwap_mode: "session"
+  signal_timeframe_default: "5m"
+  compression_window_days: 30
+  rv_formula: "atr_14 / close"
+  z_vwap_formula: "(close - session_vwap) / atr_14"
+
+parameter_grid:
+  q_comp: [0.20, 0.30]
+  z0: [0.8, 1.0]
+  k_atr: [1.5, 2.0]
+  T_hold: [12, 24]
+
+gates:
+  - field: "comp_gate_t"
+    op: "=="
+    value: true
+
+entry:
+  strategy: "l1_h2_compression_mean_reversion"
+  signal_timeframe: "5m"
+  timeframe: "5m"
+  base_execution_timeframe: "1m"
+  order_timing: "bar_close_submit_next_bar_execution"
+  no_pyramiding: true
+
+exit:
+  stop_kind: "atr_multiple"
+  stop_model: "fixed_atr_multiple"
+  stop_atr_param: "k_atr"
+  stop_update_policy: "frozen_at_entry"
+  atr_source_timeframe: "signal_timeframe"
+  time_stop_param: "T_hold"
+  hold_time_unit: "signal_bars"
+  profit_exit_model: "vwap_touch"
+  vwap_mode: "session"
+  exit_monitoring_timeframe: "1m"
+
+execution_semantics:
+  signal_timeframe: "5m"
+  base_execution_timeframe: "1m"
+  base_data_frequency_expected: "1m"
+  vwap_mode: "session"
+  stop_model: "fixed_atr_multiple"
+  stop_update_policy: "frozen_at_entry"
+  tp_update_policy: "none"
+  hold_time_unit: "signal_bars"
+  exit_monitoring_timeframe: "1m"
+  atr_source_timeframe: "signal_timeframe"
+  profit_exit_model: "vwap_touch"
+  no_pyramiding: true
+
+sizing:
+  mode: "constant_r"
+  formula: "qty = (equity * r_per_trade) / (k_atr * atr_entry_signal)"
+
+risk_controls:
+  max_positions: 5
+  forbid_adding_to_losers: true
+  enforce_min_stop_distance: true
+
+evaluation:
+  required_tiers: ["Tier2", "Tier3"]
+
+logging:
+  schema_version: "1.0"
+  required_fields:
+    - run_id
+    - hypothesis_id
+    - tier
+    - ev_r_gross
+    - ev_r_net
+    - status
+    - rv_t
+    - q_comp
+    - comp_gate_t
+    - vwap_t
+    - z_vwap_t
+    - entry_reason
+    - atr_entry
+    - stop_distance
+    - stop_price
+    - signal_timeframe
+    - exit_monitoring_timeframe
+    - vwap_mode
+
+notes:
+  falsification_criteria:
+    - "If EV appears only in Tier1 and collapses in Tier2/Tier3, classify as execution-sensitive and reject baseline." 
+  failure_modes:
+    - "SessionVWAP vs cumulative VWAP mismatches can create spurious reversion signals."
+    - "Compression gate can capture pre-breakout states where fades are punished."
+    - "Tier2/Tier3 spread and fees can erase small mean-reversion edges."

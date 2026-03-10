@@ -21,6 +21,7 @@ Each contract YAML defines:
 - Exit/risk monitoring (stop/TP) remains on the **base 1m stream**.
 - `T_hold` is interpreted in **signal bars**, not 1m bars.
 - For L1-H1, `execution_semantics` locks: `stop_model=fixed_atr_multiple`, `stop_update_policy=frozen_at_entry`, `tp_update_policy=frozen_at_entry`, `atr_source_timeframe=signal_timeframe`, `exit_monitoring_timeframe=1m`.
+- For L1-H2, `execution_semantics` additionally locks: `signal_timeframe=5m`, `vwap_mode=session`, `profit_exit_model=vwap_touch`, `hold_time_unit=signal_bars`, and `no_pyramiding=true`.
 
 ## Deterministic materialization
 Grid expansion uses a stable cartesian product over sorted parameter keys. Each variant receives:
