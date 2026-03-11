@@ -16,6 +16,7 @@ HYPOTHESIS_GROUPINGS: dict[str, list[str]] = {
     "L1-H2": ["comp_gate_t", "q_comp", "z_vwap_t"],
     "L1-H3": ["rvhat_pct_t", "fit_window_days"],
     "L1-H3B": ["rvhat_pct_t", "fit_window_days", "z_vwap_t"],
+    "L1-H3C": ["branch_selected", "regime_label", "rvhat_pct_t", "fit_window_days"],
 }
 
 
@@ -71,6 +72,7 @@ def _infer_hypothesis_id(run_dir: Path) -> str:
         "l1_h2_compression_mean_reversion": "L1-H2",
         "l1_h3_har_rv_gate_trend": "L1-H3",
         "l1_h3b_har_rv_gate_mean_reversion": "L1-H3B",
+        "l1_h3c_har_regime_switch": "L1-H3C",
     }
     return mapping.get(str(strategy_name), str(strategy_name) if strategy_name else "")
 
