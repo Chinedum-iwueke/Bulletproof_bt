@@ -104,6 +104,13 @@ def build_runtime_override(contract: HypothesisContract, spec: dict[str, Any], t
     entry = contract.schema.entry
     signal_timeframe = str(entry.get("signal_timeframe", entry.get("timeframe", spec["params"].get("timeframe", "15m")))).lower()
     sem = contract.schema.execution_semantics
+    htf_timeframes = [signal_timeframe]
+    if isinstance(sem, dict) and str(sem.get("strategy_family", "")).lower() == "regime_switch":
+        branch_high = sem.get("branch_high_vol") if isinstance(sem.get("branch_high_vol"), dict) else {}
+        branch_low = sem.get("branch_low_vol") if isinstance(sem.get("branch_low_vol"), dict) else {}
+        high_tf = str(branch_high.get("signal_timeframe", "15m")).lower()
+        low_tf = str(branch_low.get("signal_timeframe", "5m")).lower()
+        htf_timeframes = sorted(set([high_tf, low_tf]))
     if sem:
         expected_base = str(sem.get("base_data_frequency_expected", "1m")).lower()
         exit_tf = str(sem.get("exit_monitoring_timeframe", "1m")).lower()
@@ -120,7 +127,7 @@ def build_runtime_override(contract: HypothesisContract, spec: dict[str, Any], t
             "profile": _tier_to_execution_profile(tier),
         },
         "htf_resampler": {
-            "timeframes": [signal_timeframe],
+            "timeframes": htf_timeframes,
             "strict": True,
         },
         "strategy": {

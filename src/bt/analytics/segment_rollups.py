@@ -228,6 +228,8 @@ def default_segment_keys_for_run(run_dir: str | Path) -> list[str]:
         return ["rvhat_pct_t"]
     if strategy_name == "l1_h3b_har_rv_gate_mean_reversion":
         return ["rvhat_pct_t", "fit_window_days"]
+    if strategy_name == "l1_h3c_har_regime_switch":
+        return ["branch_selected", "regime_label", "fit_window_days"]
     return ["entry_reason"]
 
 
