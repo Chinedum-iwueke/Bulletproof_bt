@@ -10,7 +10,16 @@ import numpy as np
 import pandas as pd
 
 from bt.metrics.r_metrics import summarize_r
-from bt.saas.models import IngestedRun, ScorePayload
+from bt.saas.models import (
+    AnalysisCapabilityProfile,
+    AnalysisRunConfig,
+    DiagnosticCapability,
+    EngineAnalysisResult,
+    EngineRunContext,
+    IngestedRun,
+    ParsedArtifactInput,
+    ScorePayload,
+)
 
 
 REQUIRED_BASE_COLUMNS = {"entry_ts", "symbol", "side"}
@@ -146,6 +155,248 @@ class StrategyRobustnessLabService:
             "score": asdict(score),
             "validation_report": report,
         }
+
+    def run_analysis_from_parsed_artifact(
+        self,
+        parsed_artifact: ParsedArtifactInput,
+        *,
+        config: AnalysisRunConfig | None = None,
+    ) -> EngineAnalysisResult:
+        config = config or AnalysisRunConfig()
+        run = self._ingested_run_from_parsed_artifact(parsed_artifact)
+        payload = self.build_dashboard_payload(
+            run,
+            seed=config.seed,
+            simulations=config.simulations,
+            ruin_drawdown_levels=config.ruin_drawdown_levels,
+            account_size=config.account_size,
+            risk_per_trade_pct=config.risk_per_trade_pct,
+        )
+
+        diagnostics = {
+            "overview": payload["overview"],
+            "distribution": payload["trade_distribution"],
+            "monte_carlo": payload["monte_carlo"],
+            "stability": payload["parameter_stability"],
+            "execution": payload["execution_sensitivity"],
+            "regimes": payload["regime_analysis"],
+            "ruin": payload["risk_of_ruin"],
+            "report": payload["validation_report"],
+        }
+
+        capability_profile = AnalysisCapabilityProfile(
+            diagnostics=self._diagnostic_capability_profile(parsed_artifact)
+        )
+        diagnostics = self._apply_diagnostic_eligibility(
+            diagnostics=diagnostics,
+            capability_profile=capability_profile,
+            diagnostic_eligibility=parsed_artifact.diagnostic_eligibility,
+        )
+        warnings = list(payload["overview"].get("warnings", [])) + list(parsed_artifact.parser_notes)
+
+        run_context = EngineRunContext(
+            artifact_kind=parsed_artifact.artifact_kind,
+            richness=parsed_artifact.richness,
+            trade_count=len(parsed_artifact.trades),
+            ohlcv_present=parsed_artifact.ohlcv_present,
+            benchmark_present=parsed_artifact.benchmark_present,
+            has_assumptions=parsed_artifact.assumptions is not None,
+            has_params=parsed_artifact.params is not None,
+        )
+        return EngineAnalysisResult(
+            run_context=run_context,
+            capability_profile=capability_profile,
+            warnings=warnings,
+            diagnostics=diagnostics,
+            raw_payload=payload,
+        )
+
+    def _ingested_run_from_parsed_artifact(self, parsed_artifact: ParsedArtifactInput) -> IngestedRun:
+        if not parsed_artifact.trades:
+            raise IngestionError("Parsed artifact must include at least one normalized trade record.")
+
+        frame = pd.DataFrame(
+            {
+                "trade_id": trade.trade_id,
+                "symbol": trade.symbol,
+                "side": trade.side,
+                "entry_time": trade.entry_time,
+                "exit_time": trade.exit_time,
+                "entry_price": trade.entry_price,
+                "exit_price": trade.exit_price,
+                "quantity": trade.quantity,
+                "fees": trade.fees,
+                "pnl": trade.pnl,
+                "mae_price": trade.mae,
+                "mfe_price": trade.mfe,
+                "strategy_name": trade.strategy_name,
+                "timeframe": trade.timeframe,
+                "market": trade.market,
+                "exchange": trade.exchange,
+            }
+            for trade in parsed_artifact.trades
+        )
+        normalized = self._normalize_trades(frame)
+
+        if parsed_artifact.equity_curve:
+            equity = pd.DataFrame(parsed_artifact.equity_curve)
+            if "timestamp" in equity.columns and "ts" not in equity.columns:
+                equity = equity.rename(columns={"timestamp": "ts"})
+            if "equity" not in equity.columns:
+                equity = self._equity_from_trades(normalized)
+        else:
+            equity = self._equity_from_trades(normalized)
+
+        performance = self._compute_performance_from_trades(normalized, equity)
+        metadata = self._extract_metadata(
+            normalized,
+            strategy_name=str(parsed_artifact.strategy_metadata.get("strategy_name", "parsed_artifact")),
+        )
+        metadata.update(parsed_artifact.strategy_metadata)
+        metadata.update(
+            {
+                "artifact_kind": parsed_artifact.artifact_kind,
+                "richness": parsed_artifact.richness,
+                "ohlcv_present": parsed_artifact.ohlcv_present,
+                "benchmark_present": parsed_artifact.benchmark_present,
+            }
+        )
+
+        return IngestedRun(
+            source="parsed_artifact",
+            trades=normalized,
+            equity=equity,
+            performance=performance,
+            metadata=metadata,
+        )
+
+    def _diagnostic_capability_profile(
+        self,
+        parsed_artifact: ParsedArtifactInput,
+    ) -> dict[str, DiagnosticCapability]:
+        trade_count = len(parsed_artifact.trades)
+        has_trades = trade_count > 0
+        has_params = parsed_artifact.params is not None
+        def status_for_trade_based(name: str) -> DiagnosticCapability:
+            if not has_trades:
+                return DiagnosticCapability(
+                    status="unavailable",
+                    reason="No trades supplied in parsed artifact.",
+                    required_inputs=["trades"],
+                    optional_enrichments=["assumptions", "params", "ohlcv"],
+                )
+            if trade_count < 30:
+                return DiagnosticCapability(
+                    status="limited",
+                    reason=f"{name} computed from fewer than 30 trades.",
+                    required_inputs=["trades"],
+                    optional_enrichments=["assumptions", "params", "ohlcv"],
+                )
+            return DiagnosticCapability(
+                status="supported",
+                reason=f"{name} can run from normalized trade history.",
+                required_inputs=["trades"],
+                optional_enrichments=["assumptions", "params", "ohlcv", "benchmark"],
+            )
+
+        stability = status_for_trade_based("stability")
+        if has_trades and not has_params:
+            stability = DiagnosticCapability(
+                status="limited",
+                reason="Using single-run stability proxy because params/grid context is missing.",
+                required_inputs=["trades"],
+                optional_enrichments=["params", "assumptions", "ohlcv"],
+            )
+
+        regimes = status_for_trade_based("regimes")
+        if has_trades and not parsed_artifact.ohlcv_present:
+            regimes = DiagnosticCapability(
+                status="limited",
+                reason="Regime analysis is trade-sequence based without OHLCV context.",
+                required_inputs=["trades"],
+                optional_enrichments=["ohlcv", "benchmark", "params"],
+            )
+
+        report_status = "supported" if has_trades else "unavailable"
+        report_reason = (
+            "Report synthesized from available diagnostics."
+            if has_trades
+            else "Cannot assemble report without diagnostics from trade data."
+        )
+
+        return {
+            "overview": status_for_trade_based("overview"),
+            "distribution": status_for_trade_based("distribution"),
+            "monte_carlo": status_for_trade_based("monte_carlo"),
+            "stability": stability,
+            "execution": (
+                DiagnosticCapability(
+                    status="supported" if has_trades else "unavailable",
+                    reason=(
+                        "Execution sensitivity computed from fees/slippage/spread when present; defaults to zero costs otherwise."
+                        if has_trades
+                        else "No trades supplied in parsed artifact."
+                    ),
+                    required_inputs=["trades"],
+                    optional_enrichments=["assumptions", "params"],
+                )
+            ),
+            "regimes": regimes,
+            "ruin": DiagnosticCapability(
+                status="supported" if has_trades else "unavailable",
+                reason=(
+                    "Risk of ruin derived from Monte Carlo drawdown distribution."
+                    if has_trades
+                    else "No trades supplied in parsed artifact."
+                ),
+                required_inputs=["trades"],
+                optional_enrichments=["account_size", "risk_per_trade_pct", "assumptions"],
+            ),
+            "report": DiagnosticCapability(
+                status=report_status,
+                reason=report_reason,
+                required_inputs=["trades"],
+                optional_enrichments=["assumptions", "params", "ohlcv", "benchmark"],
+            ),
+        }
+
+
+    def _apply_diagnostic_eligibility(
+        self,
+        *,
+        diagnostics: dict[str, dict[str, Any]],
+        capability_profile: AnalysisCapabilityProfile,
+        diagnostic_eligibility: dict[str, bool],
+    ) -> dict[str, dict[str, Any]]:
+        if not diagnostic_eligibility:
+            return diagnostics
+
+        filtered: dict[str, dict[str, Any]] = {}
+        for name, payload in diagnostics.items():
+            enabled = diagnostic_eligibility.get(name, True)
+            if enabled:
+                filtered[name] = payload
+                continue
+
+            capability = capability_profile.diagnostics.get(name)
+            reason = "Skipped by upstream diagnostic_eligibility policy."
+            if capability is not None and capability.status == "unavailable":
+                reason = capability.reason
+
+            filtered[name] = {
+                "status": "skipped",
+                "reason": reason,
+            }
+
+            if capability is not None:
+                capability_profile.diagnostics[name] = DiagnosticCapability(
+                    status="unavailable",
+                    reason=reason,
+                    required_inputs=capability.required_inputs,
+                    optional_enrichments=capability.optional_enrichments,
+                )
+
+        return filtered
 
     def parameter_stability_from_grid(
         self,
@@ -694,3 +945,13 @@ class StrategyRobustnessLabService:
                 "interpretation": interpretation,
             },
         }
+
+
+def run_analysis_from_parsed_artifact(
+    parsed_artifact: ParsedArtifactInput,
+    *,
+    config: AnalysisRunConfig | None = None,
+) -> EngineAnalysisResult:
+    """Central engine seam for normalized parsed-artifact analysis."""
+    service = StrategyRobustnessLabService()
+    return service.run_analysis_from_parsed_artifact(parsed_artifact, config=config)
