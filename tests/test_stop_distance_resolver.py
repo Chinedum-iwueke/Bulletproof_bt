@@ -46,6 +46,35 @@ def test_resolve_stop_distance_signal_stop_invalid_side_long() -> None:
         )
 
 
+def test_resolve_stop_distance_invalid_side_near_entry_autocorrects() -> None:
+    result = resolve_stop_distance(
+        symbol="LDOUSDT:USDT",
+        side="long",
+        entry_price=1.2505,
+        signal={"stop_price": 1.2520},
+        bars_by_symbol={},
+        ctx={},
+        config={},
+    )
+
+    assert result.source == "explicit_stop_price"
+    assert result.stop_distance == pytest.approx(0.0015)
+    assert result.details["auto_corrected_invalid_side"] is True
+
+
+def test_resolve_stop_distance_invalid_side_near_entry_can_be_disabled() -> None:
+    with pytest.raises(ValueError, match=r"LDOUSDT:USDT: invalid stop_price for long: stop=1\.252 entry=1\.2505"):
+        resolve_stop_distance(
+            symbol="LDOUSDT:USDT",
+            side="long",
+            entry_price=1.2505,
+            signal={"stop_price": 1.2520},
+            bars_by_symbol={},
+            ctx={},
+            config={"risk": {"stop": {"invalid_side_tolerance_pct": 0.0}}},
+        )
+
+
 def test_resolve_stop_distance_atr_rule() -> None:
     config = {"risk": {"stop": {"mode": "atr", "atr_multiple": 2.0, "atr_indicator": "atr"}}}
     ctx = {"indicators": {"AAPL": {"atr": IndicatorStub(is_ready=True, value=1.5)}}}
