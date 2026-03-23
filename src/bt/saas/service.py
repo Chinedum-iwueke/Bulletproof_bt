@@ -45,6 +45,7 @@ class StrategyRobustnessLabService:
         equity = self._equity_from_trades(normalized, initial_equity=initial_equity)
         performance = self._compute_performance_from_trades(normalized, equity)
         metadata = self._extract_metadata(normalized, strategy_name=strategy_name)
+        metadata["equity_curve_provenance"] = "reconstructed_from_trades"
         return IngestedRun(
             source="trade_log",
             trades=normalized,
@@ -71,8 +72,12 @@ class StrategyRobustnessLabService:
                     equity = equity.assign(ts=normalized["entry_ts"])
             if "equity" not in equity.columns:
                 equity = self._equity_from_trades(normalized)
+                equity_curve_provenance = "reconstructed_from_trades"
+            else:
+                equity_curve_provenance = "engine_emitted"
         else:
             equity = self._equity_from_trades(normalized)
+            equity_curve_provenance = "reconstructed_from_trades"
 
         performance_path = root / "performance.json"
         if performance_path.exists():
@@ -82,6 +87,7 @@ class StrategyRobustnessLabService:
 
         metadata = self._extract_metadata(normalized, strategy_name=root.name)
         metadata["run_dir"] = str(root)
+        metadata["equity_curve_provenance"] = equity_curve_provenance
 
         return IngestedRun(
             source="run_artifacts",
@@ -130,7 +136,12 @@ class StrategyRobustnessLabService:
             regime=regime,
         )
 
-        overview = self._overview(run, asdict(score))
+        overview = self._overview(
+            run,
+            score=asdict(score),
+            monte_carlo=monte_carlo,
+            risk_of_ruin=risk_of_ruin,
+        )
         trade_distribution = self._trade_distribution(run.trades)
         report = self._validation_report(
             run=run,
@@ -254,8 +265,12 @@ class StrategyRobustnessLabService:
                 equity = equity.rename(columns={"timestamp": "ts"})
             if "equity" not in equity.columns:
                 equity = self._equity_from_trades(normalized)
+                equity_curve_provenance = "reconstructed_from_trades"
+            else:
+                equity_curve_provenance = "engine_emitted"
         else:
             equity = self._equity_from_trades(normalized)
+            equity_curve_provenance = "reconstructed_from_trades"
 
         performance = self._compute_performance_from_trades(normalized, equity)
         metadata = self._extract_metadata(
@@ -269,6 +284,9 @@ class StrategyRobustnessLabService:
                 "richness": parsed_artifact.richness,
                 "ohlcv_present": parsed_artifact.ohlcv_present,
                 "benchmark_present": parsed_artifact.benchmark_present,
+                "params_present": parsed_artifact.params is not None,
+                "assumptions_present": parsed_artifact.assumptions is not None,
+                "equity_curve_provenance": equity_curve_provenance,
             }
         )
 
@@ -667,9 +685,15 @@ class StrategyRobustnessLabService:
             return {str(point): 0.0 for point in points}
         return {str(point): float(np.quantile(values, point)) for point in points}
 
-    def _overview(self, run: IngestedRun, score: dict[str, Any]) -> dict[str, Any]:
+    def _overview(
+        self,
+        run: IngestedRun,
+        *,
+        score: dict[str, Any],
+        monte_carlo: dict[str, Any],
+        risk_of_ruin: dict[str, Any],
+    ) -> dict[str, Any]:
         equity_curve = self._equity_curve_payload(run.equity)
-        benchmark_series = run.metadata.get("benchmark_equity_curve")
         figures: list[dict[str, Any]] = []
         if equity_curve:
             figures.append(
@@ -682,47 +706,99 @@ class StrategyRobustnessLabService:
                     series=[{"name": "strategy_equity", "values": [point["equity"] for point in equity_curve]}],
                 )
             )
-        if isinstance(benchmark_series, list) and benchmark_series:
-            figures.append(
-                self._figure_line_series(
-                    figure_id="equity_vs_benchmark",
-                    title="Strategy vs Benchmark Equity",
-                    x_label="timestamp",
-                    y_label="equity",
-                    x_values=[point.get("ts") for point in benchmark_series],
-                    series=[
-                        {"name": "benchmark_equity", "values": [float(point.get("equity", 0.0)) for point in benchmark_series]},
-                    ],
-                )
-            )
-
         warnings = self._warnings(run.performance)
+        total_trades = int(run.performance.get("total_trades", 0))
         max_drawdown_pct = float(run.performance.get("max_drawdown_pct", 0.0))
-        posture = "robust_candidate" if float(score.get("overall", 0.0)) >= 60.0 else "caution"
+        expectancy = float(run.performance.get("ev_net", 0.0))
+        win_rate = float(run.performance.get("win_rate", 0.0))
+        profit_factor = run.performance.get("profit_factor")
+        pnl = run.trades["pnl_net"].fillna(0.0)
+        wins = pnl[pnl > 0]
+        losses = pnl[pnl < 0]
+        payoff_ratio = float(wins.mean() / abs(losses.mean())) if len(wins) and len(losses) and losses.mean() != 0 else None
+        worst_mc_drawdown = float(monte_carlo.get("summary_metrics", {}).get("worst_simulated_drawdown_pct", 0.0))
+        ruin_probability = risk_of_ruin.get("summary_metrics", {}).get("probability_of_ruin")
+
+        posture, confidence, verdict_reasons = self._overview_verdict(
+            score=score,
+            trade_count=total_trades,
+            max_drawdown_pct=max_drawdown_pct,
+            expectancy=expectancy,
+            win_rate=win_rate,
+            profit_factor=profit_factor,
+            worst_mc_drawdown=worst_mc_drawdown,
+        )
+        positives, cautions = self._overview_highlights(
+            trade_count=total_trades,
+            expectancy=expectancy,
+            win_rate=win_rate,
+            profit_factor=profit_factor,
+            max_drawdown_pct=max_drawdown_pct,
+            worst_mc_drawdown=worst_mc_drawdown,
+        )
+        figure_provenance = str(run.metadata.get("equity_curve_provenance", "reconstructed_from_trades"))
+        limitations = [
+            "No benchmark-relative context is included in overview yet.",
+            "Parameter-topology metadata is absent, so overfitting diagnostics remain proxy-level.",
+            "Execution and slippage assumptions are limited to trade-record fields.",
+            "Regime context is trade-sequence only unless OHLCV context is supplied.",
+        ]
         return {
             "summary_metrics": {
                 "robustness_score": float(score.get("overall", 0.0)),
+                "trade_count": total_trades,
+                "win_rate": win_rate,
+                "expectancy": expectancy,
+                "profit_factor": float(profit_factor) if profit_factor is not None else None,
+                "payoff_ratio": payoff_ratio,
+                "realized_max_drawdown_pct": max_drawdown_pct,
+                "worst_mc_drawdown_pct": worst_mc_drawdown,
+                "ruin_probability": float(ruin_probability) if ruin_probability is not None else None,
                 "overfitting_risk": float(max(0.0, min(1.0, 1.0 - float(score.get("sub_scores", {}).get("parameter_stability", 0.0)) / 100.0))),
-                "max_drawdown_pct": max_drawdown_pct,
-                "ev_net": float(run.performance.get("ev_net", 0.0)),
-                "win_rate": float(run.performance.get("win_rate", 0.0)),
-                "trade_count": int(run.performance.get("total_trades", 0)),
                 "posture": posture,
+                "confidence": confidence,
             },
             "figures": figures,
-            "interpretation": [
-                f"Top-line posture: {posture.replace('_', ' ')}.",
-                f"Strategy analyzed across {int(run.performance.get('total_trades', 0))} trades.",
-            ],
+            "interpretation": {
+                "summary": (
+                    f"Overview posture is {posture.replace('_', ' ')} with {confidence} confidence "
+                    f"from {total_trades} realized trades and Monte Carlo stress."
+                ),
+                "positives": positives,
+                "cautions": cautions,
+            },
             "warnings": warnings,
             "assumptions": [
-                "Overview is computed from normalized trade records and reconstructed equity when explicit equity is missing.",
+                "Overview is computed on normalized trade records and assumes uploaded trades are complete and chronologically accurate.",
+                "Equity curve is reconstructed from trade-level net PnL whenever explicit equity points are not supplied.",
+                "Execution realism is bounded by provided cost fields (fees/slippage/spread); missing fields imply zero-cost baseline.",
+                "Monte Carlo survivability assumes bootstrap resampling with replacement from realized trade outcomes.",
             ],
+            "limitations": limitations,
             "recommendations": [
-                "Upload benchmark context to unlock direct relative-performance comparison in overview.",
+                "Upload benchmark context once benchmark comparison is enabled to evaluate relative performance.",
+                "Provide parameter metadata or experiment grid outputs for stronger overfitting and stability conclusions.",
+                "Include explicit execution assumptions (latency/slippage model) to tighten risk posture confidence.",
+                "Attach OHLCV context to unlock regime-aware decomposition beyond trade-sequence proxies.",
             ],
+            "verdict": {
+                "posture": posture,
+                "confidence": confidence,
+                "verdict_reasons": verdict_reasons,
+            },
             "metadata": {
                 "diagnostics_used": ["performance", "score", "equity_curve"],
+                "figure_provenance": {
+                    "equity_curve": figure_provenance,
+                    "benchmark_overlay": "reserved_not_emitted",
+                },
+                "artifact_richness": str(run.metadata.get("richness", run.source)),
+                "completeness_flags": {
+                    "has_equity_curve_points": bool(equity_curve),
+                    "benchmark_present": bool(run.metadata.get("benchmark_present", False)),
+                    "params_present": bool(run.metadata.get("params_present", False)),
+                    "ohlcv_present": bool(run.metadata.get("ohlcv_present", False)),
+                },
             },
             "strategy": run.metadata,
             "headline_metrics": run.performance,
@@ -730,6 +806,82 @@ class StrategyRobustnessLabService:
             "sub_scores": score["sub_scores"],
             "equity_curve": equity_curve,
         }
+
+    def _overview_verdict(
+        self,
+        *,
+        score: dict[str, Any],
+        trade_count: int,
+        max_drawdown_pct: float,
+        expectancy: float,
+        win_rate: float,
+        profit_factor: float | None,
+        worst_mc_drawdown: float,
+    ) -> tuple[str, str, list[str]]:
+        reasons: list[str] = []
+        robustness_score = float(score.get("overall", 0.0))
+
+        if trade_count < 10:
+            posture = "inconclusive_due_to_missing_context"
+            confidence = "low"
+            reasons.append("Very small sample size (<10 trades) limits statistical reliability.")
+        elif expectancy <= 0.0:
+            posture = "fragile_under_stress"
+            confidence = "medium" if trade_count >= 30 else "low"
+            reasons.append("Non-positive expectancy weakens base edge.")
+        elif max_drawdown_pct <= -35.0 or worst_mc_drawdown <= -45.0:
+            posture = "fragile_under_stress"
+            confidence = "medium"
+            reasons.append("Drawdown stress indicates notable capital fragility.")
+        elif robustness_score >= 70.0 and trade_count >= 50 and (profit_factor is None or float(profit_factor) >= 1.3):
+            posture = "robust_under_current_assumptions"
+            confidence = "high"
+            reasons.append("Robustness score, trade count, and efficiency metrics are strong under current assumptions.")
+        elif robustness_score >= 55.0 and trade_count >= 20 and win_rate >= 0.45:
+            posture = "promising_but_incomplete"
+            confidence = "medium"
+            reasons.append("Core metrics are constructive, but supporting context is incomplete.")
+        else:
+            posture = "inconclusive_due_to_missing_context"
+            confidence = "low"
+            reasons.append("Signal quality is mixed or thin relative to required conviction.")
+
+        reasons.append(f"Observed trade count: {trade_count}.")
+        reasons.append(f"Realized max drawdown: {max_drawdown_pct:.2f}%.")
+        reasons.append(f"Worst Monte Carlo drawdown: {worst_mc_drawdown:.2f}%.")
+        return posture, confidence, reasons
+
+    def _overview_highlights(
+        self,
+        *,
+        trade_count: int,
+        expectancy: float,
+        win_rate: float,
+        profit_factor: float | None,
+        max_drawdown_pct: float,
+        worst_mc_drawdown: float,
+    ) -> tuple[list[str], list[str]]:
+        positives: list[str] = []
+        cautions: list[str] = []
+        if expectancy > 0.0:
+            positives.append(f"Positive expectancy per trade ({expectancy:.4f}).")
+        else:
+            cautions.append(f"Expectancy is non-positive ({expectancy:.4f}).")
+        if profit_factor is not None and float(profit_factor) > 1.0:
+            positives.append(f"Profit factor above 1.0 ({float(profit_factor):.2f}).")
+        else:
+            cautions.append("Profit factor is missing or not above 1.0.")
+        if win_rate >= 0.5:
+            positives.append(f"Win rate is at/above 50% ({win_rate:.1%}).")
+        else:
+            cautions.append(f"Win rate below 50% ({win_rate:.1%}).")
+        if trade_count < 30:
+            cautions.append(f"Low sample size ({trade_count} trades) reduces confidence.")
+        if max_drawdown_pct <= -25.0:
+            cautions.append(f"Realized drawdown is material ({max_drawdown_pct:.2f}%).")
+        if worst_mc_drawdown <= -35.0:
+            cautions.append(f"Monte Carlo worst drawdown is severe ({worst_mc_drawdown:.2f}%).")
+        return positives, cautions
 
     def _equity_curve_payload(self, equity: pd.DataFrame) -> list[dict[str, Any]]:
         frame = equity.copy()

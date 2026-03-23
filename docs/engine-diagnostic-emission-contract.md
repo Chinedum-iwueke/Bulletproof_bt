@@ -15,7 +15,7 @@ Each diagnostic block (`overview`, `distribution`, `monte_carlo`, `execution`, `
 - `limitations: list[str]`
 - `summary_metrics: dict[str, scalar | null]`
 - `figures: list[FigurePayload]`
-- `interpretation: list[str]`
+- `interpretation: list[str] | dict[str, Any]` (diagnostic-specific; overview emits structured narrative)
 - `warnings: list[str]`
 - `assumptions: list[str]`
 - `recommendations: list[str]`
@@ -49,6 +49,18 @@ Minimum:
 Trade-only:
 - reconstructed equity figure if no uploaded equity curve
 - truthful no-benchmark posture when absent
+- rich top-line summary metrics suitable for UI selection (`robustness_score`, `trade_count`, `win_rate`, `expectancy`, `profit_factor`, `payoff_ratio`, `realized_max_drawdown_pct`, `worst_mc_drawdown_pct`)
+- structured interpretation:
+  - `summary: str`
+  - `positives: list[str]`
+  - `cautions: list[str]`
+- explicit verdict block:
+  - `posture` (`robust_under_current_assumptions` | `promising_but_incomplete` | `fragile_under_stress` | `inconclusive_due_to_missing_context`)
+  - `confidence` (`high` | `medium` | `low`)
+  - `verdict_reasons: list[str]`
+- figure provenance metadata:
+  - `metadata.figure_provenance.equity_curve` (`engine_emitted` or `reconstructed_from_trades`)
+  - `metadata.figure_provenance.benchmark_overlay` (`reserved_not_emitted`, benchmark support pending)
 
 Richer bundle unlocks:
 - benchmark-relative equity comparison

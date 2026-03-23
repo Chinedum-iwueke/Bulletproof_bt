@@ -77,7 +77,27 @@ def test_run_analysis_from_parsed_artifact_trade_only_degrades_honestly() -> Non
     assert result.diagnostics["distribution"]["available"] is True
     assert result.diagnostics["distribution"]["summary_metrics"]["trade_count"] == 3
     assert result.diagnostics["distribution"]["figures"]
-    assert result.diagnostics["overview"]["summary_metrics"]["posture"] in {"robust_candidate", "caution"}
+    overview = result.diagnostics["overview"]
+    assert overview["summary_metrics"]["posture"] in {
+        "robust_under_current_assumptions",
+        "promising_but_incomplete",
+        "fragile_under_stress",
+        "inconclusive_due_to_missing_context",
+    }
+    assert overview["summary_metrics"]["trade_count"] == 3
+    assert "expectancy" in overview["summary_metrics"]
+    assert "profit_factor" in overview["summary_metrics"]
+    assert "payoff_ratio" in overview["summary_metrics"]
+    assert "realized_max_drawdown_pct" in overview["summary_metrics"]
+    assert "worst_mc_drawdown_pct" in overview["summary_metrics"]
+    assert overview["figures"]
+    assert overview["metadata"]["figure_provenance"]["equity_curve"] == "reconstructed_from_trades"
+    assert isinstance(overview["interpretation"]["positives"], list)
+    assert isinstance(overview["interpretation"]["cautions"], list)
+    assert overview["verdict"]["verdict_reasons"]
+    assert overview["assumptions"]
+    assert overview["limitations"]
+    assert overview["recommendations"]
     assert result.diagnostics["monte_carlo"]["summary_metrics"]["worst_simulated_drawdown_pct"] <= 0.0
     assert "limitations" in result.diagnostics["report"]
     assert "fixture parser note" in result.warnings
