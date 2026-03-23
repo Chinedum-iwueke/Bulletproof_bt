@@ -49,6 +49,18 @@ def _extract_indicator_numeric(indicator: Any, symbol: str, name: str) -> float:
     return value
 
 
+def _invalid_side_tolerance(config: dict[str, Any], entry_price: float) -> float:
+    risk_cfg = config.get("risk", {}) if isinstance(config, dict) else {}
+    if not isinstance(risk_cfg, dict):
+        risk_cfg = {}
+    stop_cfg = risk_cfg.get("stop", {})
+    if not isinstance(stop_cfg, dict):
+        stop_cfg = {}
+    tolerance_pct = float(stop_cfg.get("invalid_side_tolerance_pct", 0.002))
+    tolerance_abs = float(stop_cfg.get("invalid_side_tolerance_abs", 0.0))
+    return max(abs(entry_price) * max(tolerance_pct, 0.0), max(tolerance_abs, 0.0))
+
+
 def resolve_stop_distance(
     *,
     symbol: str,
@@ -88,6 +100,19 @@ def resolve_stop_distance(
         stop_price = float(stop_price)
         is_valid_direction = (side == "long" and stop_price < entry_price) or (side == "short" and stop_price > entry_price)
         stop_distance = abs(entry_price - stop_price)
+        if not is_valid_direction:
+            tolerance = _invalid_side_tolerance(config=config, entry_price=entry_price)
+            if stop_distance <= 0 or stop_distance > tolerance:
+                raise ValueError(f"{symbol}: invalid stop_price for {side}: stop={stop_price} entry={entry_price}")
+            return _build_stop_result(
+                stop_distance=stop_distance,
+                source=STOP_RESOLUTION_EXPLICIT_STOP_PRICE,
+                details={
+                    "stop_price": stop_price,
+                    "auto_corrected_invalid_side": True,
+                    "invalid_side_tolerance": tolerance,
+                },
+            )
         if stop_distance <= 0:
             raise ValueError(f"{symbol}: invalid stop_price for {side}: stop={stop_price} entry={entry_price}")
         details: dict[str, Any] = {"stop_price": stop_price}
