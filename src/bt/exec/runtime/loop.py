@@ -83,6 +83,9 @@ class RuntimeLoop:
                             self.state.frozen = True
                     last_reconcile_ts = ts
 
+            for fill_artifact in self.execution_router.process_broker_events():
+                self.artifacts.write_fill(fill_artifact)
+
             if not self.bar_gate.is_eligible(ts=ts):  # type: ignore[attr-defined]
                 continue
 

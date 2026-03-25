@@ -1,0 +1,27 @@
+exec:
+  mode: paper_broker
+  startup_reconcile_required: true
+  block_new_orders_until_reconciled: true
+
+broker:
+  venue: bybit
+  environment: demo
+  category: linear
+  symbols: [BTCUSDT]
+  auth:
+    api_key_env: BYBIT_DEMO_API_KEY
+    api_secret_env: BYBIT_DEMO_API_SECRET
+  ws:
+    enabled: true
+    private_topics: [order, execution, position, wallet]
+    public_topics: [tickers]
+
+routing:
+  allow_cancel: true
+  allow_amend: true
+  max_open_orders_per_symbol: 4
+
+reconcile:
+  enabled: true
+  interval_seconds: 30
+  policy: freeze_on_material
