@@ -71,7 +71,19 @@ class BybitRESTClient:
         query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
         return self._request("GET", endpoint, query_or_body=query, encoded_for_url=query)
 
-    def _request(self, method: str, endpoint: str, *, query_or_body: str, encoded_for_url: str = "") -> BybitRESTResponse:
+    def post_private(self, endpoint: str, *, payload: dict[str, object]) -> BybitRESTResponse:
+        body = json.dumps({k: v for k, v in payload.items() if v is not None}, separators=(",", ":"), sort_keys=True)
+        return self._request("POST", endpoint, query_or_body=body, body=body)
+
+    def _request(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        query_or_body: str,
+        encoded_for_url: str = "",
+        body: str | None = None,
+    ) -> BybitRESTResponse:
         attempt = 0
         while True:
             timestamp_ms = self._time_provider()
@@ -79,7 +91,12 @@ class BybitRESTClient:
             if encoded_for_url:
                 url = f"{url}?{encoded_for_url}"
             headers = self._headers(timestamp_ms=timestamp_ms, query_or_body=query_or_body)
-            request = urllib.request.Request(url=url, method=method, headers=headers)
+            request = urllib.request.Request(
+                url=url,
+                method=method,
+                headers=headers,
+                data=(body.encode("utf-8") if body is not None else None),
+            )
             try:
                 response = self._opener(request, self._timeout_seconds)
                 payload = json.loads(response.read().decode("utf-8"))

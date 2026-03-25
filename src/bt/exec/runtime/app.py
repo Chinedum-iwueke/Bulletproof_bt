@@ -163,6 +163,12 @@ def run_exec_session(*, config_path: str, data_path: str, mode: str, out_dir: st
     write_config_used(run_dir, config)
 
     strategy_runner, risk_runner, portfolio_runner, adapter = _build_components(config)
+    broker_cfg = config.get("broker") if isinstance(config.get("broker"), dict) else {}
+    if mode == "paper_broker":
+        if str(broker_cfg.get("venue", "")).lower() != "bybit":
+            raise ValueError("exec.mode=paper_broker currently requires broker.venue=bybit")
+        if str(broker_cfg.get("environment", "")).lower() != "demo":
+            raise ValueError("exec.mode=paper_broker is demo-only in Phase 5")
 
     checkpoint_ts: pd.Timestamp | None = None
     order_seq = 0

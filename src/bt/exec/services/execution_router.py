@@ -8,7 +8,12 @@ from bt.core.enums import OrderState, Side
 from bt.core.types import Fill, Order, OrderIntent
 from bt.exec.adapters.base import BrokerAdapter, BrokerOrderRequest
 from bt.exec.adapters.simulated import SimulatedBrokerAdapter
-from bt.exec.events.broker_events import BrokerOrderAcknowledgedEvent, BrokerOrderFilledEvent
+from bt.exec.events.broker_events import (
+    BrokerOrderAcknowledgedEvent,
+    BrokerOrderCancelledEvent,
+    BrokerOrderFilledEvent,
+    BrokerOrderPartiallyFilledEvent,
+)
 from bt.exec.lifecycle import (
     OrderLifecycleState,
     accumulate_fills,
@@ -64,6 +69,18 @@ class ExecutionRouter:
         )
         request_id = self._adapter.submit_order(request)
         order_id = request_id
+        self._record_lifecycle(
+            ts=ts,
+            order_id=order_id,
+            next_state=OrderLifecycleState.PENDING_SUBMIT,
+            payload={"request_id": request_id, "client_order_id": request.client_order_id},
+        )
+        self._record_lifecycle(
+            ts=ts,
+            order_id=order_id,
+            next_state=OrderLifecycleState.SUBMITTED,
+            payload={"request_id": request_id, "client_order_id": request.client_order_id},
+        )
         for evt in self._adapter.iter_events():
             if isinstance(evt, BrokerOrderAcknowledgedEvent):
                 order_id = evt.order.id
@@ -75,7 +92,8 @@ class ExecutionRouter:
                 )
                 self._local_open_orders[order_id] = evt.order
                 self._order_requested_qty[order_id] = evt.order.qty
-                break
+            elif isinstance(evt, (BrokerOrderPartiallyFilledEvent, BrokerOrderFilledEvent, BrokerOrderCancelledEvent)):
+                self._consume_broker_event(evt)
 
         return SubmitResult(request_id=request_id, order_id=order_id)
 
@@ -111,6 +129,14 @@ class ExecutionRouter:
             self._portfolio_runner.apply_fills(fills)
         return artifacts
 
+    def process_broker_events(self) -> list[FillArtifactRecord]:
+        artifacts: list[FillArtifactRecord] = []
+        for evt in self._adapter.iter_events():
+            maybe = self._consume_broker_event(evt)
+            if maybe is not None:
+                artifacts.append(maybe)
+        return artifacts
+
     def current_open_orders(self) -> list[Order]:
         return list(self._local_open_orders.values())
 
@@ -133,6 +159,45 @@ class ExecutionRouter:
         self._store.persist_order_lifecycle_event(
             OrderLifecycleRecord(ts=ts, run_id=self._run_id, order_id=order_id, event_type=next_state.value, payload=payload)
         )
+
+    def _consume_broker_event(self, evt: object) -> FillArtifactRecord | None:
+        if isinstance(evt, BrokerOrderAcknowledgedEvent):
+            self._local_open_orders[evt.order.id] = evt.order
+            self._order_requested_qty[evt.order.id] = evt.order.qty
+            self._record_lifecycle(
+                ts=evt.ts,
+                order_id=evt.order.id,
+                next_state=OrderLifecycleState.ACKNOWLEDGED,
+                payload={"order": _order_dict(evt.order), "metadata": evt.metadata},
+            )
+            return None
+        if isinstance(evt, BrokerOrderCancelledEvent):
+            self._record_lifecycle(
+                ts=evt.ts,
+                order_id=evt.order_id,
+                next_state=OrderLifecycleState.CANCELLED,
+                payload={"reason": evt.reason, "metadata": evt.metadata},
+            )
+            self._local_open_orders.pop(evt.order_id, None)
+            return None
+        if not isinstance(evt, (BrokerOrderPartiallyFilledEvent, BrokerOrderFilledEvent)):
+            return None
+        fill_key = fill_identity_key(evt.fill)
+        if self._save_processed_event_ids and self._store is not None:
+            if not should_process_once(store=self._store, run_id=self._run_id, dedupe_key=fill_key):
+                return None
+            self._store.persist_processed_event(ProcessedEventRecord(ts=evt.ts, run_id=self._run_id, dedupe_key=fill_key, source="fill"))
+        self._local_fills.append(evt.fill)
+        by_order = self._fills_by_order.setdefault(evt.fill.order_id, [])
+        by_order.append(evt.fill)
+        requested = self._order_requested_qty.get(evt.fill.order_id, evt.fill.qty)
+        agg = accumulate_fills(order_id=evt.fill.order_id, requested_qty=requested, fills=by_order)
+        next_state = OrderLifecycleState.FILLED if (isinstance(evt, BrokerOrderFilledEvent) or agg.is_terminal) else OrderLifecycleState.PARTIALLY_FILLED
+        self._record_lifecycle(ts=evt.ts, order_id=evt.fill.order_id, next_state=next_state, payload={"fill": _fill_dict(evt.fill)})
+        if next_state == OrderLifecycleState.FILLED:
+            self._local_open_orders.pop(evt.fill.order_id, None)
+        self._portfolio_runner.apply_fills([evt.fill])
+        return FillArtifactRecord.from_fill(evt.fill)
 
 
 def build_submitted_order_artifact(*, ts: pd.Timestamp, symbol: str, side: Side, qty: float, result: SubmitResult) -> OrderArtifactRecord:
