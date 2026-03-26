@@ -11,6 +11,17 @@ BenchmarkModeEnabled = Literal["auto", "manual"]
 BenchmarkMode = Literal["auto", "manual", "none"]
 BenchmarkSource = Literal["platform_managed"]
 BenchmarkFrequency = Literal["1d"]
+ComparisonFrequency = Literal["1d"]
+StrategySourceFrequency = Literal["1d", "intraday"]
+
+BenchmarkComparisonUnavailableReason = Literal[
+    "benchmark_disabled",
+    "no_strategy_series",
+    "no_benchmark_overlap",
+    "insufficient_aligned_points",
+    "invalid_normalization_anchor",
+    "unsupported_comparison_frequency",
+]
 
 
 @dataclass(frozen=True)
@@ -60,3 +71,69 @@ class LoadedBenchmarkDataset:
 
 
 LoadedBenchmarkResult: TypeAlias = DisabledBenchmarkDataset | LoadedBenchmarkDataset
+
+
+@dataclass(frozen=True)
+class BenchmarkComparisonUnavailable:
+    available: Literal[False]
+    reason: BenchmarkComparisonUnavailableReason
+    benchmark_id: BenchmarkId | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class StrategyComparisonSeries:
+    comparison_frequency: ComparisonFrequency
+    source_frequency: StrategySourceFrequency
+    data: pd.DataFrame
+    window_start: pd.Timestamp
+    window_end: pd.Timestamp
+    point_count: int
+
+
+@dataclass(frozen=True)
+class AlignedBenchmarkComparison:
+    available: Literal[True]
+    benchmark_id: BenchmarkId
+    comparison_frequency: ComparisonFrequency
+    source_frequency: StrategySourceFrequency
+    strategy_window_start: pd.Timestamp
+    strategy_window_end: pd.Timestamp
+    first_common_ts: pd.Timestamp
+    last_common_ts: pd.Timestamp
+    point_count: int
+    strategy_points: pd.DataFrame
+    benchmark_points: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class NormalizedBenchmarkComparison:
+    available: Literal[True]
+    benchmark_id: BenchmarkId
+    comparison_frequency: ComparisonFrequency
+    source_frequency: StrategySourceFrequency
+    strategy_window_start: pd.Timestamp
+    strategy_window_end: pd.Timestamp
+    first_common_ts: pd.Timestamp
+    last_common_ts: pd.Timestamp
+    point_count: int
+    strategy_points: pd.DataFrame
+    benchmark_points: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class BenchmarkComparisonMetrics:
+    available: Literal[True]
+    benchmark_id: BenchmarkId
+    comparison_frequency: ComparisonFrequency
+    source_frequency: StrategySourceFrequency
+    point_count: int
+    first_common_ts: pd.Timestamp
+    last_common_ts: pd.Timestamp
+    strategy_return: float
+    benchmark_return: float
+    excess_return_vs_benchmark: float
+
+
+BenchmarkComparisonResult: TypeAlias = AlignedBenchmarkComparison | BenchmarkComparisonUnavailable
+BenchmarkMetricResult: TypeAlias = BenchmarkComparisonMetrics | BenchmarkComparisonUnavailable
