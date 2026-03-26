@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from bt.analysis.overview.benchmark_overview import build_benchmark_overview_payload_from_metadata
 from bt.metrics.r_metrics import summarize_r
 from bt.saas.models import (
     AnalysisCapabilityProfile,
@@ -1183,6 +1184,12 @@ class StrategyRobustnessLabService:
         risk_of_ruin: dict[str, Any],
     ) -> dict[str, Any]:
         equity_curve = self._equity_curve_payload(run.equity)
+        benchmark_overview = build_benchmark_overview_payload_from_metadata(
+            run_metadata=run.metadata,
+            strategy_series=run.equity,
+            ts_column="ts",
+            value_column="equity",
+        )
         figures: list[dict[str, Any]] = []
         if equity_curve:
             figures.append(
@@ -1226,12 +1233,15 @@ class StrategyRobustnessLabService:
             worst_mc_drawdown=worst_mc_drawdown,
         )
         figure_provenance = str(run.metadata.get("equity_curve_provenance", "reconstructed_from_trades"))
+        benchmark_payload = benchmark_overview["benchmark_comparison"]
         limitations = [
-            "No benchmark-relative context is included in overview yet.",
             "Parameter-topology metadata is absent, so overfitting diagnostics remain proxy-level.",
             "Execution and slippage assumptions are limited to trade-record fields.",
             "Regime context is trade-sequence only unless OHLCV context is supplied.",
         ]
+        if benchmark_payload.get("limited"):
+            benchmark_limitations = benchmark_payload.get("limitations") or []
+            limitations.extend(str(item) for item in benchmark_limitations)
         return {
             "summary_metrics": {
                 "robustness_score": float(score.get("overall", 0.0)),
@@ -1265,7 +1275,7 @@ class StrategyRobustnessLabService:
             ],
             "limitations": limitations,
             "recommendations": [
-                "Upload benchmark context once benchmark comparison is enabled to evaluate relative performance.",
+                "Provide benchmark config context in artifact metadata to enable benchmark-relative overview diagnostics.",
                 "Provide parameter metadata or experiment grid outputs for stronger overfitting and stability conclusions.",
                 "Include explicit execution assumptions (latency/slippage model) to tighten risk posture confidence.",
                 "Attach OHLCV context to unlock regime-aware decomposition beyond trade-sequence proxies.",
@@ -1276,10 +1286,10 @@ class StrategyRobustnessLabService:
                 "verdict_reasons": verdict_reasons,
             },
             "metadata": {
-                "diagnostics_used": ["performance", "score", "equity_curve"],
+                "diagnostics_used": ["performance", "score", "equity_curve", "benchmark_comparison"],
                 "figure_provenance": {
                     "equity_curve": figure_provenance,
-                    "benchmark_overlay": "reserved_not_emitted",
+                    "benchmark_overlay": "normalized_timeseries_payload",
                 },
                 "artifact_richness": str(run.metadata.get("richness", run.source)),
                 "completeness_flags": {
@@ -1294,6 +1304,7 @@ class StrategyRobustnessLabService:
             "robustness_score": score["overall"],
             "sub_scores": score["sub_scores"],
             "equity_curve": equity_curve,
+            "benchmark_comparison": benchmark_payload,
         }
 
     def _overview_verdict(
