@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 import copy
 
+from bt.benchmarks.config import BenchmarkConfigError, parse_benchmark_config
 from bt.core.errors import ConfigError
 from bt.execution.intrabar import parse_intrabar_spec
 from bt.execution.profile import resolve_execution_profile
@@ -325,44 +326,69 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
     resolved["execution"] = execution_cfg
 
     benchmark_cfg = _ensure_mapping(resolved.get("benchmark"), name="benchmark")
-    enabled_raw = benchmark_cfg.get("enabled", False)
-    if not isinstance(enabled_raw, bool):
-        raise ConfigError(f"benchmark.enabled must be a bool (got: {enabled_raw!r})")
-    benchmark_cfg["enabled"] = enabled_raw
 
-    benchmark_type = benchmark_cfg.get("type")
-    if enabled_raw and benchmark_type is None:
-        benchmark_type = "buy_hold"
-    elif benchmark_type is None:
-        benchmark_type = "buy_hold"
-    if benchmark_type not in {"buy_hold", "flat", "baseline_strategy"}:
-        raise ConfigError(
-            "benchmark.type must be one of {'buy_hold', 'flat', 'baseline_strategy'} "
-            f"(got: {benchmark_type!r})"
-        )
-    benchmark_cfg["type"] = benchmark_type
+    # New platform-managed benchmark contract for Strategy Robustness Lab.
+    if "mode" in benchmark_cfg and benchmark_cfg.get("mode") in {"auto", "manual", "none"}:
+        try:
+            parsed_benchmark_cfg = parse_benchmark_config(benchmark_cfg)
+        except BenchmarkConfigError as exc:
+            raise ConfigError(str(exc)) from exc
 
-    symbol = benchmark_cfg.get("symbol")
-    if benchmark_type == "buy_hold" and enabled_raw:
-        if not isinstance(symbol, str) or not symbol.strip():
+        if parsed_benchmark_cfg.enabled:
+            resolved["benchmark"] = {
+                "enabled": True,
+                "mode": parsed_benchmark_cfg.mode,
+                "id": parsed_benchmark_cfg.id,
+                "source": parsed_benchmark_cfg.source,
+                "library_root": str(parsed_benchmark_cfg.library_root),
+                "library_revision": parsed_benchmark_cfg.library_revision,
+                "frequency": parsed_benchmark_cfg.frequency,
+                "alignment_policy": parsed_benchmark_cfg.alignment_policy,
+                "comparison_frequency": parsed_benchmark_cfg.comparison_frequency,
+                "normalization_basis": parsed_benchmark_cfg.normalization_basis,
+            }
+        else:
+            resolved["benchmark"] = {"enabled": False, "mode": "none"}
+    else:
+        # Legacy benchmark config contract remains supported for strategy benchmarking.
+        enabled_raw = benchmark_cfg.get("enabled", False)
+        if not isinstance(enabled_raw, bool):
+            raise ConfigError(f"benchmark.enabled must be a bool (got: {enabled_raw!r})")
+        benchmark_cfg["enabled"] = enabled_raw
+
+        benchmark_type = benchmark_cfg.get("type")
+        if enabled_raw and benchmark_type is None:
+            benchmark_type = "buy_hold"
+        elif benchmark_type is None:
+            benchmark_type = "buy_hold"
+        if benchmark_type not in {"buy_hold", "flat", "baseline_strategy"}:
             raise ConfigError(
-                "benchmark.symbol is required when benchmark.enabled=true and benchmark.type=buy_hold"
+                "benchmark.type must be one of {'buy_hold', 'flat', 'baseline_strategy'} "
+                f"(got: {benchmark_type!r})"
             )
+        benchmark_cfg["type"] = benchmark_type
 
-    baseline_cfg = _ensure_mapping(benchmark_cfg.get("baseline_strategy"), name="benchmark.baseline_strategy")
-    if benchmark_type == "baseline_strategy" and enabled_raw:
-        baseline_name = baseline_cfg.get("name")
-        if not isinstance(baseline_name, str) or not baseline_name.strip():
-            raise ConfigError(
-                "benchmark.baseline_strategy.name is required when benchmark.type=baseline_strategy"
-            )
-        params = baseline_cfg.get("params", {})
-        if not isinstance(params, dict):
-            raise ConfigError("benchmark.baseline_strategy.params must be a mapping when provided")
-        baseline_cfg["params"] = params
-    benchmark_cfg["baseline_strategy"] = baseline_cfg
+        symbol = benchmark_cfg.get("symbol")
+        if benchmark_type == "buy_hold" and enabled_raw:
+            if not isinstance(symbol, str) or not symbol.strip():
+                raise ConfigError(
+                    "benchmark.symbol is required when benchmark.enabled=true and benchmark.type=buy_hold"
+                )
 
-    resolved["benchmark"] = benchmark_cfg
+        baseline_cfg = _ensure_mapping(benchmark_cfg.get("baseline_strategy"), name="benchmark.baseline_strategy")
+        if benchmark_type == "baseline_strategy" and enabled_raw:
+            baseline_name = baseline_cfg.get("name")
+            if not isinstance(baseline_name, str) or not baseline_name.strip():
+                raise ConfigError(
+                    "benchmark.baseline_strategy.name is required when benchmark.type=baseline_strategy"
+                )
+            params = baseline_cfg.get("params", {})
+            if not isinstance(params, dict):
+                raise ConfigError("benchmark.baseline_strategy.params must be a mapping when provided")
+            baseline_cfg["params"] = params
+        benchmark_cfg["baseline_strategy"] = baseline_cfg
+
+        resolved["benchmark"] = benchmark_cfg
 
     if "htf_timeframes" in resolved or "htf_strict" in resolved:
         htf_resampler_cfg = _ensure_mapping(resolved.get("htf_resampler"), name="htf_resampler")
