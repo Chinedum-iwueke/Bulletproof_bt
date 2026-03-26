@@ -1,5 +1,7 @@
 from bt.benchmarks.align import align_strategy_and_benchmark, prepare_strategy_daily_comparison_series
+from bt.benchmarks.artifacts import emit_benchmark_comparison_artifact
 from bt.benchmarks.config import BenchmarkConfigError, parse_benchmark_config
+from bt.benchmarks.figures import build_benchmark_comparison_figure
 from bt.benchmarks.loader import (
     BenchmarkDatasetError,
     BenchmarkDatasetValidation,
@@ -15,8 +17,15 @@ from bt.benchmarks.store import (
 )
 from bt.benchmarks.types import (
     AlignedBenchmarkComparison,
+    BenchmarkComparisonFigure,
+    BenchmarkComparisonFigureSeries,
+    BenchmarkComparisonMetadata,
     BenchmarkComparisonMetrics,
+    BenchmarkComparisonOverviewAvailable,
+    BenchmarkComparisonOverviewPayload,
+    BenchmarkComparisonOverviewUnavailable,
     BenchmarkComparisonResult,
+    BenchmarkComparisonSummaryMetrics,
     BenchmarkComparisonUnavailable,
     BenchmarkComparisonUnavailableReason,
     BenchmarkConfig,
@@ -35,8 +44,15 @@ from bt.benchmarks.types import (
 
 __all__ = [
     "AlignedBenchmarkComparison",
+    "BenchmarkComparisonFigure",
+    "BenchmarkComparisonFigureSeries",
+    "BenchmarkComparisonMetadata",
     "BenchmarkComparisonMetrics",
+    "BenchmarkComparisonOverviewAvailable",
+    "BenchmarkComparisonOverviewPayload",
+    "BenchmarkComparisonOverviewUnavailable",
     "BenchmarkComparisonResult",
+    "BenchmarkComparisonSummaryMetrics",
     "BenchmarkComparisonUnavailable",
     "BenchmarkComparisonUnavailableReason",
     "BenchmarkConfig",
@@ -57,7 +73,9 @@ __all__ = [
     "StrategySourceFrequency",
     "align_strategy_and_benchmark",
     "build_benchmark_comparison",
+    "build_benchmark_comparison_figure",
     "compute_benchmark_comparison_metrics",
+    "emit_benchmark_comparison_artifact",
     "ensure_benchmark_dataset_accessible",
     "load_benchmark_dataset",
     "normalize_aligned_series",

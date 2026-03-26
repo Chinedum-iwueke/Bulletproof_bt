@@ -16,6 +16,9 @@ StrategySourceFrequency = Literal["1d", "intraday"]
 
 BenchmarkComparisonUnavailableReason = Literal[
     "benchmark_disabled",
+    "benchmark_not_configured",
+    "benchmark_dataset_load_failed",
+    "invalid_benchmark_config",
     "no_strategy_series",
     "no_benchmark_overlap",
     "insufficient_aligned_points",
@@ -137,3 +140,68 @@ class BenchmarkComparisonMetrics:
 
 BenchmarkComparisonResult: TypeAlias = AlignedBenchmarkComparison | BenchmarkComparisonUnavailable
 BenchmarkMetricResult: TypeAlias = BenchmarkComparisonMetrics | BenchmarkComparisonUnavailable
+
+
+@dataclass(frozen=True)
+class BenchmarkComparisonFigureSeries:
+    id: str
+    label: str
+    points: list[tuple[str, float]]
+
+
+@dataclass(frozen=True)
+class BenchmarkComparisonFigure:
+    type: Literal["timeseries_overlay"]
+    title: str
+    series: list[BenchmarkComparisonFigureSeries]
+
+
+@dataclass(frozen=True)
+class BenchmarkComparisonSummaryMetrics:
+    benchmark_selected: BenchmarkId
+    strategy_return: float
+    benchmark_return: float
+    excess_return_vs_benchmark: float
+
+
+@dataclass(frozen=True)
+class BenchmarkComparisonMetadata:
+    benchmark_id: BenchmarkId | None
+    benchmark_source: BenchmarkSource | None
+    library_revision: str | None
+    benchmark_frequency: BenchmarkFrequency | None
+    comparison_frequency: ComparisonFrequency | None
+    alignment_basis: str
+    normalization_basis: str
+    comparison_window_start: str | None
+    comparison_window_end: str | None
+    point_count: int
+
+
+@dataclass(frozen=True)
+class BenchmarkComparisonOverviewAvailable:
+    available: Literal[True]
+    limited: Literal[False]
+    summary_metrics: BenchmarkComparisonSummaryMetrics
+    metadata: BenchmarkComparisonMetadata
+    figure: BenchmarkComparisonFigure
+    assumptions: list[str]
+    limitations: list[str]
+
+
+@dataclass(frozen=True)
+class BenchmarkComparisonOverviewUnavailable:
+    available: Literal[False]
+    limited: Literal[True]
+    reason: BenchmarkComparisonUnavailableReason
+    message: str
+    summary_metrics: None
+    metadata: BenchmarkComparisonMetadata
+    figure: None
+    assumptions: list[str]
+    limitations: list[str]
+
+
+BenchmarkComparisonOverviewPayload: TypeAlias = (
+    BenchmarkComparisonOverviewAvailable | BenchmarkComparisonOverviewUnavailable
+)
