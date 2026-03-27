@@ -1,0 +1,131 @@
+metadata:
+  hypothesis_id: "L1-H4B"
+  title: "Liquidity Gate Plus Capped Size Adjustment Applied to Mean Reversion"
+  description: "L1-H4A baseline plus deterministic capped size adjustment using spread-proxy rolling median reference within gate-allowed states."
+  research_layer: "L1"
+  hypothesis_family: "mean_reversion"
+  version: "1.0.0"
+  author: "bulletproof_bt"
+  created_at: "2026-03-27T00:00:00Z"
+
+hypothesis_id: "L1-H4B"
+title: "Liquidity Gate Plus Capped Size Adjustment Applied to Mean Reversion"
+description: "L1-H4A baseline plus deterministic capped size adjustment using spread-proxy rolling median reference within gate-allowed states."
+research_layer: "L1"
+hypothesis_family: "mean_reversion"
+version: "1.0.0"
+author: "bulletproof_bt"
+created_at: "2026-03-27T00:00:00Z"
+
+required_indicators:
+  - atr
+  - session_vwap
+
+indicator_defaults:
+  atr_period: 14
+  vwap_mode: "session"
+  signal_timeframe_default: "5m"
+  liquidity_window_days: 30
+  liquidity_proxy_formula: "0.5 * (high - low) / close"
+  spread_proxy_reference_model: "rolling_median"
+  z_vwap_formula: "(close - session_vwap) / atr_14"
+
+parameter_grid:
+  q_liq: [0.6, 0.7]
+  cap_multiplier: [0.5, 0.75]
+  z0: [0.8, 1.0]
+  k_atr: [1.5, 2.0]
+  T_hold: [12, 24]
+
+gates:
+  - field: "liq_gate_t"
+    op: "=="
+    value: true
+
+entry:
+  strategy: "l1_h4b_liquidity_gate_size_adjusted_mean_reversion"
+  signal_timeframe: "5m"
+  timeframe: "5m"
+  base_execution_timeframe: "1m"
+  order_timing: "bar_close_submit_next_bar_execution"
+  no_pyramiding: true
+
+exit:
+  stop_kind: "atr_multiple"
+  stop_model: "fixed_atr_multiple"
+  stop_atr_param: "k_atr"
+  stop_update_policy: "frozen_at_entry"
+  atr_source_timeframe: "signal_timeframe"
+  time_stop_param: "T_hold"
+  hold_time_unit: "signal_bars"
+  profit_exit_model: "vwap_touch"
+  vwap_mode: "session"
+  exit_monitoring_timeframe: "1m"
+
+execution_semantics:
+  signal_timeframe: "5m"
+  base_execution_timeframe: "1m"
+  exit_monitoring_timeframe: "1m"
+  base_data_frequency_expected: "1m"
+  strategy_family: "mean_reversion"
+  baseline_reference: "L1-H4A"
+  vwap_mode: "session"
+  liquidity_proxy: "bar_range_half_over_close"
+  gate_model: "spread_proxy_quantile_gate"
+  size_adjustment_model: "capped_inverse_spread_proxy_ratio"
+  spread_proxy_reference_model: "rolling_median"
+  stop_model: "fixed_atr_multiple"
+  stop_update_policy: "frozen_at_entry"
+  tp_update_policy: "none"
+  hold_time_unit: "signal_bars"
+  atr_source_timeframe: "signal_timeframe"
+  profit_exit_model: "vwap_touch"
+  no_pyramiding: true
+
+sizing:
+  mode: "constant_r"
+  formula: "qty_base=(equity*r_per_trade)/(k_atr*atr_entry_signal); size_factor=min(1,max(cap_multiplier,spread_proxy_ref/spread_proxy_t)); qty_adj=qty_base*size_factor"
+  notes: "Deterministic capped size adjustment applies only when liq_gate_t=true and entries are otherwise valid."
+
+risk_controls:
+  max_positions: 5
+  forbid_adding_to_losers: true
+  enforce_min_stop_distance: true
+
+evaluation:
+  required_tiers: ["Tier2", "Tier3"]
+
+logging:
+  schema_version: "1.0"
+  required_fields:
+    - run_id
+    - hypothesis_id
+    - tier
+    - ev_r_gross
+    - ev_r_net
+    - status
+    - spread_proxy_t
+    - spread_proxy_ref
+    - liq_gate_t
+    - q_liq
+    - q_threshold_t
+    - cap_multiplier
+    - qty_base
+    - size_factor_t
+    - qty_adj
+    - session_vwap_t
+    - z_vwap_t
+    - entry_reason
+    - atr_entry
+    - stop_distance
+    - stop_price
+    - signal_timeframe
+    - exit_monitoring_timeframe
+    - effective_spread_assumptions
+
+notes:
+  falsification_criteria:
+    - "If capped size adjustment does not improve survivability or reduce realized cost drag versus L1-H4A, reject H4B baseline."
+  failure_modes:
+    - "Spread proxy can partly track volatility rather than true executable spread."
+    - "Rolling reference may become too stable during regime breaks and under-react to deterioration."

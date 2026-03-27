@@ -580,6 +580,28 @@ class RiskEngine:
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
 
+        qty_base = float(desired_qty)
+        size_factor_t = None
+        cap_multiplier = None
+        if isinstance(signal.metadata, dict) and "size_factor_t" in signal.metadata:
+            raw = signal.metadata.get("size_factor_t")
+            raw_cap = signal.metadata.get("cap_multiplier")
+            try:
+                size_factor_t = float(raw)
+            except (TypeError, ValueError):
+                size_factor_t = None
+            try:
+                cap_multiplier = float(raw_cap) if raw_cap is not None else 0.0
+            except (TypeError, ValueError):
+                cap_multiplier = 0.0
+            if size_factor_t is not None:
+                size_factor_t = float(min(1.0, max(cap_multiplier, size_factor_t)))
+                desired_qty = float(desired_qty) * size_factor_t
+                risk_meta["size_factor_t"] = size_factor_t
+                risk_meta["cap_multiplier"] = cap_multiplier
+                risk_meta["qty_base"] = qty_base
+                risk_meta["qty_adj"] = float(desired_qty)
+
         risk_meta["r_metrics_valid"] = bool(risk_meta.get("r_metrics_valid", True)) and bool(risk_meta.get("stop_source")) and float(risk_meta.get("stop_distance", 0.0)) > 0
 
         risk_budget = risk_meta["risk_amount"]
@@ -727,6 +749,10 @@ class RiskEngine:
                 "r_metrics_valid": risk_meta["r_metrics_valid"],
                 "used_legacy_stop_proxy": bool(risk_meta.get("used_legacy_stop_proxy", False)),
                 "stop_resolution_mode": stop_resolution_mode,
+                "size_factor_t": risk_meta.get("size_factor_t"),
+                "cap_multiplier": risk_meta.get("cap_multiplier"),
+                "qty_base": risk_meta.get("qty_base"),
+                "qty_adj": risk_meta.get("qty_adj"),
                 "current_qty": cur_qty,
                 "desired_qty": desired_qty,
                 "flip": flip,
