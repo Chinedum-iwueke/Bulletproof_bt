@@ -90,6 +90,18 @@ def build_parsed_artifact(reference_csv: Path) -> ParsedArtifactInput:
 
 def build_diagnostic_table(diagnostics: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     table: list[dict[str, Any]] = []
+
+    metadata_keys = {
+        "id",
+        "figure_id",
+        "type",
+        "title",
+        "note",
+        "provenance",
+        "x_label",
+        "y_label",
+    }
+
     for diagnostic_name, payload in diagnostics.items():
         figures = payload.get("figures", []) if isinstance(payload, dict) else []
         figure_rows: list[dict[str, Any]] = []
@@ -98,14 +110,20 @@ def build_diagnostic_table(diagnostics: dict[str, dict[str, Any]]) -> list[dict[
         for figure in figures:
             if not isinstance(figure, dict):
                 continue
-            payload_obj = figure.get("payload")
-            payload_keys = list(payload_obj.keys()) if isinstance(payload_obj, dict) else []
+
             figure_type = str(figure.get("type", ""))
             if figure_type:
                 figure_types.append(figure_type)
+
+            if isinstance(figure.get("payload"), dict):
+                payload_obj = figure["payload"]
+            else:
+                payload_obj = {k: v for k, v in figure.items() if k not in metadata_keys}
+
+            payload_keys = list(payload_obj.keys()) if isinstance(payload_obj, dict) else []
             figure_rows.append(
                 {
-                    "id": figure.get("id"),
+                    "id": figure.get("id") or figure.get("figure_id"),
                     "type": figure.get("type"),
                     "payload_keys": payload_keys,
                     "payload_shape": _shape(payload_obj),
@@ -125,7 +143,27 @@ def build_diagnostic_table(diagnostics: dict[str, dict[str, Any]]) -> list[dict[
                 "figures": figure_rows,
             }
         )
+
     return table
+
+
+def build_raw_figure_key_samples(diagnostics: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    samples: dict[str, list[dict[str, Any]]] = {}
+    for diagnostic_name, payload in diagnostics.items():
+        figures = payload.get("figures", []) if isinstance(payload, dict) else []
+        rows: list[dict[str, Any]] = []
+        for figure in figures[:5]:
+            if isinstance(figure, dict):
+                rows.append(
+                    {
+                        "id": figure.get("id") or figure.get("figure_id"),
+                        "type": figure.get("type"),
+                        "keys": sorted(figure.keys()),
+                    }
+                )
+        if rows:
+            samples[diagnostic_name] = rows
+    return samples
 
 
 def build_contract_summary(full_result: dict[str, Any]) -> dict[str, Any]:
@@ -171,6 +209,7 @@ def build_contract_summary(full_result: dict[str, Any]) -> dict[str, Any]:
         "report_payload_shape": _shape(report_payload),
         "benchmark_related_fields": benchmark_key_paths,
         "placeholder_or_empty_figure_payloads": empty_or_placeholder_fields,
+        "raw_figure_key_samples": build_raw_figure_key_samples(diagnostics),
     }
 
 
@@ -260,6 +299,9 @@ def main() -> None:
             "",
             "## Placeholder / empty figure payloads",
             json.dumps(summary["placeholder_or_empty_figure_payloads"], indent=2, sort_keys=True),
+            "",
+            "## Raw figure key samples",
+            json.dumps(summary["raw_figure_key_samples"], indent=2, sort_keys=True),
             "",
         ]
     )
