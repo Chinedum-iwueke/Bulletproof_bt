@@ -47,11 +47,32 @@ def test_parse_invalid_benchmark_id_raises(tmp_path: Path, bad_id: str) -> None:
         parse_benchmark_config(payload)
 
 
-def test_parse_missing_required_fields_raises(tmp_path: Path) -> None:
+def test_parse_missing_library_revision_is_allowed(tmp_path: Path) -> None:
     payload = _enabled_payload(tmp_path)
     del payload["library_revision"]
 
-    with pytest.raises(BenchmarkConfigError, match="missing required field"):
+    parsed = parse_benchmark_config(payload)
+    assert parsed.enabled is True
+    assert parsed.library_revision is None
+
+
+def test_parse_null_library_revision_is_allowed(tmp_path: Path) -> None:
+    payload = _enabled_payload(tmp_path)
+    payload["library_revision"] = None
+
+    parsed = parse_benchmark_config(payload)
+    assert parsed.enabled is True
+    assert parsed.library_revision is None
+
+
+@pytest.mark.parametrize("bad_revision", ["", "   ", 123])
+def test_parse_invalid_library_revision_when_provided_raises(
+    tmp_path: Path, bad_revision: object
+) -> None:
+    payload = _enabled_payload(tmp_path)
+    payload["library_revision"] = bad_revision
+
+    with pytest.raises(BenchmarkConfigError, match="library_revision"):
         parse_benchmark_config(payload)
 
 

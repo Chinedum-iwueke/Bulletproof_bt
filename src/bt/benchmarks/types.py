@@ -40,7 +40,7 @@ class EnabledBenchmarkConfig:
     id: BenchmarkId
     source: BenchmarkSource
     library_root: Path
-    library_revision: str
+    library_revision: str | None
     frequency: BenchmarkFrequency
     alignment_policy: str
     comparison_frequency: BenchmarkFrequency

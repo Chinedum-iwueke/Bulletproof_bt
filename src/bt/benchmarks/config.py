@@ -16,7 +16,6 @@ _REQUIRED_ENABLED_FIELDS = {
     "id",
     "source",
     "library_root",
-    "library_revision",
     "frequency",
     "alignment_policy",
     "comparison_frequency",
@@ -116,7 +115,9 @@ def parse_benchmark_config(raw: dict[str, Any] | None) -> BenchmarkConfig:
             f"benchmark.library_root must be an absolute path (got: {library_root_str!r})"
         )
 
-    library_revision = _require_str(payload.get("library_revision"), "library_revision")
+    library_revision = payload.get("library_revision")
+    if library_revision is not None:
+        library_revision = _require_str(library_revision, "library_revision")
     alignment_policy = _require_str(payload.get("alignment_policy"), "alignment_policy")
     normalization_basis = _require_str(payload.get("normalization_basis"), "normalization_basis")
 
