@@ -34,6 +34,7 @@ from .ppo import PPO
 from .rma import RMA
 from .roc import ROC
 from .rsi import RSI
+from .squeeze import BBKCSqueeze
 from .sma import SMA
 from .stoch_rsi import StochRSI
 from .stochastic import Stochastic
