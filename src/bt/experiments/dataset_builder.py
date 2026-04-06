@@ -13,6 +13,7 @@ import pandas as pd
 import yaml
 
 SCRIPT_VERSION = "1.0.0"
+DATASET_SCHEMA_VERSION = "v1"
 
 REQUIRED_OUTPUT_FILES = {
     "trades_dataset": "trades_dataset.parquet",
@@ -40,6 +41,90 @@ TRADE_OPTIONAL_CONTEXT_COLUMNS = [
     "liq_quantile",
     "vol_bucket",
     "liq_bucket",
+]
+
+RUN_DATASET_COLUMNS_V1 = [
+    "experiment_id",
+    "experiment_root",
+    "hypothesis_id",
+    "dataset_tag",
+    "run_id",
+    "manifest_row_index",
+    "variant_id",
+    "parameter_set_id",
+    "params_json",
+    "net_pnl",
+    "gross_pnl",
+    "return_pct",
+    "sharpe",
+    "sortino",
+    "calmar",
+    "max_drawdown",
+    "trade_count",
+    "win_rate",
+    "profit_factor",
+    "expectancy",
+    "avg_trade",
+    "avg_win",
+    "avg_loss",
+    "median_pnl_r",
+    "mean_pnl_r",
+    "avg_duration_bars",
+    "median_duration_bars",
+    "long_trade_count",
+    "short_trade_count",
+    "avg_mae_r",
+    "avg_mfe_r",
+    "fees_total",
+    "slippage_total",
+    "cost_drag_pct",
+    "exit_reason_distribution_json",
+    "run_complete_flag",
+    "required_artifacts_present",
+    "parse_success_flag",
+    "dropped_reason",
+    "run_rank_by_net_pnl",
+    "run_rank_by_sharpe",
+    "run_is_top_decile",
+    "run_is_bottom_decile",
+]
+
+TRADES_DATASET_COLUMNS_V1 = [
+    "experiment_id",
+    "hypothesis_id",
+    "dataset_tag",
+    "run_id",
+    "parameter_set_id",
+    "manifest_row_index",
+    "trade_id",
+    "symbol",
+    "side",
+    "entry_time",
+    "exit_time",
+    "entry_price",
+    "exit_price",
+    "pnl",
+    "pnl_pct",
+    "pnl_r",
+    "gross_pnl",
+    "net_pnl",
+    "fees_paid",
+    "slippage_cost",
+    "win_flag",
+    "mfe",
+    "mae",
+    "mfe_r",
+    "mae_r",
+    "duration_bars",
+    "duration_minutes",
+    "exit_reason",
+    "run_net_pnl",
+    "run_sharpe",
+    "run_max_drawdown",
+    "run_trade_count",
+    "run_rank_by_net_pnl",
+    "run_is_top_decile",
+    "run_passes_min_trade_count",
 ]
 
 
@@ -226,6 +311,20 @@ def _safe_int(value: Any) -> int | None:
     return int(parsed) if parsed is not None else None
 
 
+def _manifest_row_index(value: Any) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    match = re.search(r"(\d+)$", text)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 def _parse_params(manifest_row: dict[str, Any] | None, config: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
     if manifest_row:
         raw = manifest_row.get("params_json")
@@ -274,6 +373,12 @@ def _numeric_series_from_candidates(df: pd.DataFrame, *candidates: str, default:
 def _parse_timestamp_utc(series: pd.Series) -> pd.Series:
     parsed = pd.to_datetime(series, errors="coerce", utc=True)
     return parsed
+
+
+def _normalize_trade_side(side_series: pd.Series) -> pd.Series:
+    normalized = side_series.astype(str).str.strip().str.lower()
+    mapped = normalized.map({"buy": "long", "sell": "short", "long": "long", "short": "short"})
+    return mapped.where(mapped.notna(), normalized)
 
 
 def _compute_run_metrics_from_trades(trades_df: pd.DataFrame, log: ExtractionLog, run_id: str) -> dict[str, Any]:
@@ -346,7 +451,7 @@ def _build_trade_rows(
     out = pd.DataFrame(index=trades_df.index)
     out["trade_id"] = [f"{run_provenance['run_id']}_t{idx + 1:05d}" for idx in range(len(trades_df))]
     out["symbol"] = trades_df.get("symbol")
-    out["side"] = trades_df.get("side")
+    out["side"] = _normalize_trade_side(trades_df.get("side", pd.Series(index=trades_df.index)))
     out["entry_time"] = _parse_timestamp_utc(trades_df.get("entry_ts", pd.Series(index=trades_df.index)))
     out["exit_time"] = _parse_timestamp_utc(trades_df.get("exit_ts", pd.Series(index=trades_df.index)))
 
@@ -374,7 +479,7 @@ def _build_trade_rows(
     )
     out["duration_minutes"] = (out["exit_time"] - out["entry_time"]).dt.total_seconds() / 60.0
     out["exit_reason"] = trades_df.get("exit_reason")
-    out["win_flag"] = out["net_pnl"] > 0
+    out["win_flag"] = (out["net_pnl"] > 0).astype("int64")
 
     for column in TRADE_OPTIONAL_CONTEXT_COLUMNS:
         if column in trades_df.columns:
@@ -390,7 +495,7 @@ def _parse_run(
     run_dir: Path,
     *,
     experiment_id: str,
-    experiment_root_name: str,
+    experiment_root: Path,
     dataset_tag: str | None,
     summary_row: dict[str, Any] | None,
     manifest_row: dict[str, Any] | None,
@@ -442,7 +547,7 @@ def _parse_run(
     variant_id = None
     parameter_set_id = None
     if manifest_row:
-        manifest_row_index = _pick(manifest_row.get("row_id"), manifest_row.get("row_index"))
+        manifest_row_index = _manifest_row_index(_pick(manifest_row.get("row_id"), manifest_row.get("row_index")))
         variant_id = manifest_row.get("variant_id")
         parameter_set_id = _pick(manifest_row.get("config_hash"), manifest_row.get("parameter_set_id"))
 
@@ -463,8 +568,8 @@ def _parse_run(
     )
 
     run_record: dict[str, Any] = {
-        "experiment_root_name": experiment_root_name,
         "experiment_id": experiment_id,
+        "experiment_root": str(experiment_root.resolve()),
         "hypothesis_id": hypothesis_id,
         "dataset_tag": dataset_tag,
         "run_id": run_id,
@@ -517,7 +622,6 @@ def _parse_run(
         log.info.append(f"run={run_id}: trades below --min-trades-per-run ({len(trades_df)} < {min_trades_per_run})")
 
     provenance = {
-        "experiment_root_name": experiment_root_name,
         "experiment_id": experiment_id,
         "hypothesis_id": hypothesis_id,
         "dataset_tag": dataset_tag,
@@ -543,7 +647,17 @@ def _enrich_trade_labels(
         return trades_df
 
     enriched = trades_df.merge(
-        runs_df[["run_id", "net_pnl", "sharpe", "max_drawdown", "trade_count"]],
+        runs_df[
+            [
+                "run_id",
+                "net_pnl",
+                "sharpe",
+                "max_drawdown",
+                "trade_count",
+                "run_rank_by_net_pnl",
+                "run_is_top_decile",
+            ]
+        ],
         on="run_id",
         how="left",
         suffixes=("", "_run"),
@@ -556,29 +670,14 @@ def _enrich_trade_labels(
             "trade_count": "run_trade_count",
         }
     )
-
-    ranking = (
-        runs_df[["run_id", "net_pnl"]]
-        .copy()
-        .sort_values("net_pnl", ascending=False, na_position="last")
-        .reset_index(drop=True)
-    )
-    ranking["run_rank_by_net_pnl"] = ranking.index + 1
-    if len(ranking) > 0:
-        top_n = max(1, int(round(len(ranking) * 0.1)))
-    else:
-        top_n = 0
-    ranking["run_is_top_decile"] = ranking["run_rank_by_net_pnl"] <= top_n
-
-    enriched = enriched.merge(ranking[["run_id", "run_rank_by_net_pnl", "run_is_top_decile"]], on="run_id", how="left")
     enriched["run_passes_min_trade_count"] = enriched["run_trade_count"].fillna(0) >= min_trades_per_run
     return enriched
 
 
 def _build_feature_dictionary(trades_df: pd.DataFrame, runs_df: pd.DataFrame) -> list[dict[str, Any]]:
     descriptions = {
-        "experiment_root_name": "Experiment root directory basename.",
         "experiment_id": "Stable experiment identifier (defaults to experiment root name).",
+        "experiment_root": "Absolute experiment root path.",
         "hypothesis_id": "Hypothesis identifier inferred from contract snapshot/summary/manifest/config.",
         "dataset_tag": "Dataset family tag inferred from experiment name (e.g., stable, vol).",
         "run_id": "Run folder identifier.",
@@ -609,6 +708,58 @@ def _build_feature_dictionary(trades_df: pd.DataFrame, runs_df: pd.DataFrame) ->
                 }
             )
     return rows
+
+
+def _add_run_rankings(runs_df: pd.DataFrame) -> pd.DataFrame:
+    ranked = runs_df.copy()
+    ranked["run_rank_by_net_pnl"] = pd.NA
+    ranked["run_rank_by_sharpe"] = pd.NA
+    ranked["run_is_top_decile"] = False
+    ranked["run_is_bottom_decile"] = False
+
+    valid_net = ranked["net_pnl"].notna() if "net_pnl" in ranked.columns else pd.Series(False, index=ranked.index)
+    if valid_net.any():
+        ranked.loc[valid_net, "run_rank_by_net_pnl"] = (
+            ranked.loc[valid_net, "net_pnl"].rank(method="dense", ascending=False).astype("Int64")
+        )
+
+    valid_sharpe = ranked["sharpe"].notna() if "sharpe" in ranked.columns else pd.Series(False, index=ranked.index)
+    if valid_sharpe.any():
+        ranked.loc[valid_sharpe, "run_rank_by_sharpe"] = (
+            ranked.loc[valid_sharpe, "sharpe"].rank(method="dense", ascending=False).astype("Int64")
+        )
+
+    total = len(ranked)
+    if total > 0 and "run_rank_by_net_pnl" in ranked.columns:
+        decile_n = max(1, int(round(total * 0.1)))
+        rank_series = pd.to_numeric(ranked["run_rank_by_net_pnl"], errors="coerce")
+        ranked["run_is_top_decile"] = (rank_series <= decile_n).fillna(False)
+        ranked["run_is_bottom_decile"] = (rank_series >= (total - decile_n + 1)).fillna(False)
+    return ranked
+
+
+def _enforce_contract_column_order(
+    runs_df: pd.DataFrame,
+    trades_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    run_cols = RUN_DATASET_COLUMNS_V1 + sorted(
+        col for col in runs_df.columns if col.startswith("param_") and col not in RUN_DATASET_COLUMNS_V1
+    )
+    run_cols += [col for col in runs_df.columns if col not in run_cols]
+    for col in run_cols:
+        if col not in runs_df.columns:
+            runs_df[col] = None
+    runs_df = runs_df[run_cols]
+
+    trade_cols = TRADES_DATASET_COLUMNS_V1 + TRADE_OPTIONAL_CONTEXT_COLUMNS + sorted(
+        col for col in trades_df.columns if col.startswith("param_") and col not in TRADES_DATASET_COLUMNS_V1
+    )
+    trade_cols += [col for col in trades_df.columns if col not in trade_cols]
+    for col in trade_cols:
+        if col not in trades_df.columns:
+            trades_df[col] = None
+    trades_df = trades_df[trade_cols]
+    return runs_df, trades_df
 
 
 def _experiment_summary(experiment_root: Path, runs_df: pd.DataFrame, trades_df: pd.DataFrame) -> dict[str, Any]:
@@ -705,7 +856,7 @@ def extract_experiment_dataset(
         result = _parse_run(
             run_dir,
             experiment_id=experiment_id,
-            experiment_root_name=experiment_root_name,
+            experiment_root=experiment_root,
             dataset_tag=dataset_tag,
             summary_row=summary_row,
             manifest_row=manifest_row,
@@ -746,6 +897,7 @@ def extract_experiment_dataset(
 
     if "run_id" in runs_df.columns:
         runs_df = runs_df.sort_values("run_id").reset_index(drop=True)
+    runs_df = _add_run_rankings(runs_df)
     runs_df.attrs["total_runs_scanned"] = len(run_dirs)
 
     trades_df = pd.concat(trade_dfs, ignore_index=True) if trade_dfs else pd.DataFrame()
@@ -756,6 +908,15 @@ def extract_experiment_dataset(
 
     trades_df = _enrich_trade_labels(trades_df, runs_df, min_trades_per_run=min_trades_per_run)
     trades_df = trades_df.sort_values(["run_id", "entry_time", "trade_id"], na_position="last").reset_index(drop=True)
+
+    if "manifest_row_index" in runs_df.columns:
+        runs_df["manifest_row_index"] = pd.to_numeric(runs_df["manifest_row_index"], errors="coerce").astype("Int64")
+    if "manifest_row_index" in trades_df.columns:
+        trades_df["manifest_row_index"] = pd.to_numeric(trades_df["manifest_row_index"], errors="coerce").astype("Int64")
+    if "duration_bars" in trades_df.columns:
+        trades_df["duration_bars"] = pd.to_numeric(trades_df["duration_bars"], errors="coerce").round().astype("Int64")
+
+    runs_df, trades_df = _enforce_contract_column_order(runs_df, trades_df)
 
     for frame in (runs_df, trades_df):
         for col in frame.columns:
@@ -794,6 +955,7 @@ def extract_experiment_dataset(
         "experiment_root": str(experiment_root),
         "created_at_utc": _utc_now_iso(),
         "script_version": SCRIPT_VERSION,
+        "schema_version": DATASET_SCHEMA_VERSION,
         "hypothesis_id": default_hypothesis_id,
         "runs_scanned": len(run_dirs),
         "runs_parsed": len(runs_df),

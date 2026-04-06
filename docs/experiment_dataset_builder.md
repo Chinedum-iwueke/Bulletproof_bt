@@ -64,13 +64,17 @@ Written under `<experiment_root>/research_data/`:
 6. `extraction_log.json`
 7. `dropped_runs.csv`
 
+## Schema contract versioning
+
+`runs_dataset.parquet` and `trades_dataset.parquet` are emitted with a strict **v1** contract. The extraction metadata in `dataset_manifest.json` includes `schema_version: "v1"` so downstream consumers can enforce compatibility checks.
+
 ## Dataset contracts
 
 ### `trades_dataset.parquet`
 
 One row per completed trade, with:
 
-- experiment/run provenance (`experiment_root_name`, `experiment_id`, `hypothesis_id`, `dataset_tag`, `run_id`, `manifest_row_index`, `variant_id`, `parameter_set_id`, `params_json`)
+- experiment/run provenance (`experiment_id`, `hypothesis_id`, `dataset_tag`, `run_id`, `manifest_row_index`, `variant_id`, `parameter_set_id`, `params_json`)
 - flattened params (`param_*` columns)
 - trade identity/time/price fields
 - trade outcomes (`pnl`, `pnl_pct`, `pnl_r`, `gross_pnl`, `net_pnl`, costs, MFE/MAE, duration, exit_reason, win_flag)
@@ -81,11 +85,12 @@ One row per completed trade, with:
 
 One row per run directory, with:
 
-- provenance (`experiment_root_name`, `experiment_id`, `hypothesis_id`, `dataset_tag`, `run_id`, manifest linkage, params, config/snapshot paths)
+- provenance (`experiment_root`, `experiment_id`, `hypothesis_id`, `dataset_tag`, `run_id`, manifest linkage, params, config/snapshot paths)
 - flattened `param_*` features
 - run performance metrics (summary-first precedence)
 - diagnostics/cost rollups and exit-reason distribution JSON
 - integrity/status flags (`run_complete_flag`, `required_artifacts_present`, `parse_success_flag`, `dropped_reason`)
+- ranking fields (`run_rank_by_net_pnl`, `run_rank_by_sharpe`, `run_is_top_decile`, `run_is_bottom_decile`)
 
 Nullability is best-effort where source artifacts do not expose a field.
 
