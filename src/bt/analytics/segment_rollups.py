@@ -95,9 +95,10 @@ def load_trades_with_entry_metadata(run_dir: str | Path, *, required_segment_key
         enriched[f"entry_meta__{key}"] = [_normalize_segment_value(md.get(key)) for md in metadata_rows]
 
     if required_segment_keys:
-        missing = [key for key in required_segment_keys if f"entry_meta__{key}" not in enriched.columns]
-        if missing:
-            raise ValueError(f"Missing requested segment keys in entry metadata: {missing}")
+        for key in required_segment_keys:
+            column = f"entry_meta__{key}"
+            if column not in enriched.columns:
+                enriched[column] = _MISSING
 
     return enriched
 

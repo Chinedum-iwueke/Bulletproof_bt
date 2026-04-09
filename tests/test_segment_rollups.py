@@ -99,8 +99,9 @@ def test_missing_key_and_nulls(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     _write_run(run_dir)
 
-    with pytest.raises(ValueError, match="Missing requested segment keys"):
-        load_trades_with_entry_metadata(run_dir, required_segment_keys=["rvhat_pct_t"])
+    enriched_missing = load_trades_with_entry_metadata(run_dir, required_segment_keys=["rvhat_pct_t"])
+    assert "entry_meta__rvhat_pct_t" in enriched_missing.columns
+    assert set(enriched_missing["entry_meta__rvhat_pct_t"].tolist()) == {"__MISSING__"}
 
     enriched = load_trades_with_entry_metadata(run_dir, required_segment_keys=["q_comp"])
     rows = compute_segment_rollups(enriched, segment_keys=["q_comp"])
