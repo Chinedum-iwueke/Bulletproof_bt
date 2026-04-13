@@ -27,3 +27,11 @@ def test_runtime_override_uses_grid_signal_timeframe_for_h7b() -> None:
     spec = next(row for row in contract.to_run_specs() if row["params"]["signal_timeframe"] == "1h")
     override = build_runtime_override(contract, spec, "Tier2")
     assert override["strategy"]["timeframe"] == "1h"
+
+
+def test_runtime_override_prioritizes_signal_timeframe_over_timeframe_param() -> None:
+    contract = HypothesisContract.from_yaml("research/hypotheses/l1_h7b_squeeze_expansion_pullback_timeframe.yaml")
+    spec = contract.to_run_specs()[0]
+    spec["params"] = {**spec["params"], "timeframe": "15m", "signal_timeframe": "1h"}
+    override = build_runtime_override(contract, spec, "Tier2")
+    assert override["strategy"]["timeframe"] == "1h"
