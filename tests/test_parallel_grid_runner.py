@@ -8,6 +8,7 @@ import pytest
 
 from bt.experiments.manifest import decode_params, encode_params, read_manifest_csv, write_manifest_csv
 from bt.experiments.parallel_grid import (
+    _build_preprocessing_signatures,
     _normalized_output_dir,
     _variant_slug,
     build_hypothesis_manifest_rows,
@@ -273,3 +274,25 @@ def test_legacy_manifest_output_dir_is_normalized(tmp_path: Path) -> None:
         params_json=params_json,
     )
     assert statuses[0]["output_dir"] == expected_output
+
+
+def test_preprocessing_signature_prefers_signal_timeframe_over_timeframe() -> None:
+    rows = [
+        {
+            "row_id": "row_00001",
+            "hypothesis_id": "L1-H7D",
+            "hypothesis_path": "research/hypotheses/l1_h7d_adaptive_runner.yaml",
+            "phase": "tier2",
+            "tier": "Tier2",
+            "variant_id": "g00000",
+            "config_hash": "abc",
+            "params_json": json.dumps({"signal_timeframe": "1h", "timeframe": "15m", "runner_mode": "FAST"}),
+            "run_slug": "g00000__tier2",
+            "output_dir": "runs/row_00001__g00000__tier2",
+            "expected_status": "pending",
+            "enabled": "true",
+            "notes": "",
+        }
+    ]
+    signatures = _build_preprocessing_signatures(rows)
+    assert signatures[0]["signal_timeframe"] == "1h"

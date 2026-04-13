@@ -265,7 +265,7 @@ def _execute_manifest_row(
     )
 
     params = decode_params(row["params_json"])
-    signal_timeframe = str(params.get("timeframe", "15m"))
+    signal_timeframe = str(params.get("signal_timeframe", params.get("timeframe", "15m"))).lower()
     signature_key = stable_cache_key(
         dataset_id=str(shared_dataset_plan.get("dataset_id", "")),
         timeframe=signal_timeframe,
@@ -330,9 +330,10 @@ def _build_preprocessing_signatures(rows: list[dict[str, str]]) -> list[dict[str
     unique: dict[str, dict[str, Any]] = {}
     for row in rows:
         params = decode_params(row["params_json"])
+        signal_timeframe = str(params.get("signal_timeframe", params.get("timeframe", "15m"))).lower()
         signature = {
             "strategy": row["hypothesis_id"],
-            "signal_timeframe": str(params.get("timeframe", "15m")),
+            "signal_timeframe": signal_timeframe,
             "invariants": {key: params[key] for key in sorted(params.keys())},
         }
         key = json.dumps(signature, sort_keys=True)

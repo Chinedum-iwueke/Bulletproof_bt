@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Mapping
 
 import pandas as pd
 
 from bt.core.enums import Side
 from bt.core.types import Bar, Signal
+from bt.hypotheses.l1_h4b import RollingMedianReference, spread_proxy_from_bar
+from bt.hypotheses.l1_h7 import RollingZScore, flow_gate_passes, imbalance_proxy_from_bar, resolve_imbalance_threshold
 from bt.indicators.atr import ATR
 from bt.indicators.dmi_adx import DMIADX
 from bt.indicators.ema import EMA
@@ -43,6 +46,14 @@ class _State:
     trail_stop_price: float | None = None
     high_since_entry: float | None = None
     low_since_entry: float | None = None
+    bars_in_trade: int = 0
+    prev_base_close: float | None = None
+    sigma_z: RollingZScore | None = None
+    spread_ref: RollingMedianReference | None = None
+    sigma_z_last: float | None = None
+    spread_proxy_last: float | None = None
+    spread_ref_last: float | None = None
+    imbalance_proxy_last: float | None = None
 
 
 @register_strategy("l1_h7_squeeze_expansion_pullback")
@@ -67,6 +78,12 @@ class L1H7SqueezeExpansionPullbackStrategy(Strategy):
         partial_at_r: float = 1.5,
         partial_fraction: float = 0.5,
         trail_atr_mult: float = 2.5,
+        fail_fast_bars: int = 8,
+        runner_mode: str = "MEDIUM",
+        runner_flow_mode: str = "off",
+        sigma_z_threshold: float = 1.0,
+        entry_flow_gate: str = "off",
+        imbalance_threshold: str = "moderate",
         no_pyramiding: bool = True,
         family_variant: str = "L1-H7A",
     ) -> None:
@@ -87,6 +104,12 @@ class L1H7SqueezeExpansionPullbackStrategy(Strategy):
         self._partial_at_r = float(partial_at_r)
         self._partial_fraction = float(partial_fraction)
         self._trail_atr_mult = float(trail_atr_mult)
+        self._fail_fast_bars = int(fail_fast_bars)
+        self._runner_mode = str(runner_mode).upper()
+        self._runner_flow_mode = str(runner_flow_mode).lower()
+        self._sigma_z_threshold = float(sigma_z_threshold)
+        self._entry_flow_gate = str(entry_flow_gate).lower()
+        self._imbalance_threshold = str(imbalance_threshold).lower()
         self._no_pyramiding = bool(no_pyramiding)
         self._family_variant = str(family_variant)
         self._state: dict[str, _State] = {}
@@ -107,6 +130,8 @@ class L1H7SqueezeExpansionPullbackStrategy(Strategy):
                 ema_pullback=EMA(self._pullback_ema_period),
                 atr_signal=ATR(14),
                 signal_vwap=SessionVWAP(session="utc_day", price_source="typical"),
+                sigma_z=RollingZScore(20),
+                spread_ref=RollingMedianReference(20),
             )
             self._state[symbol] = current
         return current
@@ -143,10 +168,30 @@ class L1H7SqueezeExpansionPullbackStrategy(Strategy):
         st.trail_stop_price = None
         st.high_since_entry = None
         st.low_since_entry = None
+        st.bars_in_trade = 0
+
+    def _runner_trail_mult(self, st: _State) -> float:
+        base = {"FAST": 1.75, "MEDIUM": 2.5, "DRAGON": 3.5}.get(self._runner_mode, self._trail_atr_mult)
+        mode = self._runner_flow_mode
+        if mode == "off":
+            return float(base)
+        adverse = not flow_gate_passes(
+            gate_mode="strict" if mode == "strict" else "moderate",
+            sigma_z=st.sigma_z_last,
+            sigma_z_threshold=self._sigma_z_threshold,
+            spread_proxy=st.spread_proxy_last,
+            spread_ref=st.spread_ref_last,
+            imbalance=st.imbalance_proxy_last,
+            imbalance_min=resolve_imbalance_threshold(self._imbalance_threshold),
+        )
+        if not adverse:
+            return float(base)
+        return float(base * (0.6 if mode == "strict" else 0.8))
 
     def _handle_open_position(self, *, ts: pd.Timestamp, symbol: str, bar: Bar, st: _State, side: Side) -> list[Signal]:
         signals: list[Signal] = []
         st.base_position = side
+        st.bars_in_trade += 1
         st.high_since_entry = float(bar.high) if st.high_since_entry is None else max(float(st.high_since_entry), float(bar.high))
         st.low_since_entry = float(bar.low) if st.low_since_entry is None else min(float(st.low_since_entry), float(bar.low))
 
@@ -183,6 +228,31 @@ class L1H7SqueezeExpansionPullbackStrategy(Strategy):
                 )
                 return signals
 
+        if st.entry_price is not None and self._fail_fast_bars > 0 and st.bars_in_trade >= self._fail_fast_bars and not st.partial_taken:
+            fail_fast = (side == Side.BUY and float(bar.close) <= float(st.entry_price)) or (
+                side == Side.SELL and float(bar.close) >= float(st.entry_price)
+            )
+            if fail_fast:
+                signals.append(
+                    Signal(
+                        ts=ts,
+                        symbol=symbol,
+                        side=Side.SELL if side == Side.BUY else Side.BUY,
+                        signal_type="l1_h7_exit",
+                        confidence=1.0,
+                        metadata={
+                            "close_only": True,
+                            "exit_reason": "fail_fast",
+                            "fail_fast_bars": self._fail_fast_bars,
+                            "bars_in_trade": st.bars_in_trade,
+                            "entry_price": st.entry_price,
+                            "exit_monitoring_timeframe": "1m",
+                        },
+                    )
+                )
+                self._clear_trade_state(st)
+                return signals
+
         effective_stop = st.stop_price_frozen
         if st.protection_active and st.entry_price is not None and effective_stop is not None:
             if side == Side.BUY:
@@ -191,13 +261,14 @@ class L1H7SqueezeExpansionPullbackStrategy(Strategy):
                 effective_stop = min(float(effective_stop), float(st.entry_price))
 
         if st.protection_active and st.atr_entry is not None and st.atr_entry > 0:
+            trail_mult = self._runner_trail_mult(st)
             if side == Side.BUY and st.high_since_entry is not None:
-                candidate = float(st.high_since_entry) - (self._trail_atr_mult * float(st.atr_entry))
+                candidate = float(st.high_since_entry) - (trail_mult * float(st.atr_entry))
                 st.trail_stop_price = candidate if st.trail_stop_price is None else max(float(st.trail_stop_price), candidate)
                 if effective_stop is not None:
                     effective_stop = max(float(effective_stop), float(st.trail_stop_price))
             elif side == Side.SELL and st.low_since_entry is not None:
-                candidate = float(st.low_since_entry) + (self._trail_atr_mult * float(st.atr_entry))
+                candidate = float(st.low_since_entry) + (trail_mult * float(st.atr_entry))
                 st.trail_stop_price = candidate if st.trail_stop_price is None else min(float(st.trail_stop_price), candidate)
                 if effective_stop is not None:
                     effective_stop = min(float(effective_stop), float(st.trail_stop_price))
@@ -267,6 +338,18 @@ class L1H7SqueezeExpansionPullbackStrategy(Strategy):
             if bar is None:
                 continue
             st = self._state_for(symbol)
+            spread_proxy = spread_proxy_from_bar(bar)
+            spread_ref = st.spread_ref.update(spread_proxy) if st.spread_ref is not None else None
+            imbalance_proxy = imbalance_proxy_from_bar(bar)
+            sigma_z = None
+            if st.prev_base_close is not None and st.prev_base_close > 0 and bar.close > 0 and st.sigma_z is not None:
+                lr_abs = abs(float(math.log(float(bar.close) / float(st.prev_base_close))))
+                sigma_z = st.sigma_z.update(lr_abs)
+            st.prev_base_close = float(bar.close)
+            st.spread_proxy_last = spread_proxy
+            st.spread_ref_last = spread_ref
+            st.imbalance_proxy_last = imbalance_proxy
+            st.sigma_z_last = sigma_z
 
             current = self._ctx_position_side(ctx, symbol)
             if current is not None:
@@ -363,6 +446,18 @@ class L1H7SqueezeExpansionPullbackStrategy(Strategy):
                     pullback_valid = (pullback_hit_ema or pullback_hit_vwap) and short_bias
 
             if direction is not None and pullback_valid and atr_value is not None and atr_value > 0 and self._no_pyramiding:
+                flow_ok = flow_gate_passes(
+                    gate_mode=self._entry_flow_gate,
+                    sigma_z=st.sigma_z_last,
+                    sigma_z_threshold=self._sigma_z_threshold,
+                    spread_proxy=st.spread_proxy_last,
+                    spread_ref=st.spread_ref_last,
+                    imbalance=st.imbalance_proxy_last,
+                    imbalance_min=resolve_imbalance_threshold(self._imbalance_threshold),
+                )
+                if not flow_ok:
+                    st.last_signal_close = signal_close
+                    continue
                 side = direction
                 entry_ref = float(bar.close)
                 stop_distance = self._stop_atr_mult * float(atr_value)
@@ -380,6 +475,7 @@ class L1H7SqueezeExpansionPullbackStrategy(Strategy):
                 st.trail_stop_price = None
                 st.high_since_entry = float(bar.high)
                 st.low_since_entry = float(bar.low)
+                st.bars_in_trade = 0
                 st.expansion_direction = None
 
                 signals.append(
@@ -418,6 +514,16 @@ class L1H7SqueezeExpansionPullbackStrategy(Strategy):
                             "partial_at_r": self._partial_at_r,
                             "partial_fraction": self._partial_fraction,
                             "runner_trail_atr_mult": self._trail_atr_mult,
+                            "fail_fast_bars": self._fail_fast_bars,
+                            "runner_mode": self._runner_mode,
+                            "runner_flow_mode": self._runner_flow_mode,
+                            "entry_flow_gate": self._entry_flow_gate,
+                            "sigma_z_threshold": self._sigma_z_threshold,
+                            "sigma_z": st.sigma_z_last,
+                            "spread_proxy": st.spread_proxy_last,
+                            "spread_proxy_ref": st.spread_ref_last,
+                            "imbalance_proxy": st.imbalance_proxy_last,
+                            "imbalance_threshold": self._imbalance_threshold,
                             "tp1_hit": False,
                             "protection_activated": False,
                             "entry_reference_price": entry_ref,

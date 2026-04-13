@@ -14,6 +14,10 @@ A sustained compression regime followed by directional expansion and a controlle
 
 - **L1-H7A**: baseline strategy definition and baseline parameter study.
 - **L1-H7B**: dedicated timeframe robustness study over the same base family logic.
+- **L1-H7C**: high-selectivity regime branch (`signal_timeframe ∈ {15m,1h}`, strict ADX, fail-fast proving).
+- **L1-H7D**: adaptive runner branch (`FAST/MEDIUM/DRAGON`) with post-TP management variation only.
+- **L1-H7E**: flow-sensitive runner branch (runner adaptation by deterministic flow proxies).
+- **L1-H7F**: flow-gated entry branch (flow confirmation promoted into entry precondition).
 
 ## Locked institutional semantics
 

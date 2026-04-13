@@ -1,0 +1,76 @@
+metadata:
+  hypothesis_id: "L1-H7C"
+  title: "High-Selectivity Regime Variant"
+  description: "Stricter ADX and fail-fast regime selection for the L1-H7 squeeze-expansion-pullback continuation family."
+  research_layer: "L1"
+  hypothesis_family: "trend_continuation"
+  parent_family: "L1-H7"
+  version: "1.0.0"
+  author: "bulletproof_bt"
+  created_at: "2026-04-13T00:00:00Z"
+
+hypothesis_id: "L1-H7C"
+title: "High-Selectivity Regime Variant"
+description: "Stricter ADX and fail-fast regime selection for the L1-H7 squeeze-expansion-pullback continuation family."
+research_layer: "L1"
+hypothesis_family: "trend_continuation"
+parent_family: "L1-H7"
+version: "1.0.0"
+author: "bulletproof_bt"
+created_at: "2026-04-13T00:00:00Z"
+
+required_indicators: [bb_kc_squeeze, bollinger, keltner, adx, ema, atr, session_vwap]
+
+parameter_grid:
+  signal_timeframe: ["15m", "1h"]
+  adx_min: [30, 35, 40]
+  fail_fast_bars: [4, 8]
+  partial_at_r: [1.5]
+  runner_mode: ["MEDIUM"]
+  runner_flow_mode: ["off"]
+  sigma_z_threshold: [1.0]
+  entry_flow_gate: ["off"]
+  imbalance_threshold: ["moderate"]
+  bb_period: [20]
+  bb_std_mult: [2.0]
+  kc_period: [20]
+  kc_atr_mult: [1.5]
+  squeeze_min_bars: [4]
+  ema_fast_period: [9]
+  ema_slow_period: [21]
+  pullback_ema_period: [21]
+  pullback_use_ema21: [true]
+  pullback_use_session_vwap: [true]
+  pullback_max_wait: [12]
+  stop_atr_mult: [2.0]
+  trail_atr_mult: [2.5]
+  partial_fraction: [0.5]
+  no_pyramiding: [true]
+  family_variant: ["L1-H7C"]
+
+entry:
+  strategy: "l1_h7_squeeze_expansion_pullback"
+  signal_timeframe: "15m"
+  timeframe: "15m"
+  base_execution_timeframe: "1m"
+  order_timing: "bar_close_submit_next_bar_execution"
+  no_pyramiding: true
+
+execution_semantics:
+  signal_timeframe: "15m"
+  base_execution_timeframe: "1m"
+  exit_monitoring_timeframe: "1m"
+  base_data_frequency_expected: "1m"
+  strategy_family: "trend_continuation"
+  family_pattern: "squeeze_expansion_pullback"
+  stop_model: "fixed_atr_multiple"
+  stop_update_policy: "frozen_at_entry"
+  tp_update_policy: "tp1_then_protected_runner"
+  hold_time_unit: "base_bars"
+  atr_source_timeframe: "signal_timeframe"
+  risk_accounting: "engine_canonical_R"
+  no_pyramiding: true
+
+logging:
+  schema_version: "1.0"
+  required_fields: [ev_r_gross, ev_r_net, fail_fast_bars, signal_timeframe, exit_monitoring_timeframe, family_variant]
