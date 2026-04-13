@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from bt.analytics.h8_postmortem import run_h8_postmortem
+from bt.analytics.h9_postmortem import run_h9_postmortem
 from bt.analytics.segment_rollups import load_trades_with_entry_metadata
 
 VOL_METADATA_KEYS = ["vol_pct_t", "rvhat_pct_t", "vol_percentile", "rv_hat_pct"]
@@ -75,6 +76,7 @@ def _infer_hypothesis_id(run_dir: Path) -> str:
         "l1_h3b_har_rv_gate_mean_reversion": "L1-H3B",
         "l1_h3c_har_regime_switch": "L1-H3C",
         "l1_h8_trend_continuation_pullback": "L1-H8",
+        "l1_h9_momentum_breakout": "L1-H9",
     }
     return mapping.get(str(strategy_name), str(strategy_name) if strategy_name else "")
 
@@ -175,6 +177,8 @@ def run_postmortem_for_experiment(
 
     h8_outputs = run_h8_postmortem(root, run_dirs=run_paths, output_root=diagnostics_root / "l1_h8")
     outputs.update({f"L1-H8:{k}": v for k, v in h8_outputs.items()})
+    h9_outputs = run_h9_postmortem(root, run_dirs=run_paths, output_root=diagnostics_root / "l1_h9")
+    outputs.update({f"L1-H9:{k}": v for k, v in h9_outputs.items()})
 
     # lightweight hypothesis-specific diagnostics registry
     for hypothesis_id, segment_keys in HYPOTHESIS_GROUPINGS.items():
