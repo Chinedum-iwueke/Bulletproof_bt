@@ -95,7 +95,7 @@ def _read_fills_cost_totals(fills_path: Path) -> tuple[float, float, float]:
             record = json.loads(line)
             if not isinstance(record, dict):
                 continue
-            fee_value = record.get("fee", record.get("fee_paid", 0.0))
+            fee_value = record.get("fee", record.get("fee_paid", record.get("fee_cost", 0.0)))
             slippage_value = record.get("slippage", record.get("slippage_cost", 0.0))
             metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
             spread_value = record.get("spread_cost", metadata.get("spread_cost", 0.0))
@@ -144,12 +144,14 @@ def compute_cost_attribution(
 
     if "fees_paid" in trades_df.columns:
         fees_series = _coerce_numeric(trades_df["fees_paid"])
-        fee_total = float(fees_series.sum())
+        trade_fee_total = float(fees_series.sum())
     else:
         fees_series = _sum_costs(trades_df, preferred="fees_total", fallbacks=["fees", "fee"])
-        fee_total = float(abs(fees_series.sum()))
-        if fee_total == 0.0 and fills_fee_total > 0.0:
-            fee_total = float(fills_fee_total)
+        trade_fee_total = float(abs(fees_series.sum()))
+    if resolved_fills_path.exists():
+        fee_total = float(fills_fee_total)
+    else:
+        fee_total = float(trade_fee_total)
 
     if "pnl_price" in trades_df.columns:
         pnl_price_series = _coerce_numeric(trades_df["pnl_price"])

@@ -27,7 +27,7 @@ def _fill(*, ts: str, side: Side, qty: float, price: float, risk_amount: float |
     )
 
 
-def test_round_trip_trade_metadata_uses_entry_qty_times_stop_distance() -> None:
+def test_round_trip_trade_metadata_preserves_explicit_risk_amount() -> None:
     book = PositionBook()
     book.apply_fill(_fill(ts="2024-01-01T00:00:00Z", side=Side.BUY, qty=2.0, price=100.0, risk_amount=500.0, stop_distance=25.0))
     _, trade = book.apply_fill(_fill(ts="2024-01-01T01:00:00Z", side=Side.SELL, qty=2.0, price=105.0))
@@ -35,7 +35,7 @@ def test_round_trip_trade_metadata_uses_entry_qty_times_stop_distance() -> None:
     assert trade is not None
     assert float(trade.metadata["entry_qty"]) == pytest.approx(2.0)
     assert float(trade.metadata["entry_stop_distance"]) == pytest.approx(25.0)
-    assert float(trade.metadata["risk_amount"]) == pytest.approx(50.0)
+    assert float(trade.metadata["risk_amount"]) == pytest.approx(500.0)
 
 
 def test_partial_close_trade_keeps_full_entry_risk_context() -> None:
@@ -49,7 +49,7 @@ def test_partial_close_trade_keeps_full_entry_risk_context() -> None:
     _, trade2 = book.apply_fill(_fill(ts="2024-01-01T01:00:00Z", side=Side.SELL, qty=0.6, price=106.0))
     assert trade2 is not None
     assert float(trade2.metadata["entry_qty"]) == pytest.approx(1.0)
-    assert float(trade2.metadata["risk_amount"]) == pytest.approx(50.0)
+    assert float(trade2.metadata["risk_amount"]) == pytest.approx(500.0)
 
 
 def test_flip_trade_preserves_old_entry_risk_and_new_leg_gets_new_context() -> None:
@@ -61,7 +61,7 @@ def test_flip_trade_preserves_old_entry_risk_and_new_leg_gets_new_context() -> N
 
     assert closed_trade is not None
     assert float(closed_trade.metadata["entry_qty"]) == pytest.approx(1.0)
-    assert float(closed_trade.metadata["risk_amount"]) == pytest.approx(50.0)
+    assert float(closed_trade.metadata["risk_amount"]) == pytest.approx(500.0)
 
     assert new_pos.side == Side.SELL
     assert new_pos.qty == pytest.approx(0.5)
@@ -69,4 +69,15 @@ def test_flip_trade_preserves_old_entry_risk_and_new_leg_gets_new_context() -> N
     assert close_new is not None
     assert float(close_new.metadata["entry_qty"]) == pytest.approx(0.5)
     assert float(close_new.metadata["entry_stop_distance"]) == pytest.approx(20.0)
-    assert float(close_new.metadata["risk_amount"]) == pytest.approx(10.0)
+    assert float(close_new.metadata["risk_amount"]) == pytest.approx(999.0)
+
+
+def test_risk_amount_falls_back_to_entry_qty_times_stop_distance_when_missing() -> None:
+    book = PositionBook()
+    book.apply_fill(_fill(ts="2024-01-01T00:00:00Z", side=Side.BUY, qty=2.0, price=100.0, stop_distance=25.0))
+    _, trade = book.apply_fill(_fill(ts="2024-01-01T01:00:00Z", side=Side.SELL, qty=2.0, price=105.0))
+
+    assert trade is not None
+    assert float(trade.metadata["entry_qty"]) == pytest.approx(2.0)
+    assert float(trade.metadata["entry_stop_distance"]) == pytest.approx(25.0)
+    assert float(trade.metadata["risk_amount"]) == pytest.approx(50.0)
