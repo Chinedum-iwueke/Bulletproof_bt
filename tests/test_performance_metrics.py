@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import json
 import pandas as pd
 import pytest
 
@@ -15,6 +16,12 @@ def _write_equity(path: Path, values: list[float]) -> None:
 
 def _write_trades(path: Path, rows: list[dict[str, object]]) -> None:
     pd.DataFrame(rows).to_csv(path, index=False)
+
+
+def _write_fills(path: Path, rows: list[dict[str, object]]) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
 
 
 def test_compute_performance_metrics(tmp_path: Path) -> None:
@@ -110,3 +117,30 @@ def test_compute_performance_no_trades(tmp_path: Path) -> None:
     assert report.spread_drag_pct == 0.0
     assert report.ev_by_bucket == {"all": 0.0}
     assert report.trades_by_bucket == {"all": 0}
+
+
+def test_compute_performance_prefers_fill_cost_totals_when_fills_exist(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_004"
+    run_dir.mkdir()
+
+    _write_equity(run_dir / "equity.csv", [100.0, 110.0, 105.0])
+    _write_trades(
+        run_dir / "trades.csv",
+        [
+            {"pnl_net": 5.0, "fees_paid": 1.0, "pnl_price": 6.0},
+            {"pnl_net": -2.0, "fees_paid": 1.0, "pnl_price": -1.0},
+        ],
+    )
+    _write_fills(
+        run_dir / "fills.jsonl",
+        [
+            {"order_id": "a", "fee_cost": 2.0, "slippage_cost": 0.3, "spread_cost": 0.1},
+            {"order_id": "b", "fee_cost": 2.5, "slippage_cost": 0.4, "spread_cost": 0.2},
+        ],
+    )
+
+    report = compute_performance(run_dir)
+
+    assert report.fee_total == pytest.approx(4.5, rel=1e-9)
+    assert report.slippage_total == pytest.approx(0.7, rel=1e-9)
+    assert report.spread_total == pytest.approx(0.3, rel=1e-9)

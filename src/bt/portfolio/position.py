@@ -12,6 +12,15 @@ from bt.portfolio.constants import QTY_EPSILON
 
 
 class PositionBook:
+    _ENTRY_RISK_KEYS = {
+        "risk_amount",
+        "stop_distance",
+        "entry_stop_distance",
+        "entry_stop_price",
+        "stop_price",
+        "entry_qty",
+    }
+
     def __init__(self) -> None:
         self._positions: dict[str, Position] = {}
         self._position_costs: dict[str, tuple[float, float]] = {}
@@ -106,7 +115,10 @@ class PositionBook:
         if fill.qty > position.qty:
             trade_metadata = dict(self._position_metadata.get(fill.symbol, {}))
             if isinstance(fill.metadata, dict):
-                trade_metadata.update(fill.metadata)
+                self._merge_exit_metadata_preserving_entry_context(
+                    trade_metadata=trade_metadata,
+                    fill_metadata=fill.metadata,
+                )
             trade_metadata.update(self._export_path_state(fill.symbol))
             trade = self._build_trade(
                 position=position,
@@ -140,7 +152,10 @@ class PositionBook:
         elif remaining_qty == 0.0:
             trade_metadata = dict(self._position_metadata.get(fill.symbol, {}))
             if isinstance(fill.metadata, dict):
-                trade_metadata.update(fill.metadata)
+                self._merge_exit_metadata_preserving_entry_context(
+                    trade_metadata=trade_metadata,
+                    fill_metadata=fill.metadata,
+                )
             trade_metadata.update(self._export_path_state(fill.symbol))
             trade = self._build_trade(
                 position=position,
@@ -236,6 +251,17 @@ class PositionBook:
                 curr_loss_r = (adverse_price - entry_price) / stop_distance
                 state["max_unrealized_profit_r"] = max(float(state.get("max_unrealized_profit_r", 0.0)), curr_profit_r)
                 state["max_unrealized_loss_r"] = max(float(state.get("max_unrealized_loss_r", 0.0)), curr_loss_r)
+
+    @staticmethod
+    def _merge_exit_metadata_preserving_entry_context(
+        *,
+        trade_metadata: dict[str, object],
+        fill_metadata: dict[str, object],
+    ) -> None:
+        for key, value in fill_metadata.items():
+            if key in PositionBook._ENTRY_RISK_KEYS and key in trade_metadata:
+                continue
+            trade_metadata[key] = value
 
     @staticmethod
     def _init_path_state(position: Position, ts: pd.Timestamp) -> dict[str, object]:
@@ -362,9 +388,23 @@ class PositionBook:
         except (TypeError, ValueError):
             stop_distance = None
 
+        existing_risk_amount = extracted.get("risk_amount")
+        resolved_risk_amount: float | None = None
+        try:
+            if existing_risk_amount is not None:
+                parsed_risk = float(existing_risk_amount)
+                if parsed_risk > 0:
+                    resolved_risk_amount = parsed_risk
+        except (TypeError, ValueError):
+            resolved_risk_amount = None
+
         if stop_distance is not None and stop_distance > 0 and normalized_entry_qty > 0:
-            extracted["risk_amount"] = normalized_entry_qty * stop_distance
             extracted["entry_stop_distance"] = stop_distance
+            if resolved_risk_amount is None:
+                resolved_risk_amount = normalized_entry_qty * stop_distance
+
+        if resolved_risk_amount is not None:
+            extracted["risk_amount"] = resolved_risk_amount
         if "entry_stop_price" not in extracted and "stop_price" in extracted:
             extracted["entry_stop_price"] = extracted.get("stop_price")
 
