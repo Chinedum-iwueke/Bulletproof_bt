@@ -36,6 +36,7 @@ indicator_defaults:
   quantile_method: "deterministic_linear_interpolation_past_only"
 
 parameter_grid:
+  signal_timeframe: ["15m", "1h"]
   Wvov_hours: [24, 72]
   q_vov: [0.6, 0.7]
   z0: [0.8, 1.0]
