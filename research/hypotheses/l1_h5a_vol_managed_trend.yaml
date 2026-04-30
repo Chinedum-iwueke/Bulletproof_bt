@@ -20,6 +20,7 @@ indicator_defaults:
   sigma_reference_model: "rolling_median"
 
 parameter_grid:
+  signal_timeframe: ["15m", "1h"]
   vol_window_hours: [24, 72]
   s_max: [1.0, 1.5]
   s_min: [0.25, 0.5]
