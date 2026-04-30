@@ -955,6 +955,13 @@ class StrategyRobustnessLabService:
 
     def _records_from_trade_frame(self, trades: pd.DataFrame) -> list[NormalizedTradeRecord]:
         normalized = self._normalize_trades(trades)
+
+        def _safe_float(value: Any) -> float | None:
+            if pd.isna(value):
+                return None
+            parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+            return float(parsed) if pd.notna(parsed) else None
+
         records: list[NormalizedTradeRecord] = []
         for row in normalized.to_dict(orient="records"):
             records.append(
@@ -967,19 +974,19 @@ class StrategyRobustnessLabService:
                         if pd.notna(row.get("exit_ts"))
                         else None
                     ),
-                    entry_price=float(row["entry_price"]) if pd.notna(row.get("entry_price")) else None,
-                    exit_price=float(row["exit_price"]) if pd.notna(row.get("exit_price")) else None,
-                    quantity=float(row["quantity"]) if pd.notna(row.get("quantity")) else None,
-                    fees=float(row["fees_paid"]) if pd.notna(row.get("fees_paid")) else None,
-                    pnl=float(row["pnl_net"]) if pd.notna(row.get("pnl_net")) else None,
-                    gross_pnl=float(row["pnl_price"]) if pd.notna(row.get("pnl_price")) else None,
-                    slippage=float(row["slippage"]) if pd.notna(row.get("slippage")) else None,
-                    risk_amount=float(row["risk_amount"]) if pd.notna(row.get("risk_amount")) else None,
-                    stop_distance=float(row["stop_distance"]) if pd.notna(row.get("stop_distance")) else None,
-                    r_multiple_net=float(row["r_multiple_net"]) if pd.notna(row.get("r_multiple_net")) else None,
-                    r_multiple_gross=float(row["r_multiple_gross"]) if pd.notna(row.get("r_multiple_gross")) else None,
-                    mae=float(row["mae_price"]) if pd.notna(row.get("mae_price")) else None,
-                    mfe=float(row["mfe_price"]) if pd.notna(row.get("mfe_price")) else None,
+                    entry_price=_safe_float(row.get("entry_price")),
+                    exit_price=_safe_float(row.get("exit_price")),
+                    quantity=_safe_float(row.get("quantity")),
+                    fees=_safe_float(row.get("fees_paid")),
+                    pnl=_safe_float(row.get("pnl_net")),
+                    gross_pnl=_safe_float(row.get("pnl_price")),
+                    slippage=_safe_float(row.get("slippage")),
+                    risk_amount=_safe_float(row.get("risk_amount")),
+                    stop_distance=_safe_float(row.get("stop_distance")),
+                    r_multiple_net=_safe_float(row.get("r_multiple_net")),
+                    r_multiple_gross=_safe_float(row.get("r_multiple_gross")),
+                    mae=_safe_float(row.get("mae_price")),
+                    mfe=_safe_float(row.get("mfe_price")),
                     strategy_name=str(row["strategy_name"]) if pd.notna(row.get("strategy_name")) else None,
                     timeframe=str(row["timeframe"]) if pd.notna(row.get("timeframe")) else None,
                     market=str(row["market"]) if pd.notna(row.get("market")) else None,
