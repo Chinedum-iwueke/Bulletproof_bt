@@ -294,16 +294,25 @@ class TradesCsvWriter:
             return f"{value:.{FLOAT_DECIMALS_CSV}f}"
         return str(value)
 
+    def _coerce_float(self, value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if pd.notna(parsed) else None
+
     def write_trade(self, trade: Trade) -> None:
         """Append one trade row."""
         metadata = trade.metadata if isinstance(trade.metadata, dict) else {}
-        risk_amount = metadata.get("risk_amount")
-        stop_distance = metadata.get("stop_distance")
-        entry_qty = metadata.get("entry_qty", trade.qty)
-        entry_stop_distance = metadata.get("entry_stop_distance", stop_distance)
-        entry_stop_price = metadata.get("entry_stop_price")
-        path_favorable_price = metadata.get("path_favorable_price", trade.mfe_price)
-        path_adverse_price = metadata.get("path_adverse_price", trade.mae_price)
+        risk_amount = self._coerce_float(metadata.get("risk_amount"))
+        stop_distance = self._coerce_float(metadata.get("stop_distance"))
+        entry_qty = self._coerce_float(metadata.get("entry_qty", trade.qty))
+        entry_stop_distance = self._coerce_float(metadata.get("entry_stop_distance", stop_distance))
+        entry_stop_price = self._coerce_float(metadata.get("entry_stop_price"))
+        path_favorable_price = self._coerce_float(metadata.get("path_favorable_price", trade.mfe_price))
+        path_adverse_price = self._coerce_float(metadata.get("path_adverse_price", trade.mae_price))
 
         pnl_price = trade.pnl
         fees_paid = trade.fees
