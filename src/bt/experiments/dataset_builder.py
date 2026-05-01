@@ -764,18 +764,18 @@ def _enforce_contract_column_order(
         col for col in runs_df.columns if col.startswith("param_") and col not in RUN_DATASET_COLUMNS_V1
     )
     run_cols += [col for col in runs_df.columns if col not in run_cols]
-    for col in run_cols:
-        if col not in runs_df.columns:
-            runs_df[col] = None
+    missing_run_cols = {col: None for col in run_cols if col not in runs_df.columns}
+    if missing_run_cols:
+        runs_df = runs_df.assign(**missing_run_cols)
     runs_df = runs_df[run_cols]
 
     trade_cols = TRADES_DATASET_COLUMNS_V1 + TRADE_OPTIONAL_CONTEXT_COLUMNS + sorted(
         col for col in trades_df.columns if col.startswith("param_") and col not in TRADES_DATASET_COLUMNS_V1
     )
     trade_cols += [col for col in trades_df.columns if col not in trade_cols]
-    for col in trade_cols:
-        if col not in trades_df.columns:
-            trades_df[col] = None
+    missing_trade_cols = {col: None for col in trade_cols if col not in trades_df.columns}
+    if missing_trade_cols:
+        trades_df = trades_df.assign(**missing_trade_cols)
     trades_df = trades_df[trade_cols]
     return runs_df, trades_df
 
@@ -940,6 +940,28 @@ def extract_experiment_dataset(
         for col in frame.columns:
             if frame[col].dtype == "object":
                 frame[col] = frame[col].where(frame[col].notna(), None)
+
+    string_like_trade_cols = [
+        "symbol",
+        "run_id",
+        "trade_id",
+        "side",
+        "entry_time",
+        "exit_time",
+        "entry_reason",
+        "exit_reason",
+        "variant_id",
+        "parameter_set_id",
+        "hypothesis_id",
+        "dataset_tag",
+        "experiment_id",
+    ]
+    for col in string_like_trade_cols:
+        if col in trades_df.columns:
+            trades_df[col] = trades_df[col].astype("string")
+
+    if "symbol" in runs_df.columns:
+        runs_df["symbol"] = runs_df["symbol"].astype("string")
 
     runs_df.to_parquet(output_paths["runs_dataset"], index=False)
     trades_df.to_parquet(output_paths["trades_dataset"], index=False)
