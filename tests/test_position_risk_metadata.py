@@ -81,3 +81,24 @@ def test_risk_amount_falls_back_to_entry_qty_times_stop_distance_when_missing() 
     assert float(trade.metadata["entry_qty"]) == pytest.approx(2.0)
     assert float(trade.metadata["entry_stop_distance"]) == pytest.approx(25.0)
     assert float(trade.metadata["risk_amount"]) == pytest.approx(50.0)
+
+
+def test_entry_stop_distance_is_preserved_when_stop_distance_key_missing() -> None:
+    book = PositionBook()
+    open_fill = Fill(
+        order_id="o",
+        ts=pd.Timestamp("2024-01-01T00:00:00Z"),
+        symbol="AAA",
+        side=Side.BUY,
+        qty=1.0,
+        price=100.0,
+        fee=0.0,
+        slippage=0.0,
+        metadata={"entry_stop_distance": 12.5, "risk_amount": 125.0},
+    )
+    book.apply_fill(open_fill)
+    _, trade = book.apply_fill(_fill(ts="2024-01-01T00:30:00Z", side=Side.SELL, qty=1.0, price=101.0))
+
+    assert trade is not None
+    assert float(trade.metadata["entry_stop_distance"]) == pytest.approx(12.5)
+    assert float(trade.metadata["risk_amount"]) == pytest.approx(125.0)
