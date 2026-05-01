@@ -44,6 +44,15 @@ def test_summarize_r_empty_values_returns_none_metrics() -> None:
     assert summary.payoff_ratio_r is None
 
 
+
+
+def test_summarize_r_ignores_non_numeric_tokens() -> None:
+    summary = summarize_r([1.0, "{}", "bad", -0.5, None])
+
+    assert summary.n == 2
+    assert summary.ev_r == pytest.approx(0.25)
+    assert summary.win_rate == pytest.approx(0.5)
+
 def test_performance_json_includes_r_metrics_when_present(tmp_path: Path) -> None:
     run_dir = tmp_path / "run_r"
     run_dir.mkdir()
