@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -64,17 +65,23 @@ def _metrics(df: pd.DataFrame, bucket_name: str, key: str, min_trades: int) -> p
     return pd.DataFrame(rows)
 
 
-def run_structural_bucket_analysis(trades_df: pd.DataFrame, output_dir: Path, min_trades: int = 10) -> dict[str, Any]:
-    output_dir.mkdir(parents=True, exist_ok=True)
+@dataclass
+class StructuralBucketResult:
+    dataframe: pd.DataFrame
+    outputs: dict[str, Any]
+    missing_fields: dict[str, list[str]]
+
+
+def analyze_structural_buckets(trades_df: pd.DataFrame, min_trades: int = 10) -> StructuralBucketResult:
     df = trades_df.copy()
     missing: dict[str, list[str]] = {}
-    outputs: dict[str, str] = {}
+    outputs: dict[str, Any] = {}
 
     csi_col = "entry_state_csi_pctile" if "entry_state_csi_pctile" in df.columns else ("entry_state_csi_raw" if "entry_state_csi_raw" in df.columns else None)
     if csi_col:
         df["_csi_bucket"] = assign_bucket(df[csi_col], CSI_SPEC)
         out = _metrics(df.dropna(subset=["_csi_bucket"]), "csi", "_csi_bucket", min_trades)
-        p = output_dir / "ev_by_bucket_csi.csv"; out.to_csv(p, index=False); outputs["ev_by_bucket_csi"] = str(p)
+        outputs["ev_by_bucket_csi"] = out
     else:
         missing["csi"] = ["entry_state_csi_pctile", "entry_state_csi_raw"]
 
@@ -82,49 +89,62 @@ def run_structural_bucket_analysis(trades_df: pd.DataFrame, output_dir: Path, mi
     if vol_col:
         df["_vol_bucket"] = assign_bucket(df[vol_col], VOL_SPEC)
         out = _metrics(df.dropna(subset=["_vol_bucket"]), "vol", "_vol_bucket", min_trades)
-        p = output_dir / "ev_by_bucket_vol.csv"; out.to_csv(p, index=False); outputs["ev_by_bucket_vol"] = str(p)
+        outputs["ev_by_bucket_vol"] = out
     else:
         missing["vol"] = ["entry_state_vol_pctile", "entry_state_atr_pct_pctile"]
 
     if "entry_state_spread_proxy_pctile" in df.columns:
         df["_liquidity_bucket"] = assign_bucket(df["entry_state_spread_proxy_pctile"], LIQ_SPEC)
-        p = output_dir / "ev_by_bucket_liquidity.csv"; _metrics(df.dropna(subset=["_liquidity_bucket"]), "liquidity", "_liquidity_bucket", min_trades).to_csv(p, index=False); outputs["ev_by_bucket_liquidity"] = str(p)
+        outputs["ev_by_bucket_liquidity"] = _metrics(df.dropna(subset=["_liquidity_bucket"]), "liquidity", "_liquidity_bucket", min_trades)
     else:
         missing["liquidity"] = ["entry_state_spread_proxy_pctile"]
 
     if "entry_state_tr_over_atr" in df.columns:
         df["_disp_bucket"] = assign_bucket(df["entry_state_tr_over_atr"], DISP_SPEC)
-        p = output_dir / "ev_by_bucket_displacement.csv"; _metrics(df.dropna(subset=["_disp_bucket"]), "displacement", "_disp_bucket", min_trades).to_csv(p, index=False); outputs["ev_by_bucket_displacement"] = str(p)
+        outputs["ev_by_bucket_displacement"] = _metrics(df.dropna(subset=["_disp_bucket"]), "displacement", "_disp_bucket", min_trades)
     else:
         missing["displacement"] = ["entry_state_tr_over_atr"]
 
     setup_col = "entry_decision_setup_class" if "entry_decision_setup_class" in df.columns else ("label_structure_class" if "label_structure_class" in df.columns else None)
     if setup_col:
-        p = output_dir / "ev_by_bucket_setup_class.csv"; _metrics(df.dropna(subset=[setup_col]), "setup_class", setup_col, min_trades).to_csv(p, index=False); outputs["ev_by_bucket_setup_class"] = str(p)
+        outputs["ev_by_bucket_setup_class"] = _metrics(df.dropna(subset=[setup_col]), "setup_class", setup_col, min_trades)
     else:
         missing["setup_class"] = ["entry_decision_setup_class", "label_structure_class"]
 
     if {"_csi_bucket", "_vol_bucket"}.issubset(df.columns):
         df["_joint_csi_vol"] = df["_csi_bucket"].astype(str) + "__" + df["_vol_bucket"].astype(str)
-        p = output_dir / "ev_by_bucket_joint_csi_vol.csv"; _metrics(df.dropna(subset=["_joint_csi_vol"]), "joint_csi_vol", "_joint_csi_vol", min_trades).to_csv(p, index=False); outputs["ev_by_bucket_joint_csi_vol"] = str(p)
+        outputs["ev_by_bucket_joint_csi_vol"] = _metrics(df.dropna(subset=["_joint_csi_vol"]), "joint_csi_vol", "_joint_csi_vol", min_trades)
 
     if {"_csi_bucket", "_liquidity_bucket"}.issubset(df.columns):
         df["_joint_csi_liq"] = df["_csi_bucket"].astype(str) + "__" + df["_liquidity_bucket"].astype(str)
-        p = output_dir / "ev_by_bucket_joint_csi_liquidity.csv"; _metrics(df.dropna(subset=["_joint_csi_liq"]), "joint_csi_liquidity", "_joint_csi_liq", min_trades).to_csv(p, index=False); outputs["ev_by_bucket_joint_csi_liquidity"] = str(p)
+        outputs["ev_by_bucket_joint_csi_liquidity"] = _metrics(df.dropna(subset=["_joint_csi_liq"]), "joint_csi_liquidity", "_joint_csi_liq", min_trades)
 
     if {"_vol_bucket", "_liquidity_bucket"}.issubset(df.columns):
         df["_joint_vol_liq"] = df["_vol_bucket"].astype(str) + "__" + df["_liquidity_bucket"].astype(str)
-        p = output_dir / "ev_by_bucket_joint_vol_liquidity.csv"; _metrics(df.dropna(subset=["_joint_vol_liq"]), "joint_vol_liquidity", "_joint_vol_liq", min_trades).to_csv(p, index=False); outputs["ev_by_bucket_joint_vol_liquidity"] = str(p)
+        outputs["ev_by_bucket_joint_vol_liquidity"] = _metrics(df.dropna(subset=["_joint_vol_liq"]), "joint_vol_liquidity", "_joint_vol_liq", min_trades)
 
-    pd.DataFrame([{"bucket": "all", "bucket_key": "overall_all_trades", "n_trades": len(df), "ev_r_net": pd.to_numeric(df.get("r_net", df.get("realized_r_net", df.get("r_multiple_net"))), errors="coerce").mean()}]).to_csv(output_dir / "ev_by_bucket.csv", index=False)
-    outputs["ev_by_bucket"] = str(output_dir / "ev_by_bucket.csv")
-    (output_dir / "tail_by_bucket.csv").write_text("bucket,n_trades\n", encoding="utf-8")
-    (output_dir / "cost_by_bucket.csv").write_text("bucket,n_trades\n", encoding="utf-8")
-    (output_dir / "path_by_bucket.csv").write_text("bucket,n_trades\n", encoding="utf-8")
+    outputs["ev_by_bucket"] = pd.DataFrame([{"bucket": "all", "bucket_key": "overall_all_trades", "n_trades": len(df), "ev_r_net": pd.to_numeric(df.get("r_net", df.get("realized_r_net", df.get("r_multiple_net"))), errors="coerce").mean()}])
+    outputs["tail_by_bucket"] = pd.DataFrame([{"bucket": "all", "n_trades": len(df)}])
+    outputs["cost_by_bucket"] = pd.DataFrame([{"bucket": "all", "n_trades": len(df)}])
+    outputs["path_by_bucket"] = pd.DataFrame([{"bucket": "all", "n_trades": len(df)}])
+    return StructuralBucketResult(dataframe=df, outputs=outputs, missing_fields=missing)
 
-    if missing:
-        payload = {"missing": missing, "message": "Structural bucket analyses skipped due to missing columns."}
+
+def write_structural_bucket_artifacts(result: StructuralBucketResult, output_dir: Path) -> dict[str, Any]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_paths: dict[str, Any] = {}
+    for k, df in result.outputs.items():
+        p = output_dir / f"{k}.csv"
+        df.to_csv(p, index=False)
+        out_paths[k] = str(p)
+    if result.missing_fields:
+        payload = {"missing": result.missing_fields, "under_instrumented": True, "message": "Structural bucket analyses skipped due to missing columns."}
         path = output_dir / "ev_by_bucket_missing_fields.json"
         path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        outputs["ev_by_bucket_missing_fields"] = str(path)
-    return outputs
+        out_paths["ev_by_bucket_missing_fields"] = str(path)
+    return out_paths
+
+
+def run_structural_bucket_analysis(trades_df: pd.DataFrame, output_dir: Path, min_trades: int = 10) -> dict[str, Any]:
+    result = analyze_structural_buckets(trades_df, min_trades=min_trades)
+    return write_structural_bucket_artifacts(result, output_dir)
