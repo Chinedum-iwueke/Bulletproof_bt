@@ -25,7 +25,10 @@ def summarize_r(r_values: Iterable[Optional[float]]) -> RSummary:
     for value in r_values:
         if value is None:
             continue
-        numeric = float(value)
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
         if not math.isfinite(numeric):
             continue
         values.append(numeric)
