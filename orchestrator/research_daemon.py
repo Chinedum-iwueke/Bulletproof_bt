@@ -176,6 +176,22 @@ def run_pipeline_command(cmd: list[str], logger: logging.Logger) -> int:
     return process.wait()
 
 
+def fetch_latest_pipeline_failure(db: ResearchDB, *, name: str) -> dict[str, Any] | None:
+    row = db.connect().execute(
+        """
+        SELECT error_message, log_path, completed_at
+        FROM pipeline_runs
+        WHERE name = ?
+        ORDER BY completed_at DESC
+        LIMIT 1
+        """,
+        (name,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"error_message": row["error_message"], "log_path": row["log_path"], "completed_at": row["completed_at"]}
+
+
 def run_logged_command(cmd: list[str], logger: logging.Logger, prefix: str) -> int:
     logger.info("%s command: %s", prefix, " ".join(cmd))
     process = subprocess.Popen(
@@ -416,9 +432,15 @@ def main() -> int:
                     except Exception as interp_exc:
                         logger.exception("Interpreter exception for name=%s: %s", current_job_name, interp_exc)
             else:
-                error = f"pipeline failed with return code {return_code}"
+                failure_info = fetch_latest_pipeline_failure(db, name=current_job_name or "")
+                compact = failure_info["error_message"] if failure_info and failure_info.get("error_message") else f"pipeline failed with return code {return_code}"
+                log_path_hint = failure_info.get("log_path") if failure_info else None
+                error = f"{compact}; return_code={return_code}; pipeline_log={log_path_hint}"
                 db.mark_queue_failed(current_queue_id, error)
-                logger.error("Queue item FAILED id=%s name=%s error=%s", current_queue_id, current_job_name, error)
+                logger.error(
+                    "Queue item FAILED id=%s name=%s return_code=%s pipeline_log=%s error=%s",
+                    current_queue_id, current_job_name, return_code, log_path_hint, compact
+                )
 
             current_queue_id = None
             current_job_name = None
