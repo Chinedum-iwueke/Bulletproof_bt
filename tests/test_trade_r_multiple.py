@@ -133,3 +133,35 @@ def test_trades_csv_supports_distinct_entry_qty_and_exit_qty_for_partial_close(t
     assert float(row["entry_qty"]) == 1.0
     assert float(row["exit_qty"]) == 0.4
     assert float(row["r_multiple_gross"]) == pytest.approx(2.0 / 50.0)
+
+
+def test_trades_csv_computes_path_r_with_entry_stop_distance_only(tmp_path: Path) -> None:
+    path = tmp_path / "trades.csv"
+    writer = TradesCsvWriter(path)
+
+    trade = Trade(
+        symbol="BTC",
+        side=Side.BUY,
+        entry_ts=pd.Timestamp("2024-01-01T00:00:00Z"),
+        exit_ts=pd.Timestamp("2024-01-01T01:00:00Z"),
+        entry_price=100.0,
+        exit_price=104.0,
+        qty=2.0,
+        pnl=8.0,
+        fees=1.0,
+        slippage=0.0,
+        mae_price=98.0,
+        mfe_price=106.0,
+        metadata={"risk_amount": 25.0, "entry_stop_distance": 5.0},
+    )
+    writer.write_trade(trade)
+    writer.close()
+
+    with path.open(encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert float(row["entry_stop_distance"]) == pytest.approx(5.0)
+    assert float(row["mfe_r"]) == pytest.approx((106.0 - 100.0) / 5.0)
+    assert float(row["mae_r"]) == pytest.approx((100.0 - 98.0) / 5.0)
+    assert float(row["r_multiple_gross"]) == pytest.approx(8.0 / 25.0)
+    assert float(row["r_multiple_net"]) == pytest.approx((8.0 - 1.0) / 25.0)
