@@ -24,7 +24,6 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import subprocess
 import sys
 from typing import Any
 
@@ -33,6 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from orchestrator.db import ResearchDB
+from orchestrator.process_logging import CommandRunResult, PipelineCommandError, run_pipeline_command
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,6 +68,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-cleanup-delete-logs", action="store_true", default=False)
     parser.add_argument("--dry-run", action="store_true", default=False)
     parser.add_argument("--research-db", default=None, help="Optional SQLite DB path for lifecycle tracking.")
+    parser.add_argument("--failure-tail-lines", type=int, default=120)
+    parser.add_argument("--command-log-dir", default=None)
+    parser.add_argument("--no-command-log-capture", action="store_true", default=False)
     return parser.parse_args()
 
 
@@ -82,24 +85,35 @@ def run_command(
     dry_run: bool,
     log_path: Path,
     commands_log: list[dict[str, Any]],
+    command_log_dir: Path | None,
+    failure_tail_lines: int,
+    capture_logs: bool,
 ) -> None:
     printable = " ".join(cmd)
     print(f"$ {printable}")
-    with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(f"[{utc_now_iso()}] STEP={step}\n")
-        fh.write(f"CMD: {printable}\n")
 
-    commands_log.append({"step": step, "cmd": cmd})
-
-    if dry_run:
-        with log_path.open("a", encoding="utf-8") as fh:
-            fh.write("STATUS: DRY_RUN_SKIPPED\n\n")
-        return
-
-    subprocess.run(cmd, check=True)
-
-    with log_path.open("a", encoding="utf-8") as fh:
-        fh.write("STATUS: SUCCESS\n\n")
+    result = run_pipeline_command(
+        cmd=cmd,
+        step=step,
+        cwd=PROJECT_ROOT,
+        log_path=log_path,
+        command_log_dir=command_log_dir,
+        sequence_num=len(commands_log) + 1,
+        dry_run=dry_run,
+        capture_logs=capture_logs,
+        failure_tail_lines=failure_tail_lines,
+    )
+    commands_log.append({
+        "step": result.step,
+        "cmd": result.cmd,
+        "returncode": result.returncode,
+        "cwd": result.cwd,
+        "stdout_log": result.stdout_log,
+        "stderr_log": result.stderr_log,
+        "started_at": result.started_at,
+        "completed_at": result.completed_at,
+        "root_cause_hint": result.root_cause_hint,
+    })
 
 
 def build_manifest(
@@ -112,6 +126,9 @@ def build_manifest(
     log_path: Path,
     commands_log: list[dict[str, Any]],
     step: str,
+    command_log_dir: Path | None,
+    failure_tail_lines: int,
+    capture_logs: bool,
 ) -> None:
     cmd = [
         sys.executable,
@@ -123,7 +140,7 @@ def build_manifest(
         "--phase",
         phase,
     ]
-    run_command(cmd, step=step, dry_run=dry_run, log_path=log_path, commands_log=commands_log)
+    run_command(cmd, step=step, dry_run=dry_run, log_path=log_path, commands_log=commands_log, command_log_dir=command_log_dir, failure_tail_lines=failure_tail_lines, capture_logs=capture_logs)
 
 
 def discover_manifest(experiment_root: Path) -> Path:
@@ -156,6 +173,9 @@ def run_backtest(
     log_path: Path,
     commands_log: list[dict[str, Any]],
     step: str,
+    command_log_dir: Path | None,
+    failure_tail_lines: int,
+    capture_logs: bool,
 ) -> None:
     cmd = [
         sys.executable,
@@ -176,7 +196,7 @@ def run_backtest(
         str(max_workers),
         "--skip-completed",
     ]
-    run_command(cmd, step=step, dry_run=dry_run, log_path=log_path, commands_log=commands_log)
+    run_command(cmd, step=step, dry_run=dry_run, log_path=log_path, commands_log=commands_log, command_log_dir=command_log_dir, failure_tail_lines=failure_tail_lines, capture_logs=capture_logs)
 
 
 def run_post_analysis(
@@ -187,6 +207,9 @@ def run_post_analysis(
     log_path: Path,
     commands_log: list[dict[str, Any]],
     step: str,
+    command_log_dir: Path | None,
+    failure_tail_lines: int,
+    capture_logs: bool,
 ) -> None:
     cmd = [
         sys.executable,
@@ -197,7 +220,7 @@ def run_post_analysis(
         "runs/*",
         "--skip-existing",
     ]
-    run_command(cmd, step=step, dry_run=dry_run, log_path=log_path, commands_log=commands_log)
+    run_command(cmd, step=step, dry_run=dry_run, log_path=log_path, commands_log=commands_log, command_log_dir=command_log_dir, failure_tail_lines=failure_tail_lines, capture_logs=capture_logs)
 
 
 def extract_dataset(
@@ -208,6 +231,9 @@ def extract_dataset(
     log_path: Path,
     commands_log: list[dict[str, Any]],
     step: str,
+    command_log_dir: Path | None,
+    failure_tail_lines: int,
+    capture_logs: bool,
 ) -> None:
     cmd = [
         sys.executable,
@@ -218,7 +244,7 @@ def extract_dataset(
         "runs/*",
         "--skip-existing",
     ]
-    run_command(cmd, step=step, dry_run=dry_run, log_path=log_path, commands_log=commands_log)
+    run_command(cmd, step=step, dry_run=dry_run, log_path=log_path, commands_log=commands_log, command_log_dir=command_log_dir, failure_tail_lines=failure_tail_lines, capture_logs=capture_logs)
 
 
 def cleanup_experiment(
@@ -234,6 +260,9 @@ def cleanup_experiment(
     log_path: Path,
     commands_log: list[dict[str, Any]],
     step: str,
+    command_log_dir: Path | None,
+    failure_tail_lines: int,
+    capture_logs: bool,
 ) -> None:
     cmd = [
         sys.executable,
@@ -254,7 +283,7 @@ def cleanup_experiment(
     if delete_nonretained_runs:
         cmd.append("--delete-nonretained-runs")
 
-    run_command(cmd, step=step, dry_run=dry_run, log_path=log_path, commands_log=commands_log)
+    run_command(cmd, step=step, dry_run=dry_run, log_path=log_path, commands_log=commands_log, command_log_dir=command_log_dir, failure_tail_lines=failure_tail_lines, capture_logs=capture_logs)
 
 
 def collect_summary_files(experiment_root: Path) -> list[str]:
@@ -437,6 +466,9 @@ def main() -> int:
     volatile_root.mkdir(parents=True, exist_ok=True)
 
     log_path = outputs_root / f"{args.name}_pipeline.log"
+    capture_command_logs = not args.no_command_log_capture
+    command_log_dir = Path(args.command_log_dir) if args.command_log_dir else outputs_root / f"{args.name}_command_logs"
+    command_manifest_path = command_log_dir / "command_log_manifest.json"
     commands_log: list[dict[str, Any]] = []
     log_path.write_text(f"Pipeline start: {utc_now_iso()}\n", encoding="utf-8")
 
@@ -524,6 +556,9 @@ def main() -> int:
             log_path=log_path,
             commands_log=commands_log,
             step="build_manifest_stable",
+            command_log_dir=command_log_dir,
+            failure_tail_lines=args.failure_tail_lines,
+            capture_logs=capture_command_logs,
         )
 
         print("[2/8] Building volatile manifest")
@@ -536,6 +571,9 @@ def main() -> int:
             log_path=log_path,
             commands_log=commands_log,
             step="build_manifest_volatile",
+            command_log_dir=command_log_dir,
+            failure_tail_lines=args.failure_tail_lines,
+            capture_logs=capture_command_logs,
         )
 
         stable_manifest = discover_manifest(stable_root)
@@ -578,6 +616,9 @@ def main() -> int:
                 log_path=log_path,
                 commands_log=commands_log,
                 step="run_backtest_stable",
+                command_log_dir=command_log_dir,
+                failure_tail_lines=args.failure_tail_lines,
+                capture_logs=capture_command_logs,
             )
 
             print("[4/8] Running volatile backtest")
@@ -594,6 +635,9 @@ def main() -> int:
                 log_path=log_path,
                 commands_log=commands_log,
                 step="run_backtest_volatile",
+                command_log_dir=command_log_dir,
+                failure_tail_lines=args.failure_tail_lines,
+                capture_logs=capture_command_logs,
             )
             if db is not None:
                 if stable_experiment_id:
@@ -614,6 +658,9 @@ def main() -> int:
                 log_path=log_path,
                 commands_log=commands_log,
                 step="post_analysis_stable",
+                command_log_dir=command_log_dir,
+                failure_tail_lines=args.failure_tail_lines,
+                capture_logs=capture_command_logs,
             )
             run_post_analysis(
                 experiment_root=volatile_root,
@@ -622,6 +669,9 @@ def main() -> int:
                 log_path=log_path,
                 commands_log=commands_log,
                 step="post_analysis_volatile",
+                command_log_dir=command_log_dir,
+                failure_tail_lines=args.failure_tail_lines,
+                capture_logs=capture_command_logs,
             )
             if db is not None:
                 if stable_experiment_id:
@@ -666,6 +716,9 @@ def main() -> int:
                 log_path=log_path,
                 commands_log=commands_log,
                 step="extract_dataset_stable",
+                command_log_dir=command_log_dir,
+                failure_tail_lines=args.failure_tail_lines,
+                capture_logs=capture_command_logs,
             )
             extract_dataset(
                 experiment_root=volatile_root,
@@ -674,6 +727,9 @@ def main() -> int:
                 log_path=log_path,
                 commands_log=commands_log,
                 step="extract_dataset_volatile",
+                command_log_dir=command_log_dir,
+                failure_tail_lines=args.failure_tail_lines,
+                capture_logs=capture_command_logs,
             )
             if db is not None:
                 if stable_experiment_id:
@@ -720,6 +776,9 @@ def main() -> int:
                 log_path=log_path,
                 commands_log=commands_log,
                 step="cleanup_stable",
+                command_log_dir=command_log_dir,
+                failure_tail_lines=args.failure_tail_lines,
+                capture_logs=capture_command_logs,
             )
             cleanup_experiment(
                 experiment_root=volatile_root,
@@ -733,6 +792,9 @@ def main() -> int:
                 log_path=log_path,
                 commands_log=commands_log,
                 step="cleanup_volatile",
+                command_log_dir=command_log_dir,
+                failure_tail_lines=args.failure_tail_lines,
+                capture_logs=capture_command_logs,
             )
             cleanup_ran = True
             if db is not None:
@@ -777,12 +839,33 @@ def main() -> int:
         print(f"Done. Verdict bundle: {bundle_dir}")
         return 0
     except Exception as exc:
+        if isinstance(exc, PipelineCommandError):
+            with log_path.open("a", encoding="utf-8") as fh:
+                fh.write(exc.to_failure_block() + "\n")
+            for artifact_type, path in (("command_stdout_log", exc.stdout_path), ("command_stderr_log", exc.stderr_path)):
+                if path:
+                    db_register_artifact(
+                        db,
+                        artifact_type=artifact_type,
+                        path=Path(path),
+                        hypothesis_id=hypothesis_id,
+                        pipeline_run_id=pipeline_run_id,
+                        metadata={
+                            "step": exc.step,
+                            "command": exc.cmd,
+                            "returncode": exc.returncode,
+                            "root_cause_hint": exc.root_cause_hint,
+                        },
+                    )
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(f"Pipeline end: {utc_now_iso()}\n")
             fh.write("FINAL_STATUS: FAILURE\n")
             fh.write(f"ERROR: {exc}\n")
+        command_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        command_manifest_path.write_text(json.dumps(commands_log, indent=2), encoding="utf-8")
         if db is not None and pipeline_run_id is not None:
-            db.fail_pipeline_run(pipeline_run_id, str(exc), commands=commands_log)
+            error_message = exc.compact_message() if isinstance(exc, PipelineCommandError) else str(exc)
+            db.fail_pipeline_run(pipeline_run_id, error_message, commands=commands_log)
             if stable_experiment_id:
                 db.update_experiment_status(stable_experiment_id, "FAILED")
             if volatile_experiment_id:
@@ -790,6 +873,9 @@ def main() -> int:
             print("[db] Updated status: FAILED")
         raise
     finally:
+        if commands_log:
+            command_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            command_manifest_path.write_text(json.dumps(commands_log, indent=2), encoding="utf-8")
         if db is not None:
             db.close()
 
