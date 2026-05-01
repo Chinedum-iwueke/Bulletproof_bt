@@ -10,6 +10,8 @@ from typing import Any
 class DatasetBundle:
     summary_rows: list[dict[str, Any]]
     summary_path: Path | None
+    structural_summary_rows: list[dict[str, Any]]
+    structural_summary_path: Path | None
     strategy_summary_paths: list[Path]
     runs_dataset_path: Path | None
     trades_dataset_path: Path | None
@@ -56,6 +58,7 @@ def _try_read_parquet(path: Path | None) -> tuple[list[dict[str, Any]], bool]:
 def _collect_bundle(experiment_root: Path) -> tuple[DatasetBundle, bool]:
     summaries_dir = experiment_root / "summaries"
     summary_path = summaries_dir / "run_summary.csv"
+    structural_summary_path = summaries_dir / "run_structural_summary.csv"
     strategy_paths = sorted(
         p
         for p in summaries_dir.glob("*.csv")
@@ -72,6 +75,8 @@ def _collect_bundle(experiment_root: Path) -> tuple[DatasetBundle, bool]:
     bundle = DatasetBundle(
         summary_rows=_read_csv_rows(summary_path),
         summary_path=summary_path if summary_path.exists() else None,
+        structural_summary_rows=_read_csv_rows(structural_summary_path),
+        structural_summary_path=structural_summary_path if structural_summary_path.exists() else None,
         strategy_summary_paths=strategy_paths,
         runs_dataset_path=runs_dataset_path if runs_dataset_path.exists() else None,
         trades_dataset_path=trades_dataset_path if trades_dataset_path.exists() else None,

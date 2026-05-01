@@ -41,6 +41,11 @@ def load_candidates(args: Any) -> list[dict]:
         if verdict in allowed or (args.include_inconclusive and "INCONCLUSIVE" in str(verdict)):
             verdict_names.add(name)
     for summary in outputs_root.glob("*/summaries/run_summary.csv"):
+        structural_index = {}
+        structural_path = summary.parent / "run_structural_summary.csv"
+        if structural_path.exists():
+            for sr in _read_csv(structural_path):
+                structural_index[str(sr.get("run_id"))] = sr
         root = summary.parents[1]
         name = root.name
         if args.name and args.name not in name:
@@ -55,13 +60,14 @@ def load_candidates(args: Any) -> list[dict]:
                 continue
             run_id = row.get("run_id") or row.get("run") or f"run_{len(candidates)}"
             cid = hashlib.md5(f"{name}:{run_id}".encode()).hexdigest()[:16]
+            structural = structural_index.get(str(run_id), {})
             candidates.append({
                 "identity": {"candidate_id": cid, "hypothesis_id": None, "hypothesis_name": name, "hypothesis_family": row.get("family"), "layer": row.get("layer"), "run_id": run_id, "config_hash": row.get("config_hash"), "parameter_set_id": row.get("parameter_set_id"), "dataset_type": row.get("dataset_type"), "experiment_root": str(root), "manifest_path": None, "source_verdict_path": None, "created_at": datetime.now(timezone.utc).isoformat()},
                 "performance": {k: _f(row.get(k)) for k in ["ev_r_net","ev_r_gross","win_rate","avg_r_win","avg_r_loss","payoff_ratio","max_drawdown","max_drawdown_duration","median_r","p95_r","p99_r","max_r","min_r"]} | {"n_trades": n_trades},
                 "tail": {k: _f(row.get(k)) for k in ["tail_2r_count","tail_3r_count","tail_5r_count","tail_10r_count","tail_2r_rate","tail_3r_rate","tail_5r_rate","tail_10r_rate","avg_mfe_r","avg_mae_r","exit_efficiency"]},
                 "cost": {k: _f(row.get(k)) for k in ["avg_cost_drag_r","avg_fee_drag_r","avg_slippage_drag_r","avg_spread_drag_r","gross_to_net_drag"]},
-                "state_profile": {},
-                "zoo_metadata": {"candidate_status": "CANDIDATE"},
+                "state_profile": {"structural_summary_path": structural.get("structural_summary_path"), "best_bucket": structural.get("best_bucket"), "best_bucket_ev_r_net": _f(structural.get("best_bucket_ev_r_net")), "best_bucket_n_trades": _f(structural.get("best_bucket_n_trades"))},
+                "zoo_metadata": {"candidate_status": "CANDIDATE", "ready_for_tier3_candidate": structural.get("ready_for_tier3_candidate"), "needs_state_filter": structural.get("needs_state_filter"), "needs_exit_refinement": structural.get("needs_exit_refinement"), "cost_fragile": structural.get("cost_fragile"), "one_bucket_dependency": structural.get("one_bucket_dependency")},
             })
     return candidates
 

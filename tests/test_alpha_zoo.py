@@ -75,3 +75,12 @@ def test_write_db_and_approval_queue(tmp_path: Path):
     con=sqlite3.connect(db)
     assert con.execute("select count(*) from alpha_candidates").fetchone()[0]==1
     assert con.execute("select count(*) from queues where queue_name='approval_queue' and status='WAITING_FOR_APPROVAL'").fetchone()[0]==1
+
+
+def test_loader_reads_structural_summary(tmp_path: Path):
+    _write_summary(tmp_path/"outputs", "h1", [{"run_id":"r1","ev_r_net":0.1,"n_trades":60}])
+    sp=tmp_path/"outputs"/"h1"/"summaries"/"run_structural_summary.csv"
+    sp.write_text("run_id,best_bucket,best_bucket_ev_r_net,ready_for_tier3_candidate\nr1,csi_high,0.2,True\n", encoding="utf-8")
+    a=_args(tmp_path); (tmp_path/"verdicts").mkdir()
+    c=load_candidates(a)
+    assert c[0]["state_profile"]["best_bucket"]=="csi_high"
