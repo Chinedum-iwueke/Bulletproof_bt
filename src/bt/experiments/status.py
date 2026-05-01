@@ -20,6 +20,7 @@ STATUS_COLUMNS = [
     "duration_sec",
     "output_dir",
     "error_message",
+    "traceback",
 ]
 
 

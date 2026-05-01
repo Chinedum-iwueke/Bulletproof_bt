@@ -33,6 +33,16 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _read_worker_traceback(run_dir: Path) -> str:
+    path = run_dir / "worker_exception.txt"
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def _slug_value(value: Any) -> str:
     if isinstance(value, bool):
         return "t" if value else "f"
@@ -403,6 +413,7 @@ def run_hypothesis_manifest_in_parallel(
                 "duration_sec": "",
                 "output_dir": row["output_dir"],
                 "error_message": "disabled in manifest",
+                "traceback": "",
             })
             continue
         if skip_completed and completed_state.state == "SUCCESS":
@@ -417,6 +428,7 @@ def run_hypothesis_manifest_in_parallel(
                 "duration_sec": "",
                 "output_dir": row["output_dir"],
                 "error_message": "already completed",
+                "traceback": "",
             })
             continue
         launch_rows.append(row)
@@ -437,6 +449,7 @@ def run_hypothesis_manifest_in_parallel(
                     "duration_sec": "",
                     "output_dir": row["output_dir"],
                     "error_message": "",
+                "traceback": "",
                 }
             )
     else:
@@ -492,6 +505,7 @@ def run_hypothesis_manifest_in_parallel(
                             "duration_sec": "",
                             "output_dir": row["output_dir"],
                             "error_message": "",
+                "traceback": "",
                         }
                     )
 
@@ -526,6 +540,7 @@ def run_hypothesis_manifest_in_parallel(
                             "duration_sec": f"{duration:.3f}",
                             "output_dir": row["output_dir"],
                             "error_message": error_message or artifact_state.message,
+                            "traceback": _read_worker_traceback(experiment_root / row["output_dir"]) if status == "FAILED" else "",
                         }
                     )
                     if status == "FAILED":
@@ -534,6 +549,7 @@ def run_hypothesis_manifest_in_parallel(
                                 **{k: v for k, v in context.items() if k != "started_clock"},
                                 "failed_at": ended_at,
                                 "error_message": error_message or artifact_state.message,
+                                "traceback": _read_worker_traceback(experiment_root / row["output_dir"]),
                             }
                         )
                     write_status_csv(experiment_root / "summaries" / "manifest_status.csv", sorted(status_rows, key=lambda x: x["row_id"]))
