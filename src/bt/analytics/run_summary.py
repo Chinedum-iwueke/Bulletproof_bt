@@ -250,7 +250,13 @@ def _compute_trade_diagnostics(trades_df: pd.DataFrame, *, status: str, run_dir:
     mfe_r = pd.to_numeric(trades_df["mfe_r"], errors="coerce")
     mae_r = pd.to_numeric(trades_df["mae_r"], errors="coerce")
     if status == "SUCCESS" and ((mfe_r.notna().sum() == 0) or (mae_r.notna().sum() == 0)):
-        raise ValueError(f"completed run has closed trades but null mfe_r/mae_r diagnostics: run_dir={run_dir}")
+        return {
+            "diag_status": "missing_path_metrics",
+            "num_trades": int(trades_df.shape[0]),
+            "mfe_mean_r": None,
+            "mae_mean_r": None,
+            "vwap_touch_rate": None,
+        }
 
     realized_r = pd.to_numeric(
         trades_df.get("realized_r_net", trades_df.get("r_multiple_net", pd.Series(index=trades_df.index))),
