@@ -396,7 +396,7 @@ class PositionBook:
 
         normalized_entry_qty = abs(float(entry_qty))
         extracted["entry_qty"] = normalized_entry_qty
-        extracted["entry_stop_distance"] = extracted.get("stop_distance")
+        extracted["entry_stop_distance"] = extracted.get("entry_stop_distance", extracted.get("stop_distance"))
 
         stop_distance_raw = extracted.get("entry_stop_distance")
         try:
