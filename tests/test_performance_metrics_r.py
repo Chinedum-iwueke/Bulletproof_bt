@@ -119,3 +119,29 @@ def test_performance_json_legacy_run_without_r_fields_is_resilient(tmp_path: Pat
     ]:
         assert key in payload
         assert payload[key] is None
+
+
+def test_performance_prefers_derived_r_when_reported_r_is_inconsistent(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_inconsistent_r"
+    run_dir.mkdir()
+
+    _write_equity(run_dir / "equity.csv", [100.0, 98.0, 96.0])
+    _write_trades(
+        run_dir / "trades.csv",
+        [
+            {"pnl_net": -2.0, "risk_amount": 1.0, "r_multiple_net": 9999.0},
+            {"pnl_net": -1.0, "risk_amount": 1.0, "r_multiple_net": 8888.0},
+        ],
+    )
+
+    report = compute_performance(run_dir)
+    write_performance_artifacts(report, run_dir)
+    payload = json.loads((run_dir / "performance.json").read_text(encoding="utf-8"))
+
+    # Derived truth should be [-2.0, -1.0], not the corrupted reported values.
+    assert payload["ev_r_net"] == pytest.approx(-1.5)
+    assert payload["win_rate_r"] == pytest.approx(0.0)
+    assert payload["avg_r_win"] is None
+    assert payload["avg_r_loss"] == pytest.approx(-1.5)
+    notes = payload.get("extra", {}).get("notes", [])
+    assert any("r_multiple_net: reported_values_inconsistent_with_pnl_and_risk_amount_using_derived" in note for note in notes)

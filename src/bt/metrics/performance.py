@@ -64,6 +64,35 @@ def _coerce_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").fillna(0.0)
 
 
+def _resolve_r_multiple_series(
+    trades_df: pd.DataFrame,
+    *,
+    pnl_net: pd.Series,
+    field: str,
+    extra: dict[str, Any],
+) -> pd.Series:
+    reported = pd.to_numeric(trades_df.get(field, pd.Series(index=trades_df.index)), errors="coerce")
+    if "risk_amount" not in trades_df.columns:
+        return reported
+
+    risk_amount = pd.to_numeric(trades_df.get("risk_amount"), errors="coerce")
+    derived = pnl_net / risk_amount.where(risk_amount > 0)
+    reported_valid = reported.replace([np.inf, -np.inf], np.nan).notna().sum()
+    derived_valid = derived.replace([np.inf, -np.inf], np.nan).notna().sum()
+
+    if reported_valid == 0 and derived_valid > 0:
+        _append_note(extra, f"{field}: fallback_to_derived_from_pnl_net_over_risk_amount")
+        return derived
+
+    overlap = reported.notna() & derived.notna()
+    if overlap.any():
+        delta = (reported[overlap] - derived[overlap]).abs()
+        if float(delta.median()) > 1e-6:
+            _append_note(extra, f"{field}: reported_values_inconsistent_with_pnl_and_risk_amount_using_derived")
+            return derived
+    return reported
+
+
 def _sum_costs(df: pd.DataFrame, *, preferred: str, fallbacks: list[str]) -> pd.Series:
     if preferred in df.columns:
         return _coerce_numeric(df[preferred])
@@ -645,10 +674,15 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
 
     ev_by_bucket, trades_by_bucket = _bucket_metrics(pnl_net, bucket_series)
 
-    r_net_summary = summarize_r(trades_df.get("r_multiple_net", pd.Series(index=trades_df.index)))
-    r_gross_summary = summarize_r(
-        trades_df.get("r_multiple_gross", pd.Series(index=trades_df.index))
+    r_net_series = _resolve_r_multiple_series(
+        trades_df,
+        pnl_net=pnl_net,
+        field="r_multiple_net",
+        extra=extra,
     )
+    r_gross_series = pd.to_numeric(trades_df.get("r_multiple_gross", pd.Series(index=trades_df.index)), errors="coerce")
+    r_net_summary = summarize_r(r_net_series)
+    r_gross_summary = summarize_r(r_gross_series)
 
     trade_returns_df, trade_returns, _, _ = _compute_trade_returns(trades_df)
     trade_returns = trade_returns.dropna()

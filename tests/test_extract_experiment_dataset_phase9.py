@@ -40,7 +40,20 @@ def test_extract_preserves_phase9_columns(tmp_path: Path) -> None:
                 "path_mfe_r": 1.2,
                 "counterfactual_hold_3bars_r": 0.3,
                 "label_profitable_after_costs": True,
-            }
+            },
+            {
+                "entry_ts": "2024-01-01T00:30:00Z",
+                "exit_ts": "2024-01-01T00:45:00Z",
+                "symbol": 123,
+                "side": "BUY",
+                "qty": 1,
+                "entry_price": 100,
+                "exit_price": 102,
+                "pnl": 2,
+                "pnl_price": 2,
+                "pnl_net": 2,
+                "r_multiple_net": 1.0,
+            },
         ]
     )
     trades.to_csv(run / "trades.csv", index=False)
@@ -54,3 +67,7 @@ def test_extract_preserves_phase9_columns(tmp_path: Path) -> None:
     assert "path_mfe_r" in out.columns
     assert "counterfactual_hold_3bars_r" in out.columns
     assert "label_profitable_after_costs" in out.columns
+
+
+    assert out["symbol"].dtype.name in {"string", "string[python]"}
+    assert set(out["symbol"].dropna().astype(str)) >= {"BTCUSDT", "123"}
