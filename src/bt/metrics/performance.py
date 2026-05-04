@@ -60,8 +60,9 @@ class PerformanceReport:
     extra: Dict[str, Any]
 
 
-def _coerce_numeric(series: pd.Series) -> pd.Series:
-    return pd.to_numeric(series, errors="coerce").fillna(0.0)
+def _coerce_numeric(series: pd.Series, *, fillna_zero: bool = True) -> pd.Series:
+    out = pd.to_numeric(series, errors="coerce")
+    return out.fillna(0.0) if fillna_zero else out
 
 
 def _resolve_r_multiple_series(
@@ -199,7 +200,7 @@ def compute_cost_attribution(
     pnl_price = float(pnl_price_series.sum())
 
     if "pnl_net" in trades_df.columns:
-        net_pnl = float(_coerce_numeric(trades_df["pnl_net"]).sum())
+        net_pnl = float(_coerce_numeric(trades_df["pnl_net"], fillna_zero=False).sum(min_count=1))
     else:
         net_pnl = float(pnl_price - fee_total)
 
@@ -633,15 +634,15 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
         raise ValueError("Trades must include pnl_price/pnl or pnl_net column")
 
     if "pnl_net" in trades_df.columns:
-        pnl_net = _coerce_numeric(trades_df["pnl_net"])
+        pnl_net = _coerce_numeric(trades_df["pnl_net"], fillna_zero=False)
     else:
         pnl_net = pnl_price - fees
 
-    ev_net = float(pnl_net.mean())
+    ev_net = float(pnl_net.dropna().mean()) if pnl_net.dropna().shape[0] else 0.0
     ev_gross = float(pnl_price.mean())
-    win_rate = float((pnl_net > 0).mean())
+    win_rate = float((pnl_net.dropna() > 0).mean()) if pnl_net.dropna().shape[0] else 0.0
 
-    loss_values = -pnl_net[pnl_net < 0]
+    loss_values = -pnl_net.dropna()[pnl_net.dropna() < 0]
     if loss_values.empty:
         tail_loss_p95 = 0.0
         tail_loss_p99 = 0.0

@@ -11,6 +11,7 @@ if str(SRC_ROOT) not in sys.path:
 from bt.analytics.postmortem import run_postmortem_for_experiment
 from bt.analytics.run_summary import summarize_experiment_runs
 from bt.analysis.ev_by_bucket import analyze_structural_buckets, write_structural_bucket_artifacts
+from orchestrator.forensics.audit_run_metrics import audit_run
 
 def build_parser() -> argparse.ArgumentParser:
     p=argparse.ArgumentParser()
@@ -86,6 +87,20 @@ def main()->None:
         summary_json.write_text(json.dumps(payload,indent=2),encoding='utf-8')
         (analysis/"structural_diagnostics_summary.md").write_text(f"# Structural Diagnostics for {run_dir.name}\n\n## Overall Performance\n\n{json.dumps(payload['overall'],indent=2)}\n\n## Best Buckets\n\n{len(payload['best_buckets'])} buckets\n\n## Weak / Avoid Buckets\n\n{len(payload['worst_buckets'])} buckets\n\n## Tail Generation\n\n{len(payload['tail_generation_buckets'])} buckets\n\n## Cost Drag\n\n{len(payload['cost_killed_buckets'])} buckets\n\n## Exit Efficiency\n\n{len(payload['exit_failure_buckets'])} buckets\n\n## Schema Coverage\n\n{payload['missing_fields']}\n\n## Recommendation Flags\n\n{payload['recommendation_flags']}\n",encoding='utf-8')
         (analysis/"performance_by_bucket.csv").write_text((analysis/"ev_by_bucket.csv").read_text(encoding='utf-8'),encoding='utf-8')
+        validation=audit_run(run_dir)
+        (analysis/'performance_validation.json').write_text(json.dumps(validation,indent=2),encoding='utf-8')
+        (analysis/'performance_validation.md').write_text(f"# Performance Validation {run_dir.name}\n\nStatus: **{validation['status']}**\n\n```json\n{json.dumps(validation,indent=2)}\n```\n",encoding='utf-8')
+        perf_path=run_dir/'performance.json'
+        if perf_path.exists():
+            try:
+                perf=json.loads(perf_path.read_text(encoding='utf-8'))
+                perf['metrics_valid']=bool(validation.get('metrics_valid',False))
+                if not perf['metrics_valid']:
+                    perf['metric_validation_errors']=validation.get('errors',[])
+                    perf['metric_validation_report']='analysis/performance_validation.json'
+                perf_path.write_text(json.dumps(perf,indent=2),encoding='utf-8')
+            except Exception:
+                pass
         run_rows.append({"run_id":run_dir.name,"n_trades":payload['n_trades'],"ev_r_net":payload['overall']['ev_r_net'],"best_bucket_type":payload['best_buckets'][0]['bucket'] if payload['best_buckets'] else None,"best_bucket":payload['best_buckets'][0]['bucket_key'] if payload['best_buckets'] else None,"best_bucket_ev_r_net":payload['best_buckets'][0].get('ev_r_net') if payload['best_buckets'] else None,"best_bucket_n_trades":payload['best_buckets'][0].get('n_trades') if payload['best_buckets'] else None,"worst_bucket_type":payload['worst_buckets'][0]['bucket'] if payload['worst_buckets'] else None,"worst_bucket":payload['worst_buckets'][0]['bucket_key'] if payload['worst_buckets'] else None,"worst_bucket_ev_r_net":payload['worst_buckets'][0].get('ev_r_net') if payload['worst_buckets'] else None,"tail_bucket_type":payload['tail_generation_buckets'][0]['bucket'] if payload['tail_generation_buckets'] else None,"tail_bucket":payload['tail_generation_buckets'][0]['bucket_key'] if payload['tail_generation_buckets'] else None,"tail_5r_count":payload['tail_generation_buckets'][0].get('tail_5r_count') if payload['tail_generation_buckets'] else 0,"avg_exit_efficiency":payload['overall']['avg_exit_efficiency'],"avg_cost_drag_r":payload['overall']['avg_cost_drag_r'],**payload['recommendation_flags'],"structural_summary_path":str(summary_json)})
     if run_rows: pd.DataFrame(run_rows).to_csv(root/"summaries"/"run_structural_summary.csv", index=False)
 

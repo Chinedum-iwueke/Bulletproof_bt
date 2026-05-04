@@ -1,0 +1,14 @@
+{
+  "source": "src/bt/metrics/performance.py",
+  "metrics": {
+    "initial_equity": "equity.csv:equality first row",
+    "final_equity": "equity.csv:equality last row",
+    "net_pnl": "trades.csv:pnl_net sum via compute_cost_attribution",
+    "gross_pnl": "trades.csv:pnl_price|pnl|pnl_net+fees",
+    "ev_r_net": "trades.csv:r_multiple_net -> summarize_r.mean",
+    "win_rate_r": "trades.csv:r_multiple_net -> summarize_r.win_rate",
+    "ev_by_bucket": "trades.csv pnl buckets (_bucket_metrics)",
+    "performance_by_bucket_csv": "write_performance_artifacts rows(report.ev_by_bucket)"
+  },
+  "root_cause": "zero-fill coercion of malformed pnl/r fields made contradictory metrics look valid"
+}
