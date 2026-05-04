@@ -64,6 +64,35 @@ def _coerce_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").fillna(0.0)
 
 
+def _resolve_r_multiple_series(
+    trades_df: pd.DataFrame,
+    *,
+    pnl_net: pd.Series,
+    field: str,
+    extra: dict[str, Any],
+) -> pd.Series:
+    reported = pd.to_numeric(trades_df.get(field, pd.Series(index=trades_df.index)), errors="coerce")
+    if "risk_amount" not in trades_df.columns:
+        return reported
+
+    risk_amount = pd.to_numeric(trades_df.get("risk_amount"), errors="coerce")
+    derived = pnl_net / risk_amount.where(risk_amount > 0)
+    reported_valid = reported.replace([np.inf, -np.inf], np.nan).notna().sum()
+    derived_valid = derived.replace([np.inf, -np.inf], np.nan).notna().sum()
+
+    if reported_valid == 0 and derived_valid > 0:
+        _append_note(extra, f"{field}: fallback_to_derived_from_pnl_net_over_risk_amount")
+        return derived
+
+    overlap = reported.notna() & derived.notna()
+    if overlap.any():
+        delta = (reported[overlap] - derived[overlap]).abs()
+        if float(delta.median()) > 1e-6:
+            _append_note(extra, f"{field}: reported_values_inconsistent_with_pnl_and_risk_amount_using_derived")
+            return derived
+    return reported
+
+
 def _sum_costs(df: pd.DataFrame, *, preferred: str, fallbacks: list[str]) -> pd.Series:
     if preferred in df.columns:
         return _coerce_numeric(df[preferred])
@@ -645,10 +674,15 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
 
     ev_by_bucket, trades_by_bucket = _bucket_metrics(pnl_net, bucket_series)
 
-    r_net_summary = summarize_r(trades_df.get("r_multiple_net", pd.Series(index=trades_df.index)))
-    r_gross_summary = summarize_r(
-        trades_df.get("r_multiple_gross", pd.Series(index=trades_df.index))
+    r_net_series = _resolve_r_multiple_series(
+        trades_df,
+        pnl_net=pnl_net,
+        field="r_multiple_net",
+        extra=extra,
     )
+    r_gross_series = pd.to_numeric(trades_df.get("r_multiple_gross", pd.Series(index=trades_df.index)), errors="coerce")
+    r_net_summary = summarize_r(r_net_series)
+    r_gross_summary = summarize_r(r_gross_series)
 
     trade_returns_df, trade_returns, _, _ = _compute_trade_returns(trades_df)
     trade_returns = trade_returns.dropna()
@@ -701,6 +735,73 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
     )
 
 
+
+
+def _validate_performance_metrics(performance_payload: dict[str, Any], trades_df: pd.DataFrame) -> dict[str, Any]:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    initial_equity = float(performance_payload.get("initial_equity", 0.0) or 0.0)
+    final_equity = float(performance_payload.get("final_equity", 0.0) or 0.0)
+    net_pnl = float(performance_payload.get("net_pnl", 0.0) or 0.0)
+    gross_pnl = float(performance_payload.get("gross_pnl", 0.0) or 0.0)
+
+    equity_delta = final_equity - initial_equity
+    total_costs = float(performance_payload.get("fee_total", 0.0) or 0.0) + float(performance_payload.get("slippage_total", 0.0) or 0.0) + float(performance_payload.get("spread_total", 0.0) or 0.0)
+
+    if abs(net_pnl - equity_delta) > 1e-6:
+        errors.append(f"net_pnl_mismatch_with_equity_delta: net_pnl={net_pnl} equity_delta={equity_delta}")
+    if abs(net_pnl - (gross_pnl - total_costs)) > 1e-6:
+        errors.append(f"net_pnl_mismatch_with_gross_minus_costs: net_pnl={net_pnl} gross_minus_costs={gross_pnl-total_costs}")
+
+    r_net = pd.to_numeric(trades_df.get("r_net", trades_df.get("r_multiple_net", pd.Series(index=trades_df.index))), errors="coerce")
+    if "risk_amount" in trades_df.columns:
+        risk_amount = pd.to_numeric(trades_df.get("risk_amount"), errors="coerce")
+        invalid_risk = risk_amount.isna() | (risk_amount <= 0)
+        if invalid_risk.any() and r_net[invalid_risk].notna().any():
+            errors.append("r_net_present_when_risk_amount_missing_or_nonpositive")
+
+    valid_r = r_net.dropna()
+    if not valid_r.empty:
+        ev_r_expected = float(valid_r.mean())
+        win_rate_r_expected = float((valid_r > 0).mean())
+        avg_r_win_expected = float(valid_r[valid_r > 0].mean()) if (valid_r > 0).any() else None
+        avg_r_loss_expected = float(valid_r[valid_r < 0].mean()) if (valid_r < 0).any() else None
+
+        def _chk(name, got, exp):
+            if exp is None and got is None:
+                return
+            if exp is None and got is not None:
+                errors.append(f"{name}_expected_null_got={got}")
+                return
+            if exp is not None and got is None:
+                errors.append(f"{name}_expected={exp}_got_null")
+                return
+            if abs(float(got) - float(exp)) > 1e-6:
+                errors.append(f"{name}_mismatch: got={got} expected={exp}")
+
+        _chk("ev_r_net", performance_payload.get("ev_r_net"), ev_r_expected)
+        _chk("win_rate_r", performance_payload.get("win_rate_r"), win_rate_r_expected)
+        _chk("avg_r_win", performance_payload.get("avg_r_win"), avg_r_win_expected)
+        _chk("avg_r_loss", performance_payload.get("avg_r_loss"), avg_r_loss_expected)
+
+        ev_by_bucket_all = performance_payload.get("ev_by_bucket", {}).get("all") if isinstance(performance_payload.get("ev_by_bucket"), dict) else None
+        if ev_by_bucket_all is not None and abs(float(ev_by_bucket_all) - ev_r_expected) > 1e-6:
+            warnings.append("ev_by_bucket_all_uses_pnl_metric_not_r_metric")
+
+    return {
+        "passed": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+        "reconciliation": {
+            "final_equity_minus_initial": equity_delta,
+            "net_pnl": net_pnl,
+            "gross_pnl": gross_pnl,
+            "total_costs": total_costs,
+            "gross_minus_costs": gross_pnl - total_costs,
+        },
+    }
+
 def write_performance_artifacts(report: PerformanceReport, run_dir: str | Path) -> None:
     """
     Write:
@@ -729,7 +830,11 @@ def write_performance_artifacts(report: PerformanceReport, run_dir: str | Path) 
         equity_df = pd.DataFrame()
     performance_payload["margin"] = _compute_margin_summary(equity_df)
 
+    validation_payload = _validate_performance_metrics(performance_payload, trades_df=pd.read_csv(run_path / "trades.csv") if (run_path / "trades.csv").exists() else pd.DataFrame())
+    performance_payload["metrics_valid"] = bool(validation_payload.get("passed", False))
+
     write_json_deterministic(performance_path, performance_payload)
+    write_json_deterministic(run_path / "performance_validation.json", validation_payload)
     write_cost_breakdown_json(run_path, performance_payload)
 
     rows = []

@@ -7,6 +7,12 @@ def apply_promotion_rules(candidates: list[dict], min_trades: int = 50) -> list[
         if z.get("candidate_status") == "REDUNDANT":
             continue
         p, t = c.get("performance", {}), c.get("tail", {})
+        if p.get("metrics_valid") is False:
+            z["candidate_status"] = "REFINE"
+            z["recommended_action"] = "REFINE"
+            notes = z.get("notes") or ""
+            z["notes"] = (notes + "; " if notes else "") + "metrics_valid=false"
+            continue
         ev = p.get("ev_r_net") or 0
         n = p.get("n_trades") or 0
         net_killed = (p.get("ev_r_gross") or 0) > 0 and ev <= 0

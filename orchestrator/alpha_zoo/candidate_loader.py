@@ -61,9 +61,16 @@ def load_candidates(args: Any) -> list[dict]:
             run_id = row.get("run_id") or row.get("run") or f"run_{len(candidates)}"
             cid = hashlib.md5(f"{name}:{run_id}".encode()).hexdigest()[:16]
             structural = structural_index.get(str(run_id), {})
+            run_perf_path = root / "runs" / str(run_id) / "performance.json"
+            metrics_valid = None
+            if run_perf_path.exists():
+                try:
+                    metrics_valid = bool(json.loads(run_perf_path.read_text(encoding="utf-8")).get("metrics_valid", True))
+                except Exception:
+                    metrics_valid = None
             candidates.append({
                 "identity": {"candidate_id": cid, "hypothesis_id": None, "hypothesis_name": name, "hypothesis_family": row.get("family"), "layer": row.get("layer"), "run_id": run_id, "config_hash": row.get("config_hash"), "parameter_set_id": row.get("parameter_set_id"), "dataset_type": row.get("dataset_type"), "experiment_root": str(root), "manifest_path": None, "source_verdict_path": None, "created_at": datetime.now(timezone.utc).isoformat()},
-                "performance": {k: _f(row.get(k)) for k in ["ev_r_net","ev_r_gross","win_rate","avg_r_win","avg_r_loss","payoff_ratio","max_drawdown","max_drawdown_duration","median_r","p95_r","p99_r","max_r","min_r"]} | {"n_trades": n_trades},
+                "performance": {k: _f(row.get(k)) for k in ["ev_r_net","ev_r_gross","win_rate","avg_r_win","avg_r_loss","payoff_ratio","max_drawdown","max_drawdown_duration","median_r","p95_r","p99_r","max_r","min_r"]} | {"n_trades": n_trades, "metrics_valid": metrics_valid},
                 "tail": {k: _f(row.get(k)) for k in ["tail_2r_count","tail_3r_count","tail_5r_count","tail_10r_count","tail_2r_rate","tail_3r_rate","tail_5r_rate","tail_10r_rate","avg_mfe_r","avg_mae_r","exit_efficiency"]},
                 "cost": {k: _f(row.get(k)) for k in ["avg_cost_drag_r","avg_fee_drag_r","avg_slippage_drag_r","avg_spread_drag_r","gross_to_net_drag"]},
                 "state_profile": {"structural_summary_path": structural.get("structural_summary_path"), "best_bucket": structural.get("best_bucket"), "best_bucket_ev_r_net": _f(structural.get("best_bucket_ev_r_net")), "best_bucket_n_trades": _f(structural.get("best_bucket_n_trades"))},
