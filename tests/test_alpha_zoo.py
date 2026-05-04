@@ -84,3 +84,9 @@ def test_loader_reads_structural_summary(tmp_path: Path):
     a=_args(tmp_path); (tmp_path/"verdicts").mkdir()
     c=load_candidates(a)
     assert c[0]["state_profile"]["best_bucket"]=="csi_high"
+
+
+def test_metrics_invalid_candidate_not_promoted() -> None:
+    cs=[{"identity":{},"performance":{"ev_r_gross":0.2,"ev_r_net":0.1,"n_trades":120,"metrics_valid":False},"tail":{},"state_profile":{},"zoo_metadata":{}}]
+    out=apply_promotion_rules(cs, min_trades=50)
+    assert out[0]["zoo_metadata"]["candidate_status"]=="REFINE"

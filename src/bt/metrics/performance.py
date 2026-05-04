@@ -735,6 +735,73 @@ def compute_performance(run_dir: str | Path) -> PerformanceReport:
     )
 
 
+
+
+def _validate_performance_metrics(performance_payload: dict[str, Any], trades_df: pd.DataFrame) -> dict[str, Any]:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    initial_equity = float(performance_payload.get("initial_equity", 0.0) or 0.0)
+    final_equity = float(performance_payload.get("final_equity", 0.0) or 0.0)
+    net_pnl = float(performance_payload.get("net_pnl", 0.0) or 0.0)
+    gross_pnl = float(performance_payload.get("gross_pnl", 0.0) or 0.0)
+
+    equity_delta = final_equity - initial_equity
+    total_costs = float(performance_payload.get("fee_total", 0.0) or 0.0) + float(performance_payload.get("slippage_total", 0.0) or 0.0) + float(performance_payload.get("spread_total", 0.0) or 0.0)
+
+    if abs(net_pnl - equity_delta) > 1e-6:
+        errors.append(f"net_pnl_mismatch_with_equity_delta: net_pnl={net_pnl} equity_delta={equity_delta}")
+    if abs(net_pnl - (gross_pnl - total_costs)) > 1e-6:
+        errors.append(f"net_pnl_mismatch_with_gross_minus_costs: net_pnl={net_pnl} gross_minus_costs={gross_pnl-total_costs}")
+
+    r_net = pd.to_numeric(trades_df.get("r_net", trades_df.get("r_multiple_net", pd.Series(index=trades_df.index))), errors="coerce")
+    if "risk_amount" in trades_df.columns:
+        risk_amount = pd.to_numeric(trades_df.get("risk_amount"), errors="coerce")
+        invalid_risk = risk_amount.isna() | (risk_amount <= 0)
+        if invalid_risk.any() and r_net[invalid_risk].notna().any():
+            errors.append("r_net_present_when_risk_amount_missing_or_nonpositive")
+
+    valid_r = r_net.dropna()
+    if not valid_r.empty:
+        ev_r_expected = float(valid_r.mean())
+        win_rate_r_expected = float((valid_r > 0).mean())
+        avg_r_win_expected = float(valid_r[valid_r > 0].mean()) if (valid_r > 0).any() else None
+        avg_r_loss_expected = float(valid_r[valid_r < 0].mean()) if (valid_r < 0).any() else None
+
+        def _chk(name, got, exp):
+            if exp is None and got is None:
+                return
+            if exp is None and got is not None:
+                errors.append(f"{name}_expected_null_got={got}")
+                return
+            if exp is not None and got is None:
+                errors.append(f"{name}_expected={exp}_got_null")
+                return
+            if abs(float(got) - float(exp)) > 1e-6:
+                errors.append(f"{name}_mismatch: got={got} expected={exp}")
+
+        _chk("ev_r_net", performance_payload.get("ev_r_net"), ev_r_expected)
+        _chk("win_rate_r", performance_payload.get("win_rate_r"), win_rate_r_expected)
+        _chk("avg_r_win", performance_payload.get("avg_r_win"), avg_r_win_expected)
+        _chk("avg_r_loss", performance_payload.get("avg_r_loss"), avg_r_loss_expected)
+
+        ev_by_bucket_all = performance_payload.get("ev_by_bucket", {}).get("all") if isinstance(performance_payload.get("ev_by_bucket"), dict) else None
+        if ev_by_bucket_all is not None and abs(float(ev_by_bucket_all) - ev_r_expected) > 1e-6:
+            warnings.append("ev_by_bucket_all_uses_pnl_metric_not_r_metric")
+
+    return {
+        "passed": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+        "reconciliation": {
+            "final_equity_minus_initial": equity_delta,
+            "net_pnl": net_pnl,
+            "gross_pnl": gross_pnl,
+            "total_costs": total_costs,
+            "gross_minus_costs": gross_pnl - total_costs,
+        },
+    }
+
 def write_performance_artifacts(report: PerformanceReport, run_dir: str | Path) -> None:
     """
     Write:
@@ -763,7 +830,11 @@ def write_performance_artifacts(report: PerformanceReport, run_dir: str | Path) 
         equity_df = pd.DataFrame()
     performance_payload["margin"] = _compute_margin_summary(equity_df)
 
+    validation_payload = _validate_performance_metrics(performance_payload, trades_df=pd.read_csv(run_path / "trades.csv") if (run_path / "trades.csv").exists() else pd.DataFrame())
+    performance_payload["metrics_valid"] = bool(validation_payload.get("passed", False))
+
     write_json_deterministic(performance_path, performance_payload)
+    write_json_deterministic(run_path / "performance_validation.json", validation_payload)
     write_cost_breakdown_json(run_path, performance_payload)
 
     rows = []

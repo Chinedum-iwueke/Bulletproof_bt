@@ -145,3 +145,24 @@ def test_performance_prefers_derived_r_when_reported_r_is_inconsistent(tmp_path:
     assert payload["avg_r_loss"] == pytest.approx(-1.5)
     notes = payload.get("extra", {}).get("notes", [])
     assert any("r_multiple_net: reported_values_inconsistent_with_pnl_and_risk_amount_using_derived" in note for note in notes)
+
+
+def test_performance_writes_validation_and_marks_invalid_when_reconciliation_fails(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_invalid"
+    run_dir.mkdir()
+
+    # Equity implies negative net pnl, while trade rows are zeroed -> reconciliation should fail.
+    pd.DataFrame({"equity": [100000.0, 79217.0]}).to_csv(run_dir / "equity.csv", index=False)
+    _write_trades(
+        run_dir / "trades.csv",
+        [{"pnl_net": 0.0, "pnl_price": 5.0, "fees_paid": 10.0, "slippage": 5.0, "spread_cost": 2.0, "risk_amount": 0.0, "r_net": 999.0}],
+    )
+
+    report = compute_performance(run_dir)
+    write_performance_artifacts(report, run_dir)
+
+    perf = json.loads((run_dir / "performance.json").read_text(encoding="utf-8"))
+    validation = json.loads((run_dir / "performance_validation.json").read_text(encoding="utf-8"))
+    assert perf["metrics_valid"] is False
+    assert validation["passed"] is False
+    assert validation["errors"]
