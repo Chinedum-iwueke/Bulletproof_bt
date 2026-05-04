@@ -28,7 +28,7 @@ include_state_discovery_in_verdict: true
 default_llm_provider: ollama
 default_interpreter_model: qwen2.5:14b
 default_ollama_url: http://127.0.0.1:11434/api/generate
-default_llm_timeout_seconds: 600
+default_llm_timeout_seconds: 1800
 default_num_ctx: 8192
 default_temperature: 0.1
 verdict_output_dir: research/verdicts

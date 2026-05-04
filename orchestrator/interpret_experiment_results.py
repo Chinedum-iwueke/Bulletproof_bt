@@ -124,7 +124,7 @@ def _state_discovery_summary(args: argparse.Namespace) -> dict[str, Any] | None:
     existing_json = [p for p in json_paths if p.exists()]
     existing_md = [p for p in md_paths if p.exists()]
     if not existing_json and not existing_md:
-        return None
+        return {"state_discovery_available": False}
 
     findings: list[dict[str, Any]] = []
     missing_fields: list[dict[str, Any]] = []
@@ -279,7 +279,7 @@ def main() -> int:
         "state_discovery_dir": args.state_discovery_dir,
     }
     state_discovery_summary = _state_discovery_summary(args)
-    if state_discovery_summary:
+    if state_discovery_summary and state_discovery_summary.get("state_discovery_available"):
         input_files["state_discovery_sources"] = {
             "json_paths": state_discovery_summary["source_json_paths"],
             "md_paths": state_discovery_summary["source_md_paths"],
@@ -296,8 +296,7 @@ def main() -> int:
         max_top_runs=args.max_top_runs,
         max_bottom_runs=args.max_bottom_runs,
     )
-    if state_discovery_summary:
-        packet["state_discovery_summary"] = state_discovery_summary
+    packet["state_discovery_summary"] = state_discovery_summary
     prompt = (
         build_llm_prompt(packet)
         + "\n\nReturn only valid JSON. Do not include markdown. Do not include commentary."
@@ -310,32 +309,42 @@ def main() -> int:
     final_verdict["llm_model"] = args.model
     final_verdict["llm_used"] = False
     final_verdict["llm_parse_error"] = False
+    final_verdict["verdict_source"] = "rule_based_fallback"
 
     raw_llm_output: str | None = None
     if not args.no_llm and not args.packet_only and args.llm_provider != "none":
-        llm_result = call_llm_json(
-            provider=args.llm_provider,
-            model=args.model,
-            prompt=prompt,
-            temperature=args.temperature,
-            max_output_tokens=args.max_output_tokens,
-            api_key_env=args.api_key_env,
-            ollama_url=args.ollama_url,
-            timeout_seconds=args.llm_timeout_seconds,
-            num_ctx=args.num_ctx,
-        )
-        raw_llm_output = llm_result.get("raw")
-        parsed = llm_result.get("parsed", {})
-        if isinstance(parsed, dict) and _validate_verdict(parsed, preliminary["allowed_verdicts"]):
-            final_verdict.update(parsed)
-            final_verdict["llm_used"] = True
-        else:
-            final_verdict["llm_parse_error"] = True
-            if raw_llm_output:
-                raw_output_path = output_dir / f"{args.name}_llm_raw_response.txt"
-                raw_output_path.write_text(raw_llm_output, encoding="utf-8")
+        try:
+            llm_result = call_llm_json(
+                provider=args.llm_provider,
+                model=args.model,
+                prompt=prompt,
+                temperature=args.temperature,
+                max_output_tokens=args.max_output_tokens,
+                api_key_env=args.api_key_env,
+                ollama_url=args.ollama_url,
+                timeout_seconds=args.llm_timeout_seconds,
+                num_ctx=args.num_ctx,
+            )
+            raw_llm_output = llm_result.get("raw")
+            parsed = llm_result.get("parsed", {})
+            if isinstance(parsed, dict) and _validate_verdict(parsed, preliminary["allowed_verdicts"]):
+                final_verdict.update(parsed)
+                final_verdict["llm_used"] = True
+                final_verdict["verdict_source"] = "llm"
+            else:
+                final_verdict["llm_parse_error"] = True
+                if raw_llm_output:
+                    raw_output_path = output_dir / f"{args.name}_llm_raw_response.txt"
+                    raw_output_path.write_text(raw_llm_output, encoding="utf-8")
+        except Exception as exc:
+            llm_error = str(exc)
+            (output_dir / f"{args.name}_llm_error.txt").write_text(llm_error, encoding="utf-8")
+            final_verdict["llm_used"] = False
+            final_verdict["verdict_source"] = "rule_based_fallback"
+            final_verdict["llm_error"] = llm_error
     elif args.llm_provider == "none":
         final_verdict["llm_provider"] = "none"
+        final_verdict["verdict_source"] = "rule_based_fallback"
 
     verdict_json_path = output_dir / f"{args.name}_verdict.json"
     verdict_md_path = output_dir / f"{args.name}_verdict.md"
@@ -345,6 +354,7 @@ def main() -> int:
 
     if args.packet_only:
         final_verdict["summary"] = "Packet-only mode enabled; no verdict inference executed."
+        final_verdict["verdict_source"] = "rule_based_fallback"
 
     _write_json(verdict_json_path, final_verdict)
     write_markdown_verdict(verdict_md_path, final_verdict, packet)

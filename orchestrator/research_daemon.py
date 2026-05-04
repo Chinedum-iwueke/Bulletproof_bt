@@ -21,6 +21,7 @@ import sys
 import time
 from typing import Any
 from uuid import uuid4
+import shlex
 
 import yaml
 
@@ -29,6 +30,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from orchestrator.db import ResearchDB
+from orchestrator.process_logging import PipelineCommandError, run_pipeline_command as run_logged_pipeline_command
 
 REQUIRED_PAYLOAD_KEYS = {"hypothesis", "name"}
 
@@ -161,19 +163,8 @@ def build_pipeline_command(db_path: Path, merged_payload: dict[str, Any]) -> lis
     return cmd
 
 
-def run_pipeline_command(cmd: list[str], logger: logging.Logger) -> int:
-    logger.info("Pipeline command: %s", " ".join(cmd))
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    assert process.stdout is not None
-    for line in process.stdout:
-        logger.info("[pipeline] %s", line.rstrip("\n"))
-    return process.wait()
+def _daemon_command_log_dir(queue_id: str, name: str, outputs_root: str) -> Path:
+    return Path("logs/daemon_command_logs") / f"{queue_id}_{name}"
 
 
 def fetch_latest_pipeline_failure(db: ResearchDB, *, name: str) -> dict[str, Any] | None:
@@ -192,19 +183,27 @@ def fetch_latest_pipeline_failure(db: ResearchDB, *, name: str) -> dict[str, Any
     return {"error_message": row["error_message"], "log_path": row["log_path"], "completed_at": row["completed_at"]}
 
 
-def run_logged_command(cmd: list[str], logger: logging.Logger, prefix: str) -> int:
-    logger.info("%s command: %s", prefix, " ".join(cmd))
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
+def _log_daemon_failure(logger: logging.Logger, *, stage: str, queue_id: str, name: str, exc: PipelineCommandError) -> None:
+    logger.error(
+        "\n%s\nDAEMON SUBPROCESS FAILED\nStage: %s\nQueue ID: %s\nJob name: %s\nExit code: %s\nCommand:\n  %s\nSTDOUT log:\n  %s\nSTDERR log:\n  %s\n\nSTDOUT tail:\n%s\n\nSTDERR tail:\n%s\n\nRoot-cause hint:\n  %s\n%s",
+        "=" * 80, stage, queue_id, name, exc.returncode, shlex.join(exc.cmd), exc.stdout_path or "", exc.stderr_path or "", exc.stdout_tail, exc.stderr_tail, exc.root_cause_hint or "No automatic hint detected.", "=" * 80,
     )
-    assert process.stdout is not None
-    for line in process.stdout:
-        logger.info("[%s] %s", prefix.lower(), line.rstrip("\n"))
-    return process.wait()
+
+
+def _run_daemon_stage(*, cmd: list[str], stage: str, seq: int, logger: logging.Logger, queue_id: str, name: str, command_log_dir: Path, db: ResearchDB | None = None, artifact_types: tuple[str, str] | None = None) -> tuple[int, dict[str, str] | None]:
+    logger.info("\n%s\nPOST-PIPELINE AGENT STARTED\nStage: %s\nJob name: %s\nCommand:\n%s\n%s", "=" * 80, stage, name, shlex.join(cmd), "=" * 80)
+    started = time.time()
+    try:
+        result = run_logged_pipeline_command(cmd=cmd, step=stage, cwd=PROJECT_ROOT, log_path=Path("logs/research_daemon.log"), command_log_dir=command_log_dir, sequence_num=seq, dry_run=False, capture_logs=True)
+        artifacts = {"stdout": result.stdout_log or "", "stderr": result.stderr_log or ""}
+        logger.info("\n%s\nPOST-PIPELINE AGENT COMPLETED\nStage: %s\nJob name: %s\nDuration seconds: %.2f\nArtifacts:\n%s\n%s", "=" * 80, stage, name, time.time() - started, json.dumps(artifacts, indent=2), "=" * 80)
+        if db and artifact_types:
+            db.register_artifact(artifact_type=artifact_types[0], path=Path(artifacts["stdout"]), description=f"daemon {stage} stdout")
+            db.register_artifact(artifact_type=artifact_types[1], path=Path(artifacts["stderr"]), description=f"daemon {stage} stderr")
+        return 0, artifacts
+    except PipelineCommandError as exc:
+        _log_daemon_failure(logger, stage=stage, queue_id=queue_id, name=name, exc=exc)
+        return exc.returncode, {"stdout": exc.stdout_path or "", "stderr": exc.stderr_path or "", "root_cause_hint": exc.root_cause_hint or ""}
 
 
 def write_heartbeat(
@@ -406,31 +405,47 @@ def main() -> int:
             )
 
             cmd = build_pipeline_command(Path(args.db), merged_payload)
-            return_code = run_pipeline_command(cmd, logger)
+            command_log_dir = _daemon_command_log_dir(current_queue_id, current_job_name, str(merged_payload.get("outputs_root", "outputs")))
+            post_agent_warnings: list[dict[str, Any]] = []
+            return_code, _ = _run_daemon_stage(
+                cmd=cmd,
+                stage="pipeline",
+                seq=1,
+                logger=logger,
+                queue_id=current_queue_id,
+                name=current_job_name,
+                command_log_dir=command_log_dir,
+                db=db,
+                artifact_types=("daemon_pipeline_stdout_log", "daemon_pipeline_stderr_log"),
+            )
             if return_code == 0:
                 db.mark_queue_done(current_queue_id)
                 logger.info("Queue item DONE id=%s name=%s", current_queue_id, current_job_name)
                 run_state_discovery = bool(config.get("run_state_discovery_after_pipeline", True))
                 if run_state_discovery:
-                    for mode in ("stable", "vol", "combined"):
-                        try:
-                            sd_cmd = build_state_discovery_command(Path(args.db), merged_payload, config, mode=mode)
-                            sd_code = run_logged_command(sd_cmd, logger, f"STATE_DISCOVERY_{mode.upper()}")
-                            if sd_code != 0:
-                                logger.error("State discovery (%s) failed for name=%s with return code=%s", mode, current_job_name, sd_code)
-                        except Exception as sd_exc:
-                            logger.exception("State discovery (%s) exception for name=%s: %s", mode, current_job_name, sd_exc)
+                    sd_cmd = build_state_discovery_command(Path(args.db), merged_payload, config, mode="combined")
+                    sd_code, sd_art = _run_daemon_stage(cmd=sd_cmd, stage="state_discovery", seq=2, logger=logger, queue_id=current_queue_id, name=current_job_name, command_log_dir=command_log_dir, db=db, artifact_types=("daemon_state_discovery_stdout_log", "daemon_state_discovery_stderr_log"))
+                    if sd_code != 0:
+                        warning = {"stage": "state_discovery", "returncode": sd_code, **(sd_art or {})}
+                        post_agent_warnings.append(warning)
+                        if sd_art:
+                            db.register_artifact(artifact_type="state_discovery_error", path=Path(sd_art.get("stderr") or sd_art.get("stdout") or "logs/research_daemon.log"), description="state discovery error", metadata={"queue_id": current_queue_id, "name": current_job_name, "returncode": sd_code, "root_cause_hint": sd_art.get("root_cause_hint"), "stdout_log": sd_art.get("stdout"), "stderr_log": sd_art.get("stderr")})
 
                 run_interp = bool(config.get("run_interpretation_after_pipeline", True))
                 interp_after_sd = bool(config.get("interpretation_after_state_discovery", True))
                 if run_interp and (interp_after_sd or not run_state_discovery):
                     try:
                         interp_cmd = build_interpret_command(Path(args.db), merged_payload, config)
-                        interp_code = run_logged_command(interp_cmd, logger, "INTERPRETER")
+                        interp_code, interp_art = _run_daemon_stage(cmd=interp_cmd, stage="interpreter", seq=3, logger=logger, queue_id=current_queue_id, name=current_job_name, command_log_dir=command_log_dir, db=db, artifact_types=("daemon_interpreter_stdout_log", "daemon_interpreter_stderr_log"))
                         if interp_code != 0:
-                            logger.error("Interpreter failed for name=%s with return code=%s", current_job_name, interp_code)
+                            warning = {"stage": "interpreter", "returncode": interp_code, **(interp_art or {})}
+                            post_agent_warnings.append(warning)
+                            if interp_art:
+                                db.register_artifact(artifact_type="interpreter_error", path=Path(interp_art.get("stderr") or interp_art.get("stdout") or "logs/research_daemon.log"), description="interpreter error", metadata={"queue_id": current_queue_id, "name": current_job_name, "returncode": interp_code, "root_cause_hint": interp_art.get("root_cause_hint"), "stdout_log": interp_art.get("stdout"), "stderr_log": interp_art.get("stderr")})
                     except Exception as interp_exc:
                         logger.exception("Interpreter exception for name=%s: %s", current_job_name, interp_exc)
+                if post_agent_warnings:
+                    db.register_artifact(artifact_type="post_agent_warnings", path=log_path, description="post pipeline agent warnings", metadata={"queue_id": current_queue_id, "name": current_job_name, "post_agent_warnings": post_agent_warnings})
             else:
                 failure_info = fetch_latest_pipeline_failure(db, name=current_job_name or "")
                 compact = failure_info["error_message"] if failure_info and failure_info.get("error_message") else f"pipeline failed with return code {return_code}"
