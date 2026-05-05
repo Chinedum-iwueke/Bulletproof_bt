@@ -45,6 +45,43 @@ class CommandExecutionError(RuntimeError):
         self.result = result
         super().__init__(f"{result.stage} failed exit={result.returncode} hint={result.root_cause_hint or 'none'}")
 
+    @property
+    def returncode(self) -> int:
+        return self.result.returncode
+
+    @property
+    def root_cause_hint(self) -> str | None:
+        return self.result.root_cause_hint
+
+    @property
+    def stdout_path(self) -> str:
+        return self.result.stdout_log
+
+    @property
+    def stderr_path(self) -> str:
+        return self.result.stderr_log
+
+    def compact_message(self) -> str:
+        return (
+            f"{self.result.stage} failed exit={self.result.returncode} "
+            f'root_cause="{self.result.root_cause_hint or ""}" '
+            f'stderr_log="{self.result.stderr_log}"'
+        )
+
+    def to_failure_block(self) -> str:
+        return (
+            f"Step: {self.result.stage}\n"
+            f"Exit code: {self.result.returncode}\n"
+            f"STDOUT log: {self.result.stdout_log}\n"
+            f"STDERR log: {self.result.stderr_log}\n"
+            f"Root-cause hint: {self.result.root_cause_hint or 'none'}"
+        )
+
+
+# Backward-compatibility aliases used by run_experiment_pipeline and tests.
+CommandRunResult = CommandResult
+PipelineCommandError = CommandExecutionError
+
 
 def detect_root_cause(stdout_tail: str, stderr_tail: str) -> str | None:
     text = f"{stderr_tail}\n{stdout_tail}".strip()
@@ -155,4 +192,53 @@ def run_logged_command(*, stage: str, cmd: list[str], log_dir: Path, logger: log
         raise CommandExecutionError(result)
 
     logger.info("\n%s\nDAEMON STAGE COMPLETED\nStage: %s\nJob name: %s\nDuration seconds: %.2f\nSTDOUT log: %s\nSTDERR log: %s\n%s", "=" * 80, stage, job_name or "", duration, result.stdout_log, result.stderr_log, "=" * 80)
+    return result
+
+
+def run_pipeline_command(
+    *,
+    cmd: list[str],
+    step: str,
+    cwd: Path,
+    log_path: Path,
+    command_log_dir: Path | None,
+    sequence_num: int,
+    dry_run: bool,
+    capture_logs: bool,
+    failure_tail_lines: int,
+) -> CommandResult:
+    """Compatibility wrapper for legacy pipeline runner API."""
+    logger = logging.getLogger("orchestrator.process_logging.pipeline")
+
+    if dry_run:
+        started = utc_now_iso()
+        return CommandResult(
+            stage=step,
+            cmd=cmd,
+            returncode=0,
+            stdout_log="",
+            stderr_log="",
+            stdout_tail="",
+            stderr_tail="",
+            started_at=started,
+            completed_at=started,
+            duration_seconds=0.0,
+            root_cause_hint=None,
+        )
+
+    if command_log_dir is None:
+        command_log_dir = cwd / "outputs" / "command_logs"
+
+    result = run_logged_command(
+        stage=step,
+        cmd=cmd,
+        log_dir=command_log_dir,
+        logger=logger,
+        cwd=cwd,
+        tail_lines=failure_tail_lines,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise PipelineCommandError(result)
     return result
