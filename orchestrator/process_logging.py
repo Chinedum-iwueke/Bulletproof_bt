@@ -51,6 +51,14 @@ class CommandExecutionError(RuntimeError):
         super().__init__(f"{result.stage} failed exit={result.returncode} hint={result.root_cause_hint or 'none'}")
 
     @property
+    def step(self) -> str:
+        return self.result.step
+
+    @property
+    def cmd(self) -> list[str]:
+        return self.result.cmd
+
+    @property
     def returncode(self) -> int:
         return self.result.returncode
 

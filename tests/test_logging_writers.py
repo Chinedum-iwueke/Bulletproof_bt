@@ -95,3 +95,47 @@ def test_trades_csv_writer_writes_trade(tmp_path: Path) -> None:
     assert parsed["exit_ts"] == trade.exit_ts.isoformat()
     assert parsed["symbol"] == "AAPL"
     assert parsed["side"] == "BUY"
+
+
+def test_trades_csv_writer_expands_dynamic_columns_rectangularly(tmp_path: Path) -> None:
+    path = tmp_path / "trades.csv"
+    writer = TradesCsvWriter(path)
+    base_trade = Trade(
+        symbol="AAPL",
+        side=Side.BUY,
+        entry_ts=pd.Timestamp("2024-01-01T00:00:00", tz="UTC"),
+        exit_ts=pd.Timestamp("2024-01-01T01:00:00", tz="UTC"),
+        entry_price=100.0,
+        exit_price=101.0,
+        qty=1.0,
+        pnl=1.0,
+        fees=0.1,
+        slippage=0.0,
+        mae_price=None,
+        mfe_price=None,
+    )
+    writer.write_trade(base_trade)
+    writer.write_trade(
+        Trade(
+            symbol="MSFT",
+            side=Side.BUY,
+            entry_ts=pd.Timestamp("2024-01-02T00:00:00", tz="UTC"),
+            exit_ts=pd.Timestamp("2024-01-02T01:00:00", tz="UTC"),
+            entry_price=200.0,
+            exit_price=202.0,
+            qty=1.0,
+            pnl=2.0,
+            fees=0.1,
+            slippage=0.0,
+            mae_price=None,
+            mfe_price=None,
+            metadata={"entry_state_csi_pctile": 0.75},
+        )
+    )
+    writer.close()
+
+    with path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle))
+
+    assert "entry_state_csi_pctile" in rows[0]
+    assert all(len(row) == len(rows[0]) for row in rows[1:])

@@ -29,6 +29,8 @@ def test_subprocess_failure_logs_and_hint(tmp_path: Path) -> None:
         )
         assert False, "expected failure"
     except PipelineCommandError as exc:
+        assert exc.step == "post_analysis_stable"
+        assert exc.cmd == [sys.executable, str(script)]
         assert exc.returncode != 0
         assert "KeyError" in (exc.root_cause_hint or "")
         assert exc.stdout_path and Path(exc.stdout_path).exists()

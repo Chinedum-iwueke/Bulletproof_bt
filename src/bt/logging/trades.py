@@ -260,10 +260,29 @@ class TradesCsvWriter:
         "path_touched_3r",
         "path_touched_5r",
         "path_touched_10r",
+        "path_r_1bar",
+        "path_r_3bars",
+        "path_r_5bars",
+        "path_r_10bars",
+        "path_r_30bars",
+        "counterfactual_hold_1bar_r",
+        "counterfactual_hold_3bars_r",
+        "counterfactual_hold_5bars_r",
+        "counterfactual_hold_10bars_r",
+        "counterfactual_hold_30bars_r",
         "counterfactual_exit_efficiency_realized_over_mfe",
+        "counterfactual_cost_drag_r",
+        "counterfactual_fee_drag_r",
+        "counterfactual_slippage_drag_r",
+        "counterfactual_spread_drag_r",
         "label_reached_3r",
         "label_reached_5r",
+        "label_tail_trade_ge_10r",
+        "label_closed_positive",
+        "label_closed_negative",
         "label_profitable_after_costs",
+        "label_success_1r_before_neg_1r",
+        "label_success_2r_before_neg_1r",
         "label_entry_quality_bucket",
         "label_exit_efficiency_bucket",
         "label_structure_class",
@@ -276,6 +295,7 @@ class TradesCsvWriter:
         self._path = path
         self._run_id = run_id
         self._hypothesis_id = hypothesis_id
+        self._columns = list(type(self)._columns)
         file_exists = path.exists()
         self._file = path.open("a", encoding="utf-8", newline="")
         self._writer = csv.writer(self._file)
@@ -302,6 +322,31 @@ class TradesCsvWriter:
         except (TypeError, ValueError):
             return None
         return parsed if pd.notna(parsed) else None
+
+    def _ensure_columns(self, columns: list[str]) -> None:
+        new_columns = [column for column in columns if column not in self._columns]
+        if not new_columns:
+            return
+
+        old_columns = list(self._columns)
+        self._columns.extend(new_columns)
+        self._file.flush()
+        self._file.close()
+
+        with self._path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.reader(handle))
+
+        data_rows = rows[1:] if rows else []
+        with self._path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(self._columns)
+            for row in data_rows:
+                padded = list(row[: len(old_columns)])
+                padded.extend([""] * (len(self._columns) - len(padded)))
+                writer.writerow(padded)
+
+        self._file = self._path.open("a", encoding="utf-8", newline="")
+        self._writer = csv.writer(self._file)
 
     def write_trade(self, trade: Trade) -> None:
         """Append one trade row."""
@@ -426,12 +471,13 @@ class TradesCsvWriter:
             "risk_initial_stop_r": 1.0 if entry_stop_distance else None,
         }
         computed_values.update(flatten_decision_trace(metadata.get("decision_trace")))
+        dynamic_columns: list[str] = []
         for key, value in metadata.items():
             if key.startswith(("entry_state_", "entry_gate_", "entry_decision_", "execution_", "risk_", "path_", "counterfactual_", "label_", "identity_")):
                 computed_values[key] = value
-                if key not in self._columns:
-                    self._columns.append(key)
+                dynamic_columns.append(key)
         computed_values = enrich_trade_row(computed_values)
+        self._ensure_columns(dynamic_columns)
 
         row: list[str] = []
         for column in self._columns:
