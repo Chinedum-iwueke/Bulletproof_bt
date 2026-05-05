@@ -498,7 +498,7 @@ def _build_trade_rows(
         if column in trades_df.columns:
             out[column] = trades_df[column]
     for column in trades_df.columns:
-        if any(column.startswith(prefix) for prefix in PHASE9_PREFIXES):
+        if any(column.startswith(prefix) for prefix in PHASE9_PREFIXES) and column not in out.columns:
             out[column] = trades_df[column]
     if "exit_reason" in trades_df.columns and "exit_reason" not in out.columns:
         out["exit_reason"] = trades_df["exit_reason"]
@@ -688,7 +688,9 @@ def _enrich_trade_labels(
             "trade_count": "run_trade_count",
         }
     )
-    enriched["run_passes_min_trade_count"] = enriched["run_trade_count"].fillna(0) >= min_trades_per_run
+    enriched = enriched.assign(
+        run_passes_min_trade_count=(enriched["run_trade_count"].fillna(0) >= min_trades_per_run)
+    ).copy()
     return enriched
 
 
@@ -764,19 +766,19 @@ def _enforce_contract_column_order(
         col for col in runs_df.columns if col.startswith("param_") and col not in RUN_DATASET_COLUMNS_V1
     )
     run_cols += [col for col in runs_df.columns if col not in run_cols]
-    missing_run_cols = {col: None for col in run_cols if col not in runs_df.columns}
+    missing_run_cols = [col for col in run_cols if col not in runs_df.columns]
     if missing_run_cols:
-        runs_df = runs_df.assign(**missing_run_cols)
+        runs_df = pd.concat([runs_df, pd.DataFrame({col: [None] * len(runs_df) for col in missing_run_cols}, index=runs_df.index)], axis=1)
     runs_df = runs_df[run_cols]
 
     trade_cols = TRADES_DATASET_COLUMNS_V1 + TRADE_OPTIONAL_CONTEXT_COLUMNS + sorted(
         col for col in trades_df.columns if col.startswith("param_") and col not in TRADES_DATASET_COLUMNS_V1
     )
     trade_cols += [col for col in trades_df.columns if col not in trade_cols]
-    missing_trade_cols = {col: None for col in trade_cols if col not in trades_df.columns}
+    missing_trade_cols = [col for col in trade_cols if col not in trades_df.columns]
     if missing_trade_cols:
-        trades_df = trades_df.assign(**missing_trade_cols)
-    trades_df = trades_df[trade_cols]
+        trades_df = pd.concat([trades_df, pd.DataFrame({col: [None] * len(trades_df) for col in missing_trade_cols}, index=trades_df.index)], axis=1)
+    trades_df = trades_df[trade_cols].copy()
     return runs_df, trades_df
 
 
