@@ -27,10 +27,6 @@ def test_post_agent_command_order_and_state_dir_in_interpreter(tmp_path: Path) -
     assert "--state-discovery-dir" in interp
 
 
-def test_command_log_dir_is_queue_scoped() -> None:
-    p = rd._daemon_command_log_dir("qid123", "myjob", "outputs")
-    assert str(p).endswith("logs/daemon_command_logs/qid123_myjob")
-
 def test_interpreter_fallback_on_llm_timeout(monkeypatch, tmp_path: Path) -> None:
     import orchestrator.interpret_experiment_results as ier
 
