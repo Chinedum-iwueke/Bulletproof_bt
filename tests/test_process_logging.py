@@ -30,6 +30,21 @@ def test_run_logged_command_captures_stdout_stderr_and_manifest(tmp_path: Path) 
     assert manifest["commands"][0]["stage"] == "001_pipeline"
 
 
+def test_run_logged_command_upgrades_legacy_list_manifest(tmp_path: Path) -> None:
+    script = tmp_path / "ok.py"
+    script.write_text("print('ok')\n", encoding="utf-8")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    legacy_manifest = log_dir / "command_log_manifest.json"
+    legacy_manifest.write_text('[{"stage":"older","returncode":0}]', encoding="utf-8")
+
+    run_logged_command(stage="001_pipeline", cmd=[sys.executable, str(script)], log_dir=log_dir, logger=_logger(), queue_id="q1", job_name="job")
+    manifest = json.loads(legacy_manifest.read_text(encoding="utf-8"))
+    assert isinstance(manifest, dict)
+    assert manifest["queue_id"] == "q1"
+    assert len(manifest["commands"]) == 2
+
+
 def test_failing_command_raises_with_tails(tmp_path: Path) -> None:
     script = tmp_path / "fail.py"
     script.write_text("print('before')\nraise KeyError('x')\n", encoding="utf-8")

@@ -30,6 +30,7 @@ class CommandResult:
     stage: str
     cmd: list[str]
     returncode: int
+    cwd: str | None
     stdout_log: str
     stderr_log: str
     stdout_tail: str
@@ -39,11 +40,52 @@ class CommandResult:
     duration_seconds: float
     root_cause_hint: str | None
 
+    @property
+    def step(self) -> str:
+        return self.stage
+
 
 class CommandExecutionError(RuntimeError):
     def __init__(self, result: CommandResult) -> None:
         self.result = result
         super().__init__(f"{result.stage} failed exit={result.returncode} hint={result.root_cause_hint or 'none'}")
+
+    @property
+    def returncode(self) -> int:
+        return self.result.returncode
+
+    @property
+    def root_cause_hint(self) -> str | None:
+        return self.result.root_cause_hint
+
+    @property
+    def stdout_path(self) -> str:
+        return self.result.stdout_log
+
+    @property
+    def stderr_path(self) -> str:
+        return self.result.stderr_log
+
+    def compact_message(self) -> str:
+        return (
+            f"{self.result.stage} failed exit={self.result.returncode} "
+            f'root_cause="{self.result.root_cause_hint or ""}" '
+            f'stderr_log="{self.result.stderr_log}"'
+        )
+
+    def to_failure_block(self) -> str:
+        return (
+            f"Step: {self.result.stage}\n"
+            f"Exit code: {self.result.returncode}\n"
+            f"STDOUT log: {self.result.stdout_log}\n"
+            f"STDERR log: {self.result.stderr_log}\n"
+            f"Root-cause hint: {self.result.root_cause_hint or 'none'}"
+        )
+
+
+# Backward-compatibility aliases used by run_experiment_pipeline and tests.
+CommandRunResult = CommandResult
+PipelineCommandError = CommandExecutionError
 
 
 def detect_root_cause(stdout_tail: str, stderr_tail: str) -> str | None:
@@ -75,8 +117,21 @@ def detect_root_cause(stdout_tail: str, stderr_tail: str) -> str | None:
 def _append_manifest(log_dir: Path, *, queue_id: str | None, job_name: str | None, command: dict[str, Any]) -> None:
     manifest_path = log_dir / _MANIFEST_NAME
     now = utc_now_iso()
+    payload: dict[str, Any]
     if manifest_path.exists():
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        raw_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        # Backward compatibility: older command manifests were a raw list of command
+        # entries; normalize them to the current object schema.
+        if isinstance(raw_payload, list):
+            payload = {
+                "job_name": job_name,
+                "queue_id": queue_id,
+                "created_at": now,
+                "updated_at": now,
+                "commands": raw_payload,
+            }
+        else:
+            payload = raw_payload
     else:
         payload = {
             "job_name": job_name,
@@ -136,7 +191,7 @@ def run_logged_command(*, stage: str, cmd: list[str], log_dir: Path, logger: log
     duration = time.time() - t0
     out_text = "\n".join(out_tail)
     err_text = "\n".join(err_tail)
-    result = CommandResult(stage=stage, cmd=cmd, returncode=returncode, stdout_log=str(stdout_path), stderr_log=str(stderr_path), stdout_tail=out_text, stderr_tail=err_text, started_at=started_iso, completed_at=completed_iso, duration_seconds=duration, root_cause_hint=detect_root_cause(out_text, err_text))
+    result = CommandResult(stage=stage, cmd=cmd, returncode=returncode, cwd=str(cwd) if cwd else None, stdout_log=str(stdout_path), stderr_log=str(stderr_path), stdout_tail=out_text, stderr_tail=err_text, started_at=started_iso, completed_at=completed_iso, duration_seconds=duration, root_cause_hint=detect_root_cause(out_text, err_text))
 
     _append_manifest(log_dir, queue_id=queue_id, job_name=job_name, command={
         "stage": result.stage,
@@ -155,4 +210,54 @@ def run_logged_command(*, stage: str, cmd: list[str], log_dir: Path, logger: log
         raise CommandExecutionError(result)
 
     logger.info("\n%s\nDAEMON STAGE COMPLETED\nStage: %s\nJob name: %s\nDuration seconds: %.2f\nSTDOUT log: %s\nSTDERR log: %s\n%s", "=" * 80, stage, job_name or "", duration, result.stdout_log, result.stderr_log, "=" * 80)
+    return result
+
+
+def run_pipeline_command(
+    *,
+    cmd: list[str],
+    step: str,
+    cwd: Path,
+    log_path: Path,
+    command_log_dir: Path | None,
+    sequence_num: int,
+    dry_run: bool,
+    capture_logs: bool,
+    failure_tail_lines: int,
+) -> CommandResult:
+    """Compatibility wrapper for legacy pipeline runner API."""
+    logger = logging.getLogger("orchestrator.process_logging.pipeline")
+
+    if dry_run:
+        started = utc_now_iso()
+        return CommandResult(
+            stage=step,
+            cmd=cmd,
+            returncode=0,
+            cwd=str(cwd),
+            stdout_log="",
+            stderr_log="",
+            stdout_tail="",
+            stderr_tail="",
+            started_at=started,
+            completed_at=started,
+            duration_seconds=0.0,
+            root_cause_hint=None,
+        )
+
+    if command_log_dir is None:
+        command_log_dir = cwd / "outputs" / "command_logs"
+
+    result = run_logged_command(
+        stage=step,
+        cmd=cmd,
+        log_dir=command_log_dir,
+        logger=logger,
+        cwd=cwd,
+        tail_lines=failure_tail_lines,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise PipelineCommandError(result)
     return result
