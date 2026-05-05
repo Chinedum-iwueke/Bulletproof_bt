@@ -30,6 +30,7 @@ class CommandResult:
     stage: str
     cmd: list[str]
     returncode: int
+    cwd: str | None
     stdout_log: str
     stderr_log: str
     stdout_tail: str
@@ -38,6 +39,10 @@ class CommandResult:
     completed_at: str
     duration_seconds: float
     root_cause_hint: str | None
+
+    @property
+    def step(self) -> str:
+        return self.stage
 
 
 class CommandExecutionError(RuntimeError):
@@ -173,7 +178,7 @@ def run_logged_command(*, stage: str, cmd: list[str], log_dir: Path, logger: log
     duration = time.time() - t0
     out_text = "\n".join(out_tail)
     err_text = "\n".join(err_tail)
-    result = CommandResult(stage=stage, cmd=cmd, returncode=returncode, stdout_log=str(stdout_path), stderr_log=str(stderr_path), stdout_tail=out_text, stderr_tail=err_text, started_at=started_iso, completed_at=completed_iso, duration_seconds=duration, root_cause_hint=detect_root_cause(out_text, err_text))
+    result = CommandResult(stage=stage, cmd=cmd, returncode=returncode, cwd=str(cwd) if cwd else None, stdout_log=str(stdout_path), stderr_log=str(stderr_path), stdout_tail=out_text, stderr_tail=err_text, started_at=started_iso, completed_at=completed_iso, duration_seconds=duration, root_cause_hint=detect_root_cause(out_text, err_text))
 
     _append_manifest(log_dir, queue_id=queue_id, job_name=job_name, command={
         "stage": result.stage,
@@ -216,6 +221,7 @@ def run_pipeline_command(
             stage=step,
             cmd=cmd,
             returncode=0,
+            cwd=str(cwd),
             stdout_log="",
             stderr_log="",
             stdout_tail="",
