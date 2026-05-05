@@ -117,8 +117,21 @@ def detect_root_cause(stdout_tail: str, stderr_tail: str) -> str | None:
 def _append_manifest(log_dir: Path, *, queue_id: str | None, job_name: str | None, command: dict[str, Any]) -> None:
     manifest_path = log_dir / _MANIFEST_NAME
     now = utc_now_iso()
+    payload: dict[str, Any]
     if manifest_path.exists():
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        raw_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        # Backward compatibility: older command manifests were a raw list of command
+        # entries; normalize them to the current object schema.
+        if isinstance(raw_payload, list):
+            payload = {
+                "job_name": job_name,
+                "queue_id": queue_id,
+                "created_at": now,
+                "updated_at": now,
+                "commands": raw_payload,
+            }
+        else:
+            payload = raw_payload
     else:
         payload = {
             "job_name": job_name,
