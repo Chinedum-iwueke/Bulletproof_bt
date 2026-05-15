@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from orchestrator import research_daemon as rd
+from orchestrator.analysis.llm_packet import build_llm_packet
 
 
 def test_post_agent_command_order_and_state_dir_in_interpreter(tmp_path: Path) -> None:
@@ -25,6 +26,9 @@ def test_post_agent_command_order_and_state_dir_in_interpreter(tmp_path: Path) -
     assert "state_discovery.py" in " ".join(sd)
     assert "--stable-root" in sd and "--vol-root" in sd
     assert "--state-discovery-dir" in interp
+    assert "research/state_findings/tier2" in interp
+    assert "research/state_findings/tier2" in sd
+    assert "research/verdicts/tier2" in interp
 
 
 def test_interpreter_fallback_on_llm_timeout(monkeypatch, tmp_path: Path) -> None:
@@ -39,6 +43,7 @@ def test_interpreter_fallback_on_llm_timeout(monkeypatch, tmp_path: Path) -> Non
             runs_dataset_path = None
             trades_dataset_path = None
             strategy_summary_paths = []
+            structural_summary_rows = []
         stable = D()
         volatile = D()
 
@@ -57,6 +62,32 @@ def test_interpreter_fallback_on_llm_timeout(monkeypatch, tmp_path: Path) -> Non
     ])
     rc = ier.main()
     assert rc == 0
-    verdict = (tmp_path / "demo_verdict.json").read_text(encoding="utf-8")
+    verdict_dir = tmp_path / "tier2"
+    verdict = (verdict_dir / "demo_verdict.json").read_text(encoding="utf-8")
     assert "rule_based_fallback" in verdict
-    assert (tmp_path / "demo_llm_error.txt").exists()
+    assert (verdict_dir / "demo_llm_error.txt").exists()
+
+
+def test_llm_packet_compacts_run_rows() -> None:
+    rows = [
+        {
+            "run_id": "r1",
+            "ev_r_net": 0.2,
+            "robustness_score": 1.0,
+            "num_trades": 20,
+            "entry_decision_conditions_json": "{\"large\":\"payload\"}",
+            "output_dir": "outputs/demo",
+        }
+    ]
+    packet = build_llm_packet(
+        name="demo",
+        hypothesis_text="h",
+        input_files={},
+        stable_rows=rows,
+        vol_rows=[],
+        diagnostics={},
+        preliminary={"preliminary_verdict": "INCONCLUSIVE_NEEDS_MORE_DATA", "allowed_verdicts": []},
+        max_top_runs=1,
+        max_bottom_runs=0,
+    )
+    assert packet["top_runs"] == [{"run_id": "r1", "ev_r_net": 0.2, "robustness_score": 1.0, "num_trades": 20}]

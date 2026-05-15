@@ -53,6 +53,26 @@ Each run record includes canonical fields such as:
 ## CLI
 Use the production runner CLI with explicit runtime paths:
 
+Canonical `research_data/` panel mode is the preferred path for new daemon and parallel-grid runs. It keeps stable and volatile universes under the same local data library and writes a resolved `data_profile_<universe>.yaml` beside the experiment summaries.
+
+```bash
+python scripts/run_parallel_hypothesis_grid.py \
+  --experiment-root outputs/tier2/l1_h1_parallel_stable \
+  --manifest outputs/tier2/l1_h1_parallel_stable/manifests/l1_h1_vol_floor_trend_tier2_grid.csv \
+  --config configs/engine.yaml \
+  --local-config configs/local/engine.lab.yaml \
+  --data-root research_data \
+  --data-kind research_panel \
+  --exchange binance \
+  --universe stable \
+  --timeframe 1m \
+  --phase tier2 \
+  --max-workers 6 \
+  --skip-completed
+```
+
+Legacy curated-folder mode remains supported:
+
 ```bash
 python -m bt.experiments.hypothesis_runner \
   --config configs/engine.yaml \

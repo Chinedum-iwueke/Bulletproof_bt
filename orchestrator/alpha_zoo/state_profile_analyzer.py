@@ -5,7 +5,7 @@ from pathlib import Path
 
 def enrich_state_profiles(candidates: list[dict], findings_dir: Path) -> list[dict]:
     indexed = {}
-    for p in findings_dir.glob("*_state_findings.json"):
+    for p in findings_dir.rglob("*_state_findings.json"):
         try:
             payload = json.loads(p.read_text(encoding="utf-8"))
         except Exception:

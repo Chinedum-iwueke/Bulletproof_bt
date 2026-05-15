@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from math import log1p
+from math import isfinite, log1p
 
 import pandas as pd
 
 
 def _safe(v: float | None) -> float:
     try:
-        return float(v) if v is not None else 0.0
+        value = float(v) if v is not None else 0.0
+        return value if isfinite(value) else 0.0
     except Exception:
         return 0.0
 

@@ -1,4 +1,6 @@
 .venv/
+venv/
+env/
 __pycache__/
 *.pyc
 *.pyo
@@ -7,11 +9,41 @@ __pycache__/
 .eggs/
 build/
 dist/
+.tox/
 .mypy_cache/
 .pytest_cache/
-outputs/runs/
-outputs/cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Generated experiment and research artifacts
+/outputs/
+/logs/
+/research_data/
+/research_db/
+/research/state_findings/
+/research/verdicts/
+
+# Runtime databases and temporary files
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.tmp
+*.temp
+*.bak
 
 # Local / personal overrides (do not commit)
 configs/local/
+configs/data/
 *.local.yaml
+*.local.yml
+.env
+.env.*
+!.env.example
+
+# Local agent/editor state
+/.codex/
+/.agents/
+.DS_Store

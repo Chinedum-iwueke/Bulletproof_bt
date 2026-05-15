@@ -1,0 +1,168 @@
+"""CLI for research data backfills, universes, panels, and validation."""
+from __future__ import annotations
+
+import argparse
+
+from bt.research_data.config import DEFAULT_EXCHANGE, DEFAULT_START_TS, DEFAULT_TIMEFRAME, RAW_DATASETS
+from bt.research_data.exchanges.factory import get_adapter
+from bt.research_data.fetching.orchestration import fetch_backfill, fetch_status, fetch_update
+from bt.research_data.instruments import write_instrument_manifest
+from bt.research_data.jobs.backfill import backfill, backfill_stable
+from bt.research_data.jobs.build_panel import build_panels
+from bt.research_data.jobs.build_universe import build_volatile_universe
+from bt.research_data.jobs.coverage import build_coverage, write_coverage_dashboard
+from bt.research_data.jobs.validate import validate_all
+from bt.research_data.live import aggregate_liquidations, collect_liquidations
+
+
+def _csv(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="python -m bt.research_data.cli")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("backfill")
+    p.add_argument("--exchange", default=DEFAULT_EXCHANGE)
+    p.add_argument("--symbols", required=True, type=_csv)
+    p.add_argument("--start", default=str(DEFAULT_START_TS.date()))
+    p.add_argument("--end", default="now")
+    p.add_argument("--datasets", default=",".join(RAW_DATASETS), type=_csv)
+    p.add_argument("--timeframe", default=DEFAULT_TIMEFRAME)
+
+    p = sub.add_parser("backfill-stable")
+    p.add_argument("--exchange", default=DEFAULT_EXCHANGE)
+    p.add_argument("--start", default=str(DEFAULT_START_TS.date()))
+    p.add_argument("--end", default="now")
+    p.add_argument("--timeframe", default=DEFAULT_TIMEFRAME)
+
+    p = sub.add_parser("build-volatile-universe")
+    p.add_argument("--exchange", default=DEFAULT_EXCHANGE)
+    p.add_argument("--start", default=str(DEFAULT_START_TS.date()))
+    p.add_argument("--end", default="now")
+    p.add_argument("--rebalance-freq", default="2h")
+    p.add_argument("--lookback", default="24h")
+    p.add_argument("--top-gainers", type=int, default=20)
+    p.add_argument("--top-losers", type=int, default=10)
+    p.add_argument("--min-age-days", type=int, default=30)
+    p.add_argument("--min-median-dollar-volume-7d", type=float, default=5_000_000)
+
+    p = sub.add_parser("build-panel")
+    p.add_argument("--exchange", default=DEFAULT_EXCHANGE)
+    p.add_argument("--symbols", required=True, type=_csv)
+    p.add_argument("--timeframe", default=DEFAULT_TIMEFRAME)
+
+    p = sub.add_parser("validate")
+    p.add_argument("--exchange", default="all")
+    p.add_argument("--all", action="store_true")
+
+    p = sub.add_parser("coverage")
+    p.add_argument("--exchange", default="all")
+    p.add_argument("--all", action="store_true")
+
+    sub.add_parser("dashboard")
+
+    p = sub.add_parser("fetch-backfill")
+    p.add_argument("--exchange", default=DEFAULT_EXCHANGE)
+    p.add_argument("--dataset", required=True, choices=RAW_DATASETS)
+    p.add_argument("--symbol", required=True)
+    p.add_argument("--timeframe", default=DEFAULT_TIMEFRAME)
+    p.add_argument("--start", default=str(DEFAULT_START_TS.date()))
+    p.add_argument("--end", default="now")
+
+    p = sub.add_parser("fetch-update")
+    p.add_argument("--exchange", default=DEFAULT_EXCHANGE)
+    p.add_argument("--all", action="store_true")
+    p.add_argument("--symbols", type=_csv)
+    p.add_argument("--datasets", type=_csv)
+    p.add_argument("--timeframe", default=DEFAULT_TIMEFRAME)
+    p.add_argument("--end", default="now")
+    p.add_argument("--fail-fast", action="store_true")
+
+    sub.add_parser("fetch-status")
+
+    p = sub.add_parser("refresh-instruments")
+    p.add_argument("--exchange", default=DEFAULT_EXCHANGE, choices=["all", "binance", "bybit", "okx"])
+
+    p = sub.add_parser("collect-liquidations")
+    p.add_argument("--exchange", required=True, choices=["binance", "bybit", "okx"])
+    p.add_argument("--symbols", required=True, type=_csv)
+
+    p = sub.add_parser("aggregate-liquidations")
+    p.add_argument("--exchange", required=True, choices=["binance", "bybit", "okx"])
+    p.add_argument("--timeframe", default=DEFAULT_TIMEFRAME)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    if args.command == "backfill":
+        backfill(args.exchange, args.symbols, args.start, args.end, args.datasets, args.timeframe)
+    elif args.command == "backfill-stable":
+        backfill_stable(args.exchange, args.start, args.end, args.timeframe)
+    elif args.command == "build-volatile-universe":
+        build_volatile_universe(
+            args.exchange,
+            args.start,
+            args.end,
+            args.rebalance_freq,
+            args.lookback,
+            args.top_gainers,
+            args.top_losers,
+            args.min_age_days,
+            args.min_median_dollar_volume_7d,
+        )
+    elif args.command == "build-panel":
+        build_panels(args.exchange, args.symbols, args.timeframe)
+    elif args.command == "validate":
+        report = validate_all("all" if args.all else args.exchange)
+        print(report.to_string(index=False))
+    elif args.command == "coverage":
+        from bt.research_data.storage import ResearchDataStore
+
+        store = ResearchDataStore()
+        report = build_coverage(store, exchange=None if args.all or args.exchange == "all" else args.exchange)
+        print(report.to_string(index=False))
+    elif args.command == "dashboard":
+        output = write_coverage_dashboard()
+        print(str(output))
+    elif args.command == "fetch-backfill":
+        fetch_backfill(args.exchange, args.dataset, args.symbol, args.timeframe, args.start, args.end)
+    elif args.command == "fetch-update":
+        fetch_update(
+            args.exchange,
+            all_symbols=args.all,
+            symbols=args.symbols,
+            datasets=args.datasets,
+            timeframe=args.timeframe,
+            end=args.end,
+            continue_on_error=not args.fail_fast,
+        )
+    elif args.command == "fetch-status":
+        report = fetch_status()
+        print(report.to_string(index=False))
+    elif args.command == "refresh-instruments":
+        exchanges = ["binance", "bybit", "okx"] if args.exchange == "all" else [args.exchange]
+        frames = []
+        from bt.research_data.storage import ResearchDataStore
+
+        store = ResearchDataStore()
+        for exchange in exchanges:
+            instruments = get_adapter(exchange).fetch_usdt_perp_instruments()
+            write_instrument_manifest(store, instruments)
+            frames.append(instruments)
+        if frames:
+            import pandas as pd
+
+            print(pd.concat(frames, ignore_index=True).to_string(index=False))
+    elif args.command == "collect-liquidations":
+        collect_liquidations(args.exchange, args.symbols)
+    elif args.command == "aggregate-liquidations":
+        aggregated = aggregate_liquidations(args.exchange, args.timeframe)
+        print(aggregated.to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()

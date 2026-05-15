@@ -7,6 +7,7 @@ from typing import Any
 from bt.data.dataset import load_dataset_manifest
 from bt.data.feed import HistoricalDataFeed
 from bt.data.loader import load_dataset
+from bt.data.research_panel_loader import build_research_panel_feed_from_config
 from bt.data.stream_feed import StreamingHistoricalDataFeed
 
 
@@ -25,6 +26,10 @@ def _resolve_mode(config: dict[str, Any]) -> str | None:
 
 def load_feed(data_path: str, config: dict[str, Any]):
     """Construct and return the engine feed for ``data_path``."""
+    data_cfg = config.get("data", {})
+    if isinstance(data_cfg, dict) and data_cfg.get("dataset_kind") == "research_panel":
+        return build_research_panel_feed_from_config(data_cfg)
+
     mode = _resolve_mode(config)
 
     if os.path.isdir(data_path):

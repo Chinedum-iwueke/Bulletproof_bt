@@ -102,3 +102,48 @@ def test_entry_stop_distance_is_preserved_when_stop_distance_key_missing() -> No
     assert trade is not None
     assert float(trade.metadata["entry_stop_distance"]) == pytest.approx(12.5)
     assert float(trade.metadata["risk_amount"]) == pytest.approx(125.0)
+
+
+def test_entry_context_metadata_survives_until_trade_close() -> None:
+    book = PositionBook()
+    book.apply_fill(
+        Fill(
+            order_id="o",
+            ts=pd.Timestamp("2024-01-01T00:00:00Z"),
+            symbol="AAA",
+            side=Side.BUY,
+            qty=1.0,
+            price=100.0,
+            fee=0.0,
+            slippage=0.0,
+            metadata={
+                "risk_amount": 10.0,
+                "stop_distance": 10.0,
+                "strategy": "l1_h1_vol_floor_trend",
+                "rv_t": 0.012,
+                "vol_pct_t": 0.91,
+                "gate_pass": True,
+                "trend_dir_t": 1,
+                "atr_entry": 5.0,
+                "tp_price": 110.0,
+                "tp_distance": 10.0,
+                "signal_bars_held": 48,
+                "vwap_t": 101.5,
+                "custom_quality_score": 0.77,
+            },
+        )
+    )
+
+    _, trade = book.apply_fill(_fill(ts="2024-01-01T01:00:00Z", side=Side.SELL, qty=1.0, price=103.0))
+
+    assert trade is not None
+    assert trade.metadata["strategy"] == "l1_h1_vol_floor_trend"
+    assert float(trade.metadata["rv_t"]) == pytest.approx(0.012)
+    assert float(trade.metadata["vol_pct_t"]) == pytest.approx(0.91)
+    assert trade.metadata["gate_pass"] is True
+    assert trade.metadata["trend_dir_t"] == 1
+    assert float(trade.metadata["atr_entry"]) == pytest.approx(5.0)
+    assert float(trade.metadata["tp_price"]) == pytest.approx(110.0)
+    assert trade.metadata["signal_bars_held"] == 48
+    assert float(trade.metadata["vwap_t"]) == pytest.approx(101.5)
+    assert float(trade.metadata["custom_quality_score"]) == pytest.approx(0.77)

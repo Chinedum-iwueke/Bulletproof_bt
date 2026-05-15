@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from math import log1p
+from math import isfinite, log1p
 from typing import Any
 
 import pandas as pd
@@ -34,6 +34,10 @@ def _pick_series(df: pd.DataFrame, candidates: list[str]) -> pd.Series:
     return pd.Series([float("nan")] * len(df), index=df.index, dtype="float64")
 
 
+def _has_values(series: pd.Series) -> bool:
+    return pd.to_numeric(series, errors="coerce").notna().any()
+
+
 def _bucket_numeric(col: pd.Series, name: str) -> pd.Series:
     if name in {"entry_state_tr_over_atr"}:
         bins = [-float("inf"), 1.0, 1.5, 2.0, float("inf")]
@@ -60,25 +64,30 @@ def compute_bucket_metrics(df: pd.DataFrame, *, state_variable: str, bucket_col:
         n = len(part)
         if n < min_bucket_trades:
             continue
-        r = _pick_series(part, ["r_net", "realized_r_net", "r_multiple_net"])
-        rg = _pick_series(part, ["r_gross", "realized_r_gross", "r_multiple_gross"])
+        r = _pick_series(part, ["r_net", "realized_r_net", "r_multiple_net", "pnl_r"])
+        rg = _pick_series(part, ["r_gross", "realized_r_gross", "r_multiple_gross", "gross_r", "gross_pnl_r"])
         mfe = _pick_series(part, ["path_mfe_r", "mfe_r"])
         mae = _pick_series(part, ["path_mae_r", "mae_r"])
         eff = _pick_series(part, ["counterfactual_exit_efficiency_realized_over_mfe"])
-        cost_drag = _pick_series(part, ["cost_drag_r"])
-        fee_drag = _pick_series(part, ["fee_drag_r"])
-        slip_drag = _pick_series(part, ["slippage_drag_r"])
-        spr_drag = _pick_series(part, ["spread_drag_r"])
+        cost_drag = _pick_series(part, ["cost_drag_r", "counterfactual_cost_drag_r"])
+        fee_drag = _pick_series(part, ["fee_drag_r", "counterfactual_fee_drag_r"])
+        slip_drag = _pick_series(part, ["slippage_drag_r", "counterfactual_slippage_drag_r"])
+        spr_drag = _pick_series(part, ["spread_drag_r", "counterfactual_spread_drag_r"])
 
         ev = float(r.mean())
-        avg_cost = float(cost_drag.mean()) if cost_drag.notna().any() else None
+        avg_cost = float(cost_drag.mean()) if _has_values(cost_drag) else None
+        if not _has_values(rg) and avg_cost is not None:
+            rg = r + cost_drag
+        cost_drag_to_ev_ratio = None
+        if avg_cost is not None and isfinite(ev) and ev != 0.0:
+            cost_drag_to_ev_ratio = avg_cost / ev
         rows.append(
             {
                 "state_variable": state_variable,
                 "bucket": str(bucket),
                 "n_trades": n,
                 "ev_r_net": ev,
-                "ev_r_gross": float(rg.mean()) if rg.notna().any() else None,
+                "ev_r_gross": float(rg.mean()) if _has_values(rg) else None,
                 "median_r_net": float(r.median()),
                 "win_rate": float((r > 0).mean()),
                 "avg_r_win": float(r[r > 0].mean()) if (r > 0).any() else None,
@@ -98,16 +107,16 @@ def compute_bucket_metrics(df: pd.DataFrame, *, state_variable: str, bucket_col:
                 "tail_3r_rate": float((r >= 3).mean()),
                 "tail_5r_rate": float((r >= 5).mean()),
                 "tail_10r_rate": float((r >= 10).mean()),
-                "avg_mfe_r": float(mfe.mean()) if mfe.notna().any() else None,
-                "avg_mae_r": float(mae.mean()) if mae.notna().any() else None,
-                "median_mfe_r": float(mfe.median()) if mfe.notna().any() else None,
-                "median_mae_r": float(mae.median()) if mae.notna().any() else None,
-                "avg_exit_efficiency": float(eff.mean()) if eff.notna().any() else None,
+                "avg_mfe_r": float(mfe.mean()) if _has_values(mfe) else None,
+                "avg_mae_r": float(mae.mean()) if _has_values(mae) else None,
+                "median_mfe_r": float(mfe.median()) if _has_values(mfe) else None,
+                "median_mae_r": float(mae.median()) if _has_values(mae) else None,
+                "avg_exit_efficiency": float(eff.mean()) if _has_values(eff) else None,
                 "avg_cost_drag_r": avg_cost,
-                "avg_fee_drag_r": float(fee_drag.mean()) if fee_drag.notna().any() else None,
-                "avg_slippage_drag_r": float(slip_drag.mean()) if slip_drag.notna().any() else None,
-                "avg_spread_drag_r": float(spr_drag.mean()) if spr_drag.notna().any() else None,
-                "cost_drag_to_ev_ratio": (avg_cost / ev) if (avg_cost is not None and ev not in (0.0, None)) else None,
+                "avg_fee_drag_r": float(fee_drag.mean()) if _has_values(fee_drag) else None,
+                "avg_slippage_drag_r": float(slip_drag.mean()) if _has_values(slip_drag) else None,
+                "avg_spread_drag_r": float(spr_drag.mean()) if _has_values(spr_drag) else None,
+                "cost_drag_to_ev_ratio": cost_drag_to_ev_ratio,
                 "weak_sample": n < (2 * min_bucket_trades),
                 "sample_score": log1p(n),
             }

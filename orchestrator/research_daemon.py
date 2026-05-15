@@ -28,9 +28,17 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 from orchestrator.db import ResearchDB
 from orchestrator.process_logging import CommandExecutionError, run_logged_command
+from bt.paths import (
+    resolve_daemon_command_log_dir,
+    resolve_existing_experiment_root,
+    resolve_phase_artifact_dir,
+)
 
 REQUIRED_PAYLOAD_KEYS = {"hypothesis", "name"}
 
@@ -108,6 +116,18 @@ def merge_payload_with_defaults(payload: dict[str, Any], config: dict[str, Any],
         "local_config": payload.get("local_config", config.get("default_local_config", "configs/local/engine.lab.yaml")),
         "stable_data": payload.get("stable_data", config.get("stable_data")),
         "vol_data": payload.get("vol_data", config.get("vol_data")),
+        "data_root": payload.get("data_root", config.get("data_root", "research_data")),
+        "data_kind": payload.get("data_kind", config.get("data_kind", "research_panel")),
+        "exchange": payload.get("exchange", config.get("exchange", "binance")),
+        "timeframe": payload.get("timeframe", config.get("timeframe", "1m")),
+        "stable_manifest": payload.get(
+            "stable_manifest",
+            config.get("stable_manifest", "research_data/manifests/stable_universe.parquet"),
+        ),
+        "membership_path": payload.get(
+            "membership_path",
+            config.get("membership_path", "research_data/manifests/volatile_universe_membership.parquet"),
+        ),
         "outputs_root": payload.get("outputs_root", config.get("outputs_root", "outputs")),
         "retain_top_n": payload.get("retain_top_n", config.get("retain_top_n", 2)),
         "retain_median": payload.get("retain_median", config.get("retain_median", 1)),
@@ -141,10 +161,18 @@ def build_pipeline_command(db_path: Path, merged_payload: dict[str, Any]) -> lis
         str(merged_payload["config"]),
         "--local-config",
         str(merged_payload["local_config"]),
-        "--stable-data",
-        str(merged_payload["stable_data"]),
-        "--vol-data",
-        str(merged_payload["vol_data"]),
+        "--data-root",
+        str(merged_payload["data_root"]),
+        "--data-kind",
+        str(merged_payload["data_kind"]),
+        "--exchange",
+        str(merged_payload["exchange"]),
+        "--timeframe",
+        str(merged_payload["timeframe"]),
+        "--stable-manifest",
+        str(merged_payload["stable_manifest"]),
+        "--membership-path",
+        str(merged_payload["membership_path"]),
         "--outputs-root",
         str(merged_payload["outputs_root"]),
         "--retain-top-n",
@@ -156,6 +184,10 @@ def build_pipeline_command(db_path: Path, merged_payload: dict[str, Any]) -> lis
         "--research-db",
         str(db_path),
     ]
+    if merged_payload.get("stable_data"):
+        cmd.extend(["--stable-data", str(merged_payload["stable_data"])])
+    if merged_payload.get("vol_data"):
+        cmd.extend(["--vol-data", str(merged_payload["vol_data"])])
     if not bool(merged_payload["cleanup_delete_logs"]):
         cmd.append("--no-cleanup-delete-logs")
     if not bool(merged_payload["cleanup_delete_nonretained_runs"]):
@@ -163,8 +195,8 @@ def build_pipeline_command(db_path: Path, merged_payload: dict[str, Any]) -> lis
     return cmd
 
 
-def _daemon_command_log_dir(queue_id: str, name: str, outputs_root: str) -> Path:
-    return Path(outputs_root) / f"{name}_daemon_command_logs"
+def _daemon_command_log_dir(queue_id: str, name: str, outputs_root: str, phase: str = "tier2") -> Path:
+    return resolve_daemon_command_log_dir(outputs_root=outputs_root, phase=phase, experiment_name=name)
 
 
 def fetch_latest_pipeline_failure(db: ResearchDB, *, name: str) -> dict[str, Any] | None:
@@ -231,13 +263,27 @@ def write_heartbeat(
 def build_interpret_command(db_path: Path, merged_payload: dict[str, Any], config: dict[str, Any]) -> list[str]:
     name = str(merged_payload["name"])
     outputs_root = str(merged_payload["outputs_root"])
+    phase = str(merged_payload.get("phase", "tier2"))
+    stable_root = resolve_existing_experiment_root(
+        outputs_root=outputs_root,
+        phase=phase,
+        experiment_name=name,
+        variant="stable",
+    )
+    vol_root = resolve_existing_experiment_root(
+        outputs_root=outputs_root,
+        phase=phase,
+        experiment_name=name,
+        variant="vol",
+    )
     model = str(config.get("default_interpreter_model", "qwen2.5:14b"))
     llm_provider = str(config.get("default_llm_provider", "ollama"))
     ollama_url = str(config.get("default_ollama_url", "http://127.0.0.1:11434/api/generate"))
     llm_timeout = int(config.get("default_llm_timeout_seconds", 600))
     num_ctx = int(config.get("default_num_ctx", 8192))
     temperature = float(config.get("default_temperature", 0.1))
-    output_dir = str(config.get("verdict_output_dir", "research/verdicts"))
+    output_dir = str(resolve_phase_artifact_dir(artifact_root=config.get("verdict_output_dir", "research/verdicts"), phase=phase))
+    state_discovery_dir = str(resolve_phase_artifact_dir(artifact_root=config.get("state_discovery_output_dir", "research/state_findings"), phase=phase))
     cmd = [
         sys.executable,
         str(PROJECT_ROOT / "orchestrator" / "interpret_experiment_results.py"),
@@ -248,9 +294,9 @@ def build_interpret_command(db_path: Path, merged_payload: dict[str, Any], confi
         "--hypothesis",
         str(merged_payload["hypothesis"]),
         "--stable-root",
-        str(Path(outputs_root) / f"{name}_parallel_stable"),
+        str(stable_root),
         "--vol-root",
-        str(Path(outputs_root) / f"{name}_parallel_vol"),
+        str(vol_root),
         "--llm-provider",
         llm_provider,
         "--model",
@@ -265,9 +311,11 @@ def build_interpret_command(db_path: Path, merged_payload: dict[str, Any], confi
         str(temperature),
         "--output-dir",
         output_dir,
+        "--phase",
+        phase,
     ]
     if bool(config.get("include_state_discovery_in_verdict", True)):
-        cmd.extend(["--state-discovery-dir", str(config.get("state_discovery_output_dir", "research/state_findings"))])
+        cmd.extend(["--state-discovery-dir", state_discovery_dir])
     return cmd
 
 def build_state_discovery_command(
@@ -279,7 +327,8 @@ def build_state_discovery_command(
 ) -> list[str]:
     name = str(merged_payload["name"])
     outputs_root = Path(str(merged_payload["outputs_root"]))
-    out_dir = str(config.get("state_discovery_output_dir", "research/state_findings"))
+    phase = str(merged_payload.get("phase", "tier2"))
+    out_dir = str(resolve_phase_artifact_dir(artifact_root=config.get("state_discovery_output_dir", "research/state_findings"), phase=phase))
     min_trades = int(config.get("state_discovery_min_trades", 30))
     min_bucket = int(config.get("state_discovery_min_bucket_trades", 10))
     top_n = int(config.get("state_discovery_top_n", 25))
@@ -292,6 +341,8 @@ def build_state_discovery_command(
         str(db_path),
         "--output-dir",
         out_dir,
+        "--phase",
+        phase,
         "--min-trades",
         str(min_trades),
         "--min-bucket-trades",
@@ -301,13 +352,23 @@ def build_state_discovery_command(
     ]
 
     if mode == "stable":
-        cmd.extend(["--experiment-root", str(outputs_root / f"{name}_parallel_stable"), "--name", f"{name}_stable"])
+        cmd.extend([
+            "--experiment-root",
+            str(resolve_existing_experiment_root(outputs_root=outputs_root, phase=phase, experiment_name=name, variant="stable")),
+            "--name",
+            f"{name}_stable",
+        ])
     elif mode == "vol":
-        cmd.extend(["--experiment-root", str(outputs_root / f"{name}_parallel_vol"), "--name", f"{name}_vol"])
+        cmd.extend([
+            "--experiment-root",
+            str(resolve_existing_experiment_root(outputs_root=outputs_root, phase=phase, experiment_name=name, variant="vol")),
+            "--name",
+            f"{name}_vol",
+        ])
     elif mode == "combined":
         cmd.extend([
-            "--stable-root", str(outputs_root / f"{name}_parallel_stable"),
-            "--vol-root", str(outputs_root / f"{name}_parallel_vol"),
+            "--stable-root", str(resolve_existing_experiment_root(outputs_root=outputs_root, phase=phase, experiment_name=name, variant="stable")),
+            "--vol-root", str(resolve_existing_experiment_root(outputs_root=outputs_root, phase=phase, experiment_name=name, variant="vol")),
             "--name", f"{name}_combined",
         ])
     else:
@@ -404,7 +465,12 @@ def main() -> int:
             )
 
             cmd = build_pipeline_command(Path(args.db), merged_payload)
-            command_log_dir = _daemon_command_log_dir(current_queue_id, current_job_name, str(merged_payload.get("outputs_root", "outputs")))
+            command_log_dir = _daemon_command_log_dir(
+                current_queue_id,
+                current_job_name,
+                str(merged_payload.get("outputs_root", "outputs")),
+                str(merged_payload.get("phase", "tier2")),
+            )
             post_agent_warnings: list[dict[str, Any]] = []
             return_code, _ = _run_daemon_stage(
                 cmd=cmd,

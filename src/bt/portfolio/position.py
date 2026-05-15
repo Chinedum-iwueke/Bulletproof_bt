@@ -20,12 +20,34 @@ class PositionBook:
         "stop_price",
         "entry_qty",
     }
+    _ENTRY_CONTEXT_KEYS = {
+        "atr_entry",
+        "atr_source_timeframe",
+        "gate_pass",
+        "hold_time_unit",
+        "rv_t",
+        "signal_bars_held",
+        "stop_model",
+        "stop_update_policy",
+        "strategy",
+        "timeframe",
+        "tp_distance",
+        "tp_enabled",
+        "tp_price",
+        "tp_update_policy",
+        "trend_dir_t",
+        "vol_pct_t",
+    }
 
     def __init__(self) -> None:
         self._positions: dict[str, Position] = {}
         self._position_costs: dict[str, tuple[float, float]] = {}
         self._position_metadata: dict[str, dict[str, object]] = {}
         self._position_path_state: dict[str, dict[str, object]] = {}
+
+    @staticmethod
+    def _is_exportable_metadata_value(value: object) -> bool:
+        return isinstance(value, (str, int, float, bool, pd.Timestamp))
 
     def get(self, symbol: str) -> Position:
         """Return current Position for symbol (create FLAT if missing)."""
@@ -378,6 +400,9 @@ class PositionBook:
         ):
             if key in metadata:
                 extracted[key] = metadata.get(key)
+        for key in PositionBook._ENTRY_CONTEXT_KEYS:
+            if key in metadata:
+                extracted[key] = metadata.get(key)
         for key, value in metadata.items():
             if key.startswith(
                 (
@@ -392,6 +417,8 @@ class PositionBook:
                     "identity_",
                 )
             ):
+                extracted[key] = value
+            elif key not in extracted and PositionBook._is_exportable_metadata_value(value):
                 extracted[key] = value
 
         normalized_entry_qty = abs(float(entry_qty))

@@ -5,8 +5,12 @@ default_phase: tier2
 default_max_workers: 8
 default_config: configs/engine.yaml
 default_local_config: configs/local/engine.lab.yaml
-stable_data: /home/omenka/research_data/bt/curated/stable_data_1m_canonical
-vol_data: /home/omenka/research_data/bt/curated/vol_data_1m_canonical
+data_root: research_data
+data_kind: research_panel
+exchange: binance
+timeframe: 1m
+stable_manifest: research_data/manifests/stable_universe.parquet
+membership_path: research_data/manifests/volatile_universe_membership.parquet
 outputs_root: outputs
 retain_top_n: 2
 retain_median: 1
@@ -19,6 +23,7 @@ max_job_attempts: 2
 stale_lock_minutes: 720
 run_interpretation_after_pipeline: true
 run_state_discovery_after_pipeline: true
+run_research_memory_after_pipeline: false
 interpretation_after_state_discovery: true
 state_discovery_min_trades: 30
 state_discovery_min_bucket_trades: 10
@@ -26,7 +31,7 @@ state_discovery_top_n: 25
 state_discovery_write_db: true
 include_state_discovery_in_verdict: true
 default_llm_provider: ollama
-default_interpreter_model: qwen2.5:14b
+default_interpreter_model: qwen2.5:7b
 default_ollama_url: http://127.0.0.1:11434/api/generate
 default_llm_timeout_seconds: 1800
 default_num_ctx: 8192

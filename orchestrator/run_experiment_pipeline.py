@@ -30,9 +30,19 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 from orchestrator.db import ResearchDB
 from orchestrator.process_logging import CommandRunResult, PipelineCommandError, run_pipeline_command
+from bt.paths import (
+    resolve_command_log_dir,
+    resolve_experiment_root,
+    resolve_output_phase_root,
+    resolve_pipeline_log_path,
+    resolve_verdict_bundle_root,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,12 +56,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--local-config", default="configs/local/engine.lab.yaml")
     parser.add_argument(
         "--stable-data",
-        default="/home/omenka/research_data/bt/curated/stable_data_1m_canonical",
+        default=None,
+        help="Legacy stable curated dataset path. If set, overrides research_data profile mode.",
     )
     parser.add_argument(
         "--vol-data",
-        default="/home/omenka/research_data/bt/curated/vol_data_1m_canonical",
+        default=None,
+        help="Legacy volatile curated dataset path. If set, overrides research_data profile mode.",
     )
+    parser.add_argument("--data-root", default="research_data")
+    parser.add_argument("--data-kind", default="research_panel")
+    parser.add_argument("--exchange", default="binance")
+    parser.add_argument("--timeframe", default="1m")
+    parser.add_argument("--stable-manifest", default="research_data/manifests/stable_universe.parquet")
+    parser.add_argument("--membership-path", default="research_data/manifests/volatile_universe_membership.parquet")
     parser.add_argument("--outputs-root", default="outputs")
 
     parser.add_argument("--retain-top-n", type=int, default=2)
@@ -165,7 +183,14 @@ def run_backtest(
     manifest_path: Path,
     config: str,
     local_config: str,
-    data_path: str,
+    data_path: str | None,
+    data_root: str,
+    data_kind: str,
+    exchange: str,
+    universe: str,
+    timeframe: str,
+    stable_manifest: str | None,
+    membership_path: str | None,
     max_workers: int,
     phase: str,
     project_root: Path,
@@ -188,14 +213,33 @@ def run_backtest(
         config,
         "--local-config",
         local_config,
-        "--data",
-        data_path,
         "--phase",
         phase,
         "--max-workers",
         str(max_workers),
         "--skip-completed",
     ]
+    if data_path:
+        cmd.extend(["--data", data_path])
+    else:
+        cmd.extend(
+            [
+                "--data-root",
+                data_root,
+                "--data-kind",
+                data_kind,
+                "--exchange",
+                exchange,
+                "--universe",
+                universe,
+                "--timeframe",
+                timeframe,
+            ]
+        )
+        if universe == "stable" and stable_manifest:
+            cmd.extend(["--stable-manifest", stable_manifest])
+        if universe == "volatile" and membership_path:
+            cmd.extend(["--membership-path", membership_path])
     run_command(cmd, step=step, dry_run=dry_run, log_path=log_path, commands_log=commands_log, command_log_dir=command_log_dir, failure_tail_lines=failure_tail_lines, capture_logs=capture_logs)
 
 
@@ -344,7 +388,7 @@ def create_verdict_bundle(
     commands_log: list[dict[str, Any]],
     cleanup_ran: bool,
 ) -> Path:
-    bundle_dir = outputs_root / f"{name}_verdict_bundle"
+    bundle_dir = resolve_verdict_bundle_root(outputs_root=outputs_root, phase=phase, experiment_name=name)
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
     stable_summary_files = collect_summary_files(stable_root)
@@ -433,6 +477,7 @@ def db_register_artifact(
     experiment_id: str | None = None,
     pipeline_run_id: str | None = None,
     description: str | None = None,
+    metadata: Any = None,
 ) -> None:
     if db is None:
         return
@@ -445,6 +490,7 @@ def db_register_artifact(
         experiment_id=experiment_id,
         pipeline_run_id=pipeline_run_id,
         description=description,
+        metadata=metadata,
     )
     print(f"[db] Registered artifact: {artifact_type} -> {path}")
 
@@ -458,16 +504,36 @@ def main() -> int:
         raise FileNotFoundError(f"Hypothesis path not found: {hypothesis}")
 
     outputs_root = Path(args.outputs_root)
-    outputs_root.mkdir(parents=True, exist_ok=True)
+    phase_root = resolve_output_phase_root(outputs_root=outputs_root, phase=args.phase)
+    phase_root.mkdir(parents=True, exist_ok=True)
 
-    stable_root = outputs_root / f"{args.name}_parallel_stable"
-    volatile_root = outputs_root / f"{args.name}_parallel_vol"
+    stable_root = resolve_experiment_root(
+        outputs_root=outputs_root,
+        phase=args.phase,
+        experiment_name=args.name,
+        variant="stable",
+    )
+    volatile_root = resolve_experiment_root(
+        outputs_root=outputs_root,
+        phase=args.phase,
+        experiment_name=args.name,
+        variant="vol",
+    )
     stable_root.mkdir(parents=True, exist_ok=True)
     volatile_root.mkdir(parents=True, exist_ok=True)
 
-    log_path = outputs_root / f"{args.name}_pipeline.log"
+    print("=" * 80)
+    print("EXPERIMENT OUTPUT ROOTS")
+    print(f"Phase: {args.phase}")
+    print("Stable root:")
+    print(f"  {stable_root}")
+    print("Vol root:")
+    print(f"  {volatile_root}")
+    print("=" * 80)
+
+    log_path = resolve_pipeline_log_path(outputs_root=outputs_root, phase=args.phase, experiment_name=args.name)
     capture_command_logs = not args.no_command_log_capture
-    command_log_dir = Path(args.command_log_dir) if args.command_log_dir else outputs_root / f"{args.name}_command_logs"
+    command_log_dir = Path(args.command_log_dir) if args.command_log_dir else resolve_command_log_dir(outputs_root=outputs_root, phase=args.phase, experiment_name=args.name)
     command_manifest_path = command_log_dir / "command_log_manifest.json"
     commands_log: list[dict[str, Any]] = []
     log_path.write_text(f"Pipeline start: {utc_now_iso()}\n", encoding="utf-8")
@@ -503,7 +569,7 @@ def main() -> int:
             max_workers=args.max_workers,
             config_path=args.config,
             local_config_path=args.local_config,
-            data_path=args.stable_data,
+            data_path=args.stable_data or f"{args.data_kind}:{args.data_root}:stable",
         )
         volatile_experiment_id = db.create_experiment(
             hypothesis_id=hypothesis_id,
@@ -515,7 +581,7 @@ def main() -> int:
             max_workers=args.max_workers,
             config_path=args.config,
             local_config_path=args.local_config,
-            data_path=args.vol_data,
+            data_path=args.vol_data or f"{args.data_kind}:{args.data_root}:volatile",
         )
         print(f"[db] Created experiments: stable={stable_experiment_id}, volatile={volatile_experiment_id}")
         pipeline_run_id = db.create_pipeline_run(
@@ -609,6 +675,13 @@ def main() -> int:
                 config=args.config,
                 local_config=args.local_config,
                 data_path=args.stable_data,
+                data_root=args.data_root,
+                data_kind=args.data_kind,
+                exchange=args.exchange,
+                universe="stable",
+                timeframe=args.timeframe,
+                stable_manifest=args.stable_manifest,
+                membership_path=args.membership_path,
                 max_workers=args.max_workers,
                 phase=args.phase,
                 project_root=project_root,
@@ -628,6 +701,13 @@ def main() -> int:
                 config=args.config,
                 local_config=args.local_config,
                 data_path=args.vol_data,
+                data_root=args.data_root,
+                data_kind=args.data_kind,
+                exchange=args.exchange,
+                universe="volatile",
+                timeframe=args.timeframe,
+                stable_manifest=args.stable_manifest,
+                membership_path=args.membership_path,
                 max_workers=args.max_workers,
                 phase=args.phase,
                 project_root=project_root,

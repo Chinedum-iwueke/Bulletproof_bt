@@ -5,6 +5,8 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+TOL = 1e-6
+
 def _load_json(p: Path):
     if not p.exists():
         return None
@@ -27,6 +29,18 @@ def _pick(df, names):
             return pd.to_numeric(df[n], errors='coerce')
     return pd.Series(dtype=float)
 
+def _as_float(value):
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if np.isfinite(out) else None
+
+def _close(left, right, tol: float = TOL) -> bool:
+    left_f = _as_float(left)
+    right_f = _as_float(right)
+    return left_f is not None and right_f is not None and abs(left_f - right_f) <= tol
+
 def audit_run(run_dir: Path, absurd_r: float = 100.0) -> dict:
     perf = _load_json(run_dir / 'performance.json') or {}
     trades = _load_df(run_dir / 'trades.csv')
@@ -38,7 +52,7 @@ def audit_run(run_dir: Path, absurd_r: float = 100.0) -> dict:
     net = float(perf.get('net_pnl', 0.0) or 0.0)
     gross = float(perf.get('gross_pnl', 0.0) or 0.0)
     eq_delta = final - init
-    if abs(eq_delta - net) > 1e-6:
+    if abs(eq_delta - net) > TOL:
         errors.append('equity_vs_net_pnl_mismatch')
 
     costs = perf.get('costs', {}) if isinstance(perf.get('costs'), dict) else {}
@@ -49,7 +63,7 @@ def audit_run(run_dir: Path, absurd_r: float = 100.0) -> dict:
 
     pnl_net = _pick(trades, ['pnl_net', 'net_pnl'])
     trade_net = float(pnl_net.sum()) if not pnl_net.empty else np.nan
-    if np.isfinite(trade_net) and abs(trade_net - net) > 1e-6:
+    if np.isfinite(trade_net) and abs(trade_net - net) > TOL:
         errors.append('trade_net_pnl_mismatch')
 
     r = _pick(trades, ['r_net', 'r_multiple_net', 'realized_r_net'])
@@ -57,15 +71,34 @@ def audit_run(run_dir: Path, absurd_r: float = 100.0) -> dict:
     mean_r = float(valid.mean()) if not valid.empty else None
     wr = float((valid > 0).mean()) if not valid.empty else None
 
-    if mean_r is not None and perf.get('ev_r_net') is not None and abs(float(perf.get('ev_r_net')) - mean_r) > 1e-6:
+    if mean_r is not None and perf.get('ev_r_net') is not None and not _close(perf.get('ev_r_net'), mean_r):
         errors.append('ev_r_net_mismatch')
-    if wr is not None and perf.get('win_rate_r') is not None and abs(float(perf.get('win_rate_r')) - wr) > 1e-6:
+    if wr is not None and perf.get('win_rate_r') is not None and not _close(perf.get('win_rate_r'), wr):
         errors.append('win_rate_r_mismatch')
 
     evb = perf.get('ev_by_bucket', {}) if isinstance(perf.get('ev_by_bucket'), dict) else {}
     allv = evb.get('overall_all_trades', evb.get('all'))
-    if allv is not None and mean_r is not None and abs(float(allv) - mean_r) > 1e-6:
-        errors.append('ev_by_bucket_all_mismatch_vs_r')
+    ev_net = perf.get('ev_net')
+    bucket_ev_unit = None
+    bucket_ev_diff = None
+    bucket_ev_r_diff = (_as_float(allv) - mean_r) if (_as_float(allv) is not None and mean_r is not None) else None
+    bucket_ev_pnl_diff = (_as_float(allv) - _as_float(ev_net)) if (_as_float(allv) is not None and _as_float(ev_net) is not None) else None
+    if allv is not None:
+        # performance.ev_by_bucket is legacy PnL-denominated EV, while structural
+        # analysis writes ev_r_net separately. Accept either unit when it matches
+        # the corresponding headline metric; only fail when it reconciles to neither.
+        bucket_matches_pnl_ev = _close(allv, ev_net)
+        bucket_matches_r_ev = mean_r is not None and _close(allv, mean_r)
+        if bucket_matches_pnl_ev:
+            bucket_ev_unit = 'pnl'
+            bucket_ev_diff = bucket_ev_pnl_diff
+        elif bucket_matches_r_ev:
+            bucket_ev_unit = 'r'
+            bucket_ev_diff = bucket_ev_r_diff
+        else:
+            bucket_ev_unit = 'unknown'
+            bucket_ev_diff = bucket_ev_r_diff
+            errors.append('ev_by_bucket_all_mismatch')
 
     risk = _pick(trades, ['risk_amount'])
     zero_risk = int(((risk <= 0) | risk.isna()).sum()) if not risk.empty else 0
@@ -87,7 +120,10 @@ def audit_run(run_dir: Path, absurd_r: float = 100.0) -> dict:
             'trade_net_pnl_diff': (trade_net - net) if np.isfinite(trade_net) else None,
             'mean_r_net_diff': (float(perf.get('ev_r_net')) - mean_r) if (mean_r is not None and perf.get('ev_r_net') is not None) else None,
             'win_rate_r_diff': (float(perf.get('win_rate_r')) - wr) if (wr is not None and perf.get('win_rate_r') is not None) else None,
-            'bucket_ev_diff': (float(allv) - mean_r) if (allv is not None and mean_r is not None) else None,
+            'bucket_ev_unit': bucket_ev_unit,
+            'bucket_ev_diff': bucket_ev_diff,
+            'bucket_ev_r_diff': bucket_ev_r_diff,
+            'bucket_ev_pnl_diff': bucket_ev_pnl_diff,
             'suspicious_r_count': suspicious_r,
             'zero_risk_count': zero_risk,
             'gross_minus_costs': gross - (fee + slip + spr + comm),

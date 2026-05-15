@@ -40,7 +40,7 @@ def _run_agent(tmp_path: Path, exp_root: Path, extra: list[str] | None = None) -
         cmd.extend(extra)
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
-    return tmp_path / "findings"
+    return tmp_path / "findings" / "tier2"
 
 
 def test_positive_state_findings_generated(tmp_path: Path) -> None:
@@ -61,6 +61,24 @@ def test_positive_state_findings_generated(tmp_path: Path) -> None:
     findings = pd.read_csv(out / "demo_state_findings.csv")
     assert not findings.empty
     assert (findings["finding_type"] == "POSITIVE_EDGE_STATE").any()
+
+
+def test_state_metrics_use_exported_trade_schema_aliases(tmp_path: Path) -> None:
+    exp = tmp_path / "exp_aliases"
+    trades = pd.DataFrame(
+        {
+            "pnl_r": [0.4, 0.3, -0.1, 0.2],
+            "counterfactual_cost_drag_r": [0.05, 0.05, 0.05, 0.05],
+            "entry_state_csi_pctile": [0.9, 0.85, 0.2, 0.3],
+            "path_mfe_r": [1.2, 1.1, 0.4, 0.5],
+        }
+    )
+    _write_experiment(exp, trades)
+    out = _run_agent(tmp_path, exp)
+    findings = pd.read_csv(out / "demo_state_findings.csv")
+    assert findings["ev_r_net"].notna().any()
+    assert findings["avg_cost_drag_r"].notna().any()
+    assert findings["ev_r_gross"].notna().any()
 
 
 def test_missing_columns_write_missing_diagnostic(tmp_path: Path) -> None:

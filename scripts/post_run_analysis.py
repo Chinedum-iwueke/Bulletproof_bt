@@ -6,8 +6,9 @@ import sys
 import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+for path in (PROJECT_ROOT, SRC_ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 from bt.analytics.postmortem import run_postmortem_for_experiment
 from bt.analytics.run_summary import summarize_experiment_runs
 from bt.analysis.ev_by_bucket import analyze_structural_buckets, write_structural_bucket_artifacts
@@ -98,6 +99,9 @@ def main()->None:
                 if not perf['metrics_valid']:
                     perf['metric_validation_errors']=validation.get('errors',[])
                     perf['metric_validation_report']='analysis/performance_validation.json'
+                else:
+                    perf.pop('metric_validation_errors', None)
+                    perf.pop('metric_validation_report', None)
                 perf_path.write_text(json.dumps(perf,indent=2),encoding='utf-8')
             except Exception:
                 pass

@@ -14,8 +14,12 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 from orchestrator.db import ResearchDB
+from bt.paths import resolve_existing_experiment_root_from_path, resolve_phase_artifact_dir
 from state_discovery.dataset_loader import load_discovery_datasets
 from state_discovery.state_bucket_analyzer import analyze_single_state_variables
 from state_discovery.interaction_analyzer import analyze_joint_state_variables
@@ -31,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stable-root", default=None)
     parser.add_argument("--vol-root", default=None)
     parser.add_argument("--output-dir", default="research/state_findings")
+    parser.add_argument("--phase", default="tier2")
     parser.add_argument("--min-trades", type=int, default=30)
     parser.add_argument("--min-bucket-trades", type=int, default=10)
     parser.add_argument("--top-n", type=int, default=25)
@@ -133,21 +138,22 @@ def _write_db(db_path: Path, findings: pd.DataFrame, artifact_paths: dict[str, P
 def main() -> int:
     args = parse_args()
     db_path = Path(args.db)
+    output_dir = resolve_phase_artifact_dir(artifact_root=args.output_dir, phase=args.phase)
     if args.stable_root or args.vol_root:
         datasets = []
         if args.stable_root:
             datasets.extend(
-                load_discovery_datasets(db_path=db_path, experiment_root=Path(args.stable_root), dataset_type="stable")
+                load_discovery_datasets(db_path=db_path, experiment_root=resolve_existing_experiment_root_from_path(args.stable_root), dataset_type="stable")
             )
         if args.vol_root:
             datasets.extend(
-                load_discovery_datasets(db_path=db_path, experiment_root=Path(args.vol_root), dataset_type="volatile")
+                load_discovery_datasets(db_path=db_path, experiment_root=resolve_existing_experiment_root_from_path(args.vol_root), dataset_type="volatile")
             )
     else:
         datasets = load_discovery_datasets(
             db_path=db_path,
             experiments_root=Path(args.experiments_root) if args.experiments_root else None,
-            experiment_root=Path(args.experiment_root) if args.experiment_root else None,
+            experiment_root=resolve_existing_experiment_root_from_path(args.experiment_root) if args.experiment_root else None,
             dataset_type=args.dataset_type,
             hypothesis_id=args.hypothesis_id,
             name=args.name,
@@ -192,7 +198,7 @@ def main() -> int:
     findings = _aggregate_findings(all_findings)
     cross = _cross_aggregate(findings)
     if not cross.empty:
-        cross_path = Path(args.output_dir) / (f"{args.name}_cross_state_aggregate.csv" if args.experiment_root and args.name else "cross_state_aggregate.csv")
+        cross_path = output_dir / (f"{args.name}_cross_state_aggregate.csv" if args.name else "cross_state_aggregate.csv")
         cross_path.parent.mkdir(parents=True, exist_ok=True)
         cross.to_csv(cross_path, index=False)
 
@@ -206,9 +212,9 @@ def main() -> int:
             "recommendation": "Improve Phase-9 logging/state instrumentation. Under-instrumented experiments cannot localize structural edge.",
         }
 
-    prefix = f"{args.name}_" if args.experiment_root and args.name else ""
+    prefix = f"{args.name}_" if args.name else ""
     artifact_paths = write_state_discovery_outputs(
-        output_dir=Path(args.output_dir),
+        output_dir=output_dir,
         prefix=prefix,
         findings=findings,
         manifest={"datasets": manifests},
@@ -219,7 +225,7 @@ def main() -> int:
     if args.write_db and not args.dry_run and not findings.empty:
         _write_db(db_path, findings, artifact_paths)
 
-    print(json.dumps({"datasets_scanned": len(datasets), "findings": len(findings), "output_dir": args.output_dir}, indent=2))
+    print(json.dumps({"datasets_scanned": len(datasets), "findings": len(findings), "output_dir": str(output_dir)}, indent=2))
     return 0
 
 

@@ -24,14 +24,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--queue-name", default="approved_backtests")
     parser.add_argument("--config", default="configs/engine.yaml")
     parser.add_argument("--local-config", default="configs/local/engine.lab.yaml")
-    parser.add_argument(
-        "--stable-data",
-        default="/home/omenka/research_data/bt/curated/stable_data_1m_canonical",
-    )
-    parser.add_argument(
-        "--vol-data",
-        default="/home/omenka/research_data/bt/curated/vol_data_1m_canonical",
-    )
+    parser.add_argument("--stable-data", default=None, help="Legacy stable curated dataset path.")
+    parser.add_argument("--vol-data", default=None, help="Legacy volatile curated dataset path.")
+    parser.add_argument("--data-root", default="research_data")
+    parser.add_argument("--data-kind", default="research_panel")
+    parser.add_argument("--exchange", default="binance")
+    parser.add_argument("--timeframe", default="1m")
+    parser.add_argument("--stable-manifest", default="research_data/manifests/stable_universe.parquet")
+    parser.add_argument("--membership-path", default="research_data/manifests/volatile_universe_membership.parquet")
     parser.add_argument("--outputs-root", default="outputs")
     parser.add_argument("--retain-top-n", type=int, default=2)
     parser.add_argument("--retain-median", type=int, default=1)
@@ -66,6 +66,12 @@ def main() -> int:
         "local_config": args.local_config,
         "stable_data": args.stable_data,
         "vol_data": args.vol_data,
+        "data_root": args.data_root,
+        "data_kind": args.data_kind,
+        "exchange": args.exchange,
+        "timeframe": args.timeframe,
+        "stable_manifest": args.stable_manifest,
+        "membership_path": args.membership_path,
         "outputs_root": args.outputs_root,
         "retain_top_n": args.retain_top_n,
         "retain_median": args.retain_median,

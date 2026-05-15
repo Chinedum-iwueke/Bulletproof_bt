@@ -1,0 +1,352 @@
+# Research Data Subsystem
+
+`bt.research_data` builds local canonical perpetual futures datasets under `research_data/`.
+
+It stores:
+
+- 1m trade OHLCV candles
+- 1m mark-price candles
+- 1m index-price candles
+- funding events
+- historical open interest where each exchange exposes it
+- canonical research panels for Bulletproof_bt loaders
+
+Phase 2 supports Binance, Bybit, and OKX adapters. Exchange APIs are always
+called with the exchange-native symbol, while cross-exchange research uses a
+canonical perpetual symbol.
+
+All timestamps are normalized to UTC. The storage layer performs atomic parquet upserts by reading the existing file, concatenating new rows, dropping duplicate keys, sorting by timestamp, and renaming a temporary parquet file into place.
+
+## Layout
+
+```text
+research_data/
+  manifests/
+    instruments.parquet
+    fetch_state.parquet
+    coverage.parquet
+    validation_report.parquet
+    stable_universe.parquet
+    volatile_universe_membership.parquet
+  raw/<exchange>/<native_symbol>/
+    ohlcv/timeframe=1m/data.parquet
+    mark/timeframe=1m/data.parquet
+    index/timeframe=1m/data.parquet
+    funding/timeframe=event/data.parquet
+    oi/timeframe=5m/data.parquet
+  canonical/<exchange>/<native_symbol>/timeframe=1m/
+    ohlcv.parquet
+    perp_features.parquet
+    research_panel.parquet
+```
+
+## Causal Joins
+
+Panel construction is backtest-safe:
+
+- OHLCV, mark, and index candles join exactly on candle-open `ts`.
+- Funding joins with `merge_asof(..., direction="backward")`.
+- Open interest joins with `merge_asof(..., direction="backward")`.
+- `funding_source_ts` and `oi_source_ts` are preserved.
+- Validation fails if either source timestamp is later than the panel bar timestamp.
+- Missing OHLCV candles are reported; they are never interpolated or forward-filled.
+
+Binance does not provide true historical 1m open interest through the public historical endpoint. The adapter fetches `/futures/data/openInterestHist` at `period=5m`; panels use causal backward as-of joins from those observations.
+
+## Example Commands
+
+Refresh the canonical instrument map for every supported exchange:
+
+```bash
+python -m bt.research_data.cli refresh-instruments --exchange all
+```
+
+Resumable chunked backfill for one dataset:
+
+```bash
+python -m bt.research_data.cli fetch-backfill \
+  --exchange binance \
+  --dataset ohlcv \
+  --symbol BTCUSDT \
+  --timeframe 1m \
+  --start 2021-01-01 \
+  --end now
+```
+
+Backfill Bybit or OKX using native symbols:
+
+```bash
+python -m bt.research_data.cli backfill \
+  --exchange bybit \
+  --symbols BTCUSDT,ETHUSDT \
+  --start 2021-01-01 \
+  --end now \
+  --datasets ohlcv,mark,index,funding,oi \
+  --timeframe 1m
+
+python -m bt.research_data.cli backfill \
+  --exchange okx \
+  --symbols BTC-USDT-SWAP,ETH-USDT-SWAP \
+  --start 2021-01-01 \
+  --end now \
+  --datasets ohlcv,mark,index,funding,oi \
+  --timeframe 1m
+```
+
+Incremental update with overlap safety:
+
+```bash
+python -m bt.research_data.cli fetch-update \
+  --exchange binance
+```
+
+After the full bootstrap, omit `--all` to update the locally bootstrapped
+stable plus volatile-seed universe across every raw dataset:
+`ohlcv`, `mark`, `index`, `funding`, and `oi`. Use `--all` only when you
+intentionally want to include every currently listed exchange instrument, even
+new listings that were not part of the bootstrapped universe.
+
+Inspect resumable fetch state:
+
+```bash
+python -m bt.research_data.cli fetch-status
+```
+
+Backfill the stable universe:
+
+```bash
+python -m bt.research_data.cli backfill-stable \
+  --exchange binance \
+  --start 2021-01-01 \
+  --end now \
+  --timeframe 1m
+```
+
+Backfill selected symbols:
+
+```bash
+python -m bt.research_data.cli backfill \
+  --exchange binance \
+  --symbols BTCUSDT,ETHUSDT,SOLUSDT \
+  --start 2021-01-01 \
+  --end now \
+  --datasets ohlcv,mark,index,funding,oi \
+  --timeframe 1m
+```
+
+Build the volatile historical top-movers universe:
+
+```bash
+python -m bt.research_data.cli build-volatile-universe \
+  --exchange binance \
+  --start 2021-01-01 \
+  --end now \
+  --rebalance-freq 2h \
+  --lookback 24h \
+  --top-gainers 20 \
+  --top-losers 10 \
+  --min-age-days 30 \
+  --min-median-dollar-volume-7d 5000000
+```
+
+Build canonical panels:
+
+```bash
+python -m bt.research_data.cli build-panel \
+  --exchange binance \
+  --symbols BTCUSDT,ETHUSDT,SOLUSDT \
+  --timeframe 1m
+```
+
+Validate coverage and causal source timestamps:
+
+```bash
+python -m bt.research_data.cli validate \
+  --all
+```
+
+Build coverage manifest:
+
+```bash
+python -m bt.research_data.cli coverage --all
+```
+
+Generate the static coverage dashboard:
+
+```bash
+python -m bt.research_data.cli dashboard
+```
+
+Collect live liquidation events forward from now:
+
+```bash
+python -m bt.research_data.cli collect-liquidations \
+  --exchange binance \
+  --symbols BTCUSDT,ETHUSDT,SOLUSDT
+```
+
+Aggregate collected liquidation events into 1m buckets:
+
+```bash
+python -m bt.research_data.cli aggregate-liquidations \
+  --exchange binance \
+  --timeframe 1m
+```
+
+## Stable Universe
+
+The configured stable basket is 30 major Binance USDT perpetuals:
+
+`BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `BNBUSDT`, `ADAUSDT`, `DOGEUSDT`, `AVAXUSDT`, `LINKUSDT`, `TRXUSDT`, `DOTUSDT`, `LTCUSDT`, `BCHUSDT`, `NEARUSDT`, `ATOMUSDT`, `APTUSDT`, `ARBUSDT`, `OPUSDT`, `FILUSDT`, `ETCUSDT`, `INJUSDT`, `SUIUSDT`, `AAVEUSDT`, `UNIUSDT`, `MKRUSDT`, `RNDRUSDT`, `SEIUSDT`, `POLUSDT`, `FETUSDT`, `TONUSDT`.
+
+Aliases are resolved where applicable, such as `POLUSDT`/`MATICUSDT` and `FETUSDT`/`ASIUSDT`. Late-listed symbols are not treated as errors; their `first_seen_ts` is recorded in `stable_universe.parquet`.
+
+## Native vs Canonical Symbols
+
+`native_symbol` is the symbol required by an exchange API and used in storage paths:
+
+- Binance: `BTCUSDT`
+- Bybit: `BTCUSDT`
+- OKX: `BTC-USDT-SWAP`
+
+`canonical_symbol` is the cross-exchange research identity:
+
+- Binance `BTCUSDT` -> `BTC-USDT-PERP`
+- Bybit `BTCUSDT` -> `BTC-USDT-PERP`
+- OKX `BTC-USDT-SWAP` -> `BTC-USDT-PERP`
+
+The instrument manifest at `research_data/manifests/instruments.parquet` stores:
+
+```text
+exchange
+native_symbol
+canonical_symbol
+base_asset
+quote_asset
+settle_asset
+contract_type
+status
+first_seen_ts
+last_seen_ts
+price_precision
+qty_precision
+```
+
+Raw storage remains exchange/native-symbol based:
+
+```text
+research_data/raw/<exchange>/<native_symbol>/<dataset>/timeframe=<timeframe>/data.parquet
+```
+
+Canonical panel rows include both `symbol` (the native symbol for backward compatibility) and `canonical_symbol`.
+
+## Volatile Universe
+
+The volatile universe is rebuilt historically from all available Binance USDT perpetual OHLCV data already present in the local raw library. At each rebalance timestamp it:
+
+- considers only candles with `ts <= rebalance_ts`
+- requires at least `min_age_days` of history
+- requires positive price and fresh candles
+- requires a 7d median dollar volume threshold
+- computes the lookback return from data available at that time
+- selects the configured top gainers and losers
+
+This avoids using today's listed symbols or future candles to create past baskets.
+
+## Fetching Subsystem
+
+The `bt.research_data.fetching` package provides resumable historical and incremental fetching:
+
+- `fetch_state.parquet` stores one checkpoint per `exchange/symbol/dataset/timeframe`.
+- Historical backfills run in chronological chunks and checkpoint after each successful chunk.
+- Incremental updates overlap prior successful windows: 3 days for OHLCV, mark, index, and OI; 14 days for funding.
+- Writes validate each fetched chunk before persistence, then use atomic parquet upserts with duplicate-key removal.
+- `coverage.parquet` tracks expected rows, actual rows, missing rows, largest gap, first timestamp, and last timestamp.
+- `logs/research_data_fetch.log` records structured JSON lines for each chunk, including retry count and row counts.
+
+Binance 1m kline-style datasets are chunked at 1500 candles per request, about 25 hours. Funding and OI use endpoint-specific pagination windows while preserving exact source timestamps.
+
+## Daily Validation
+
+Daily validation writes:
+
+```text
+research_data/manifests/coverage.parquet
+research_data/manifests/validation_report.parquet
+research_data/reports/coverage_summary.html
+```
+
+Coverage tracks expected rows, actual rows, missing rows, duplicate rows, gap counts, largest gap minutes, first/last timestamps, and status per exchange/native symbol/dataset/timeframe.
+
+Example cron schedule:
+
+```cron
+# update every 15 minutes
+*/15 * * * * cd /path/to/bulletproof_bt && python -m bt.research_data.cli fetch-update --exchange binance
+*/15 * * * * cd /path/to/bulletproof_bt && python -m bt.research_data.cli fetch-update --exchange bybit
+
+# build panels hourly
+5 * * * * cd /path/to/bulletproof_bt && python -m bt.research_data.cli build-panel --exchange binance --symbols BTCUSDT,ETHUSDT,SOLUSDT --timeframe 1m
+
+# validate daily
+30 2 * * * cd /path/to/bulletproof_bt && python -m bt.research_data.cli validate --all
+
+# dashboard daily
+45 2 * * * cd /path/to/bulletproof_bt && python -m bt.research_data.cli dashboard
+```
+
+## Orchestration
+
+Parallel hypothesis grids can consume this library directly:
+
+```bash
+python scripts/run_parallel_hypothesis_grid.py \
+  --experiment-root outputs/tier2/l1_h7c_parallel_stable \
+  --manifest outputs/tier2/l1_h7c_parallel_stable/manifests/l1_h7c_high_selectivity_regime_tier2_grid.csv \
+  --config configs/engine.yaml \
+  --local-config configs/local/engine.lab.yaml \
+  --data-root research_data \
+  --data-kind research_panel \
+  --exchange binance \
+  --universe stable \
+  --timeframe 1m \
+  --max-workers 6 \
+  --skip-completed
+```
+
+The old curated-folder `--data /home/omenka/research_data/bt/curated/...` mode
+still works. See `docs/research_orchestration.md` for stable and volatile
+examples.
+
+## Live Liquidations
+
+Liquidation data is forward-collected only. The subsystem does not attempt a historical liquidation backfill unless an exchange explicitly provides such an endpoint in a future adapter.
+
+Raw events are append-only JSONL:
+
+```text
+research_data/raw/<exchange>/<native_symbol>/liquidations/timeframe=event/data.jsonl
+```
+
+Each raw event stores:
+
+```text
+ts
+exchange
+native_symbol
+canonical_symbol
+side
+price
+qty
+notional
+event_id
+raw
+```
+
+Aggregated liquidation candles are written to:
+
+```text
+research_data/canonical/<exchange>/<native_symbol>/timeframe=1m/liquidation_1m.parquet
+```
+
+Panel building includes liquidation columns only when `liquidation_1m.parquet` exists for that exchange/native symbol. Missing liquidation history is therefore unavailable, not zero. Aggregation only summarizes observed collected events.

@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from orchestrator.db import ResearchDB
+from bt.paths import discover_experiment_roots, resolve_existing_experiment_root_from_path
 
 
 @dataclass
@@ -52,9 +53,7 @@ def _load_trades(experiment_root: Path) -> tuple[pd.DataFrame, str | None]:
 
 
 def _discover_experiment_roots(experiments_root: Path) -> list[Path]:
-    if not experiments_root.exists():
-        return []
-    return sorted([p for p in experiments_root.iterdir() if p.is_dir() and (p / "runs").exists()])
+    return discover_experiment_roots(experiments_root)
 
 
 def _db_experiment_map(db: ResearchDB) -> dict[str, dict[str, Any]]:
@@ -85,7 +84,7 @@ def load_discovery_datasets(
     db.init_schema()
     exp_map = _db_experiment_map(db)
 
-    roots = [experiment_root] if experiment_root is not None else _discover_experiment_roots(experiments_root or Path("outputs"))
+    roots = [resolve_existing_experiment_root_from_path(experiment_root)] if experiment_root is not None else _discover_experiment_roots(experiments_root or Path("outputs"))
     datasets: list[DiscoveryDataset] = []
     for root in roots:
         trades, trades_source = _load_trades(root)

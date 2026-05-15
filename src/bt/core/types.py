@@ -25,6 +25,7 @@ class Bar:
     low: float
     close: float
     volume: float
+    extra: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _ensure_utc(self.ts, "ts")

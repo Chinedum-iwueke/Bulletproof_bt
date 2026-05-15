@@ -27,6 +27,11 @@ from bt.experiments.worker_bootstrap import (
     write_worker_exception,
 )
 from bt.hypotheses.contract import HypothesisContract
+from bt.research_orchestration.data_profiles import (
+    preflight_research_data_profile,
+    resolve_data_profile,
+    write_data_profile_config,
+)
 
 
 def _utc_now() -> str:
@@ -570,6 +575,32 @@ def run_hypothesis_manifest_in_parallel(
     return status_rows, failures
 
 
+def resolve_parallel_grid_data_args(args: argparse.Namespace, experiment_root: Path) -> tuple[Path, list[Path]]:
+    """Resolve legacy --data or new research_data profile arguments."""
+    if args.data:
+        data_path = Path(args.data)
+        if not data_path.exists():
+            raise ValueError(f"--data path does not exist: {data_path}")
+        return data_path, []
+    if args.data_kind != "research_panel" or not args.data_root:
+        raise ValueError("Provide legacy --data or new --data-root with --data-kind research_panel")
+    profile = resolve_data_profile(
+        universe=args.universe,
+        data_root=args.data_root,
+        data_kind=args.data_kind,
+        exchange=args.exchange,
+        timeframe=args.timeframe,
+        stable_manifest=args.stable_manifest,
+        membership_path=args.membership_path,
+    )
+    preflight_research_data_profile(profile)
+    override_path = write_data_profile_config(
+        profile,
+        (experiment_root / "summaries" / f"data_profile_{profile.universe}.yaml").resolve(),
+    )
+    return profile.root, [override_path]
+
+
 def cli_build_hypothesis_manifest(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build manifest for any hypothesis contract")
     parser.add_argument("--hypothesis", required=True)
@@ -592,7 +623,14 @@ def cli_run_parallel_hypothesis_grid(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--local-config")
-    parser.add_argument("--data", required=True)
+    parser.add_argument("--data")
+    parser.add_argument("--data-root")
+    parser.add_argument("--data-kind", choices=("research_panel",))
+    parser.add_argument("--exchange", default="binance")
+    parser.add_argument("--universe", choices=("stable", "volatile"), default="stable")
+    parser.add_argument("--timeframe", default="1m")
+    parser.add_argument("--membership-path")
+    parser.add_argument("--stable-manifest")
     parser.add_argument("--phase", choices=("tier2", "tier3", "validate"))
     parser.add_argument("--override", action="append", default=[])
     parser.add_argument("--max-workers", type=int, default=6)
@@ -603,19 +641,22 @@ def cli_run_parallel_hypothesis_grid(argv: list[str] | None = None) -> int:
     if args.max_workers <= 0:
         raise ValueError("--max-workers must be > 0")
 
+    experiment_root = Path(args.experiment_root)
+    data_path, generated_overrides = resolve_parallel_grid_data_args(args, experiment_root)
+
     manifest_rows = read_manifest_csv(Path(args.manifest))
     if args.phase:
         manifest_rows = [row for row in manifest_rows if row["phase"] == args.phase]
 
     statuses, failures = run_hypothesis_manifest_in_parallel(
         manifest_rows=manifest_rows,
-        experiment_root=Path(args.experiment_root),
+        experiment_root=experiment_root,
         config_path=Path(args.config),
         local_config=Path(args.local_config) if args.local_config else None,
-        data_path=Path(args.data),
+        data_path=data_path,
         max_workers=args.max_workers,
         skip_completed=bool(args.skip_completed),
-        override_paths=[Path(p) for p in args.override],
+        override_paths=[Path(p) for p in args.override] + generated_overrides,
         dry_run=bool(args.dry_run),
     )
     print(f"runs_total={len(statuses)}")

@@ -62,6 +62,33 @@ WantedBy=multi-user.target
 - Logs are written to `logs/research_daemon.log`.
 - Heartbeat is written to `logs/research_daemon_heartbeat.json`.
 - Use `--dry-run` to preview the next command without executing a job.
+- Research Memory is manual/scheduled by default: `run_research_memory_after_pipeline: false`.
+
+## Research Memory
+
+Build or refresh the deterministic research memory after a batch:
+
+```bash
+python orchestrator/research_memory.py \
+  --db research_db/research.sqlite \
+  --outputs-root outputs \
+  --verdicts-dir research/verdicts \
+  --state-findings-dir research/state_findings \
+  --alpha-zoo-dir research/alpha_zoo \
+  --output-dir research/memory \
+  --write-db
+```
+
+Query a live or proposed state snapshot:
+
+```bash
+python orchestrator/research_memory.py \
+  --db research_db/research.sqlite \
+  --query similar_state \
+  --state-json current_state.json
+```
+
+This layer writes evidence and proposed recommendations only. It does not run backtests, queue hypotheses, approve gates, deploy strategies, or trade live.
 
 ## Interpretation (Phase 4): local Ollama default
 
@@ -115,8 +142,8 @@ python orchestrator/interpret_experiment_results.py \
   --db research_db/research.sqlite \
   --name <name> \
   --hypothesis research/hypotheses/<hypothesis>.yaml \
-  --stable-root outputs/<name>_parallel_stable \
-  --vol-root outputs/<name>_parallel_vol \
+  --stable-root outputs/<phase>/<name>_parallel_stable \
+  --vol-root outputs/<phase>/<name>_parallel_vol \
   --llm-provider ollama \
   --model qwen2.5:14b
 ```
@@ -128,14 +155,14 @@ python orchestrator/interpret_experiment_results.py \
   --db research_db/research.sqlite \
   --name <name> \
   --hypothesis research/hypotheses/<hypothesis>.yaml \
-  --stable-root outputs/<name>_parallel_stable \
-  --vol-root outputs/<name>_parallel_vol \
+  --stable-root outputs/<phase>/<name>_parallel_stable \
+  --vol-root outputs/<phase>/<name>_parallel_vol \
   --llm-provider none
 ```
 
 Expected outputs:
 
-- `research/verdicts/<name>_verdict.json`
-- `research/verdicts/<name>_verdict.md`
-- `research/verdicts/<name>_llm_packet.json`
-- `research/verdicts/<name>_llm_prompt.txt`
+- `research/verdicts/<phase>/<name>_verdict.json`
+- `research/verdicts/<phase>/<name>_verdict.md`
+- `research/verdicts/<phase>/<name>_llm_packet.json`
+- `research/verdicts/<phase>/<name>_llm_prompt.txt`

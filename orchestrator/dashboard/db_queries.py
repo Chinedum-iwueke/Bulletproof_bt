@@ -4,6 +4,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+from bt.paths import discover_experiment_roots
+
 
 def rows(conn: sqlite3.Connection, q: str, args: tuple = ()) -> list[dict]:
     return [dict(r) for r in conn.execute(q, args).fetchall()]
@@ -79,6 +81,13 @@ def get_alpha_zoo(conn, repo_root: Path):
         if p.exists():
             if p.suffix == ".json": return json.loads(p.read_text(encoding='utf-8'))
     return []
+
+
+def discover_dashboard_experiment_roots(repo_root: Path, outputs_root: str | Path = "outputs") -> list[Path]:
+    root = Path(outputs_root)
+    if not root.is_absolute():
+        root = repo_root / root
+    return discover_experiment_roots(root)
 
 def get_approvals(conn):
     return rows(conn, "SELECT * FROM queues WHERE queue_name='approval_queue' AND status='WAITING_FOR_APPROVAL' ORDER BY created_at DESC")

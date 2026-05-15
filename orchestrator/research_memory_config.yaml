@@ -1,0 +1,10 @@
+outputs_root: outputs
+verdicts_dir: research/verdicts
+state_findings_dir: research/state_findings
+alpha_zoo_dir: research/alpha_zoo
+output_dir: research/memory
+min_recommendation_trades: 3
+write_db: false
+auto_approve_recommendations: false
+auto_queue_tests: false
+run_live_trading: false

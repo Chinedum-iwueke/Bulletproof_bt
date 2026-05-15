@@ -6,6 +6,7 @@ This repo keeps the existing CLI surface for `scripts/run_parallel_hypothesis_gr
 
 - The process pool now uses `multiprocessing.get_context("spawn")` and `ProcessPoolExecutor(..., mp_context=ctx)`.
 - Work is dispatched in deterministic **waves** (chunked scheduling) instead of unbounded submission.
+- The runner accepts canonical research panels through `--data-root`, `--data-kind research_panel`, `--exchange`, `--universe`, and `--timeframe`; legacy `--data` remains supported.
 - Worker bootstrap now enforces native thread caps by default (without overriding user-provided values):
   - `OMP_NUM_THREADS`
   - `OPENBLAS_NUM_THREADS`
@@ -48,6 +49,27 @@ Each run directory can now include:
 - Wave size defaults to `2 * max_workers`.
 - Each wave is submitted, awaited, finalized, and cleaned (`gc.collect()`) before next wave.
 - Parent records richer failure context in `summaries/parallel_failures.json`.
+
+## Research data mode
+
+Use `--data-root research_data --data-kind research_panel` when a grid should read the canonical panel library instead of a curated folder. Stable runs resolve symbols from `research_data/manifests/stable_universe.parquet`; volatile runs resolve active windows from `research_data/manifests/volatile_universe_membership.parquet`.
+
+```bash
+python scripts/run_parallel_hypothesis_grid.py \
+  --experiment-root outputs/tier2/l1_h7c_parallel_stable \
+  --manifest outputs/tier2/l1_h7c_parallel_stable/manifests/l1_h7c_high_selectivity_regime_tier2_grid.csv \
+  --config configs/engine.yaml \
+  --local-config configs/local/engine.lab.yaml \
+  --data-root research_data \
+  --data-kind research_panel \
+  --exchange binance \
+  --universe stable \
+  --timeframe 1m \
+  --max-workers 6 \
+  --skip-completed
+```
+
+Preflight resolves the data profile before workers launch and fails early for missing manifests, missing panel parquet files, non-UTC timestamps, missing OHLCV columns, or future-dated causal source timestamps.
 
 ## Limits / assumptions
 

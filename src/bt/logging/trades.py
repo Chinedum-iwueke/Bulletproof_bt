@@ -232,6 +232,14 @@ class TradesCsvWriter:
         "entry_decision_gate_margins_json",
         "entry_gate_thresholds_json",
         "entry_gate_values_json",
+        "rv_t",
+        "vol_pct_t",
+        "gate_pass",
+        "trend_dir_t",
+        "atr_entry",
+        "tp_enabled",
+        "tp_price",
+        "tp_distance",
         "execution_intended_entry_price",
         "execution_actual_entry_price",
         "execution_actual_exit_price",
@@ -323,6 +331,9 @@ class TradesCsvWriter:
             return None
         return parsed if pd.notna(parsed) else None
 
+    def _is_exportable_metadata_value(self, value: Any) -> bool:
+        return isinstance(value, (str, int, float, bool, pd.Timestamp, Enum))
+
     def _ensure_columns(self, columns: list[str]) -> None:
         new_columns = [column for column in columns if column not in self._columns]
         if not new_columns:
@@ -399,7 +410,7 @@ class TradesCsvWriter:
             "identity_run_id": self._run_id,
             "identity_trade_id": metadata.get("trade_id"),
             "identity_hypothesis_id": self._hypothesis_id,
-            "identity_strategy_id": metadata.get("strategy_id"),
+            "identity_strategy_id": metadata.get("strategy_id", metadata.get("strategy")),
             "identity_parameter_set_id": metadata.get("parameter_set_id"),
             "identity_symbol": trade.symbol,
             "identity_dataset_id": metadata.get("dataset_id"),
@@ -434,8 +445,8 @@ class TradesCsvWriter:
             "path_mae_r": mae_r,
             "time_to_mfe_minutes": time_to_mfe_minutes,
             "holding_period_minutes": holding_period_minutes,
-            "holding_period_bars_signal": metadata.get("holding_period_bars_signal"),
-            "path_bars_held": metadata.get("holding_period_bars_signal"),
+            "holding_period_bars_signal": metadata.get("holding_period_bars_signal", metadata.get("signal_bars_held")),
+            "path_bars_held": metadata.get("holding_period_bars_signal", metadata.get("signal_bars_held")),
             "path_holding_time_minutes": holding_period_minutes,
             "time_to_mfe_bars_signal": metadata.get("time_to_mfe_bars_signal"),
             "exit_reason": metadata.get("exit_reason"),
@@ -452,13 +463,21 @@ class TradesCsvWriter:
             "touched_1r_before_exit": bool(mfe_r is not None and mfe_r >= 1.0),
             "touched_2r_before_exit": bool(mfe_r is not None and mfe_r >= 2.0),
             "touched_3r_before_exit": bool(mfe_r is not None and mfe_r >= 3.0),
+            "rv_t": metadata.get("rv_t"),
+            "vol_pct_t": metadata.get("vol_pct_t"),
+            "gate_pass": metadata.get("gate_pass"),
+            "trend_dir_t": metadata.get("trend_dir_t"),
+            "atr_entry": metadata.get("atr_entry"),
+            "tp_enabled": metadata.get("tp_enabled"),
+            "tp_price": metadata.get("tp_price"),
+            "tp_distance": metadata.get("tp_distance"),
             "execution_intended_entry_price": metadata.get("intended_entry_price", trade.entry_price),
             "execution_actual_entry_price": trade.entry_price,
             "execution_actual_exit_price": trade.exit_price,
             "execution_entry_order_type": metadata.get("entry_order_type"),
             "execution_exit_order_type": metadata.get("exit_order_type"),
             "execution_stop_price_initial": metadata.get("entry_stop_price"),
-            "execution_take_profit_price_initial": metadata.get("take_profit_price"),
+            "execution_take_profit_price_initial": metadata.get("take_profit_price", metadata.get("tp_price")),
             "execution_trailing_stop_initial": metadata.get("trailing_stop_initial"),
             "execution_delay_bars": metadata.get("delay_bars", metadata.get("delay_remaining")),
             "execution_spread_paid": metadata.get("spread_paid"),
@@ -474,6 +493,9 @@ class TradesCsvWriter:
         dynamic_columns: list[str] = []
         for key, value in metadata.items():
             if key.startswith(("entry_state_", "entry_gate_", "entry_decision_", "execution_", "risk_", "path_", "counterfactual_", "label_", "identity_")):
+                computed_values[key] = value
+                dynamic_columns.append(key)
+            elif key not in computed_values and self._is_exportable_metadata_value(value):
                 computed_values[key] = value
                 dynamic_columns.append(key)
         computed_values = enrich_trade_row(computed_values)

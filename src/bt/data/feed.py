@@ -7,6 +7,18 @@ import pandas as pd
 
 from bt.core.types import Bar
 
+BAR_BASE_COLUMNS = {"ts", "symbol", "open", "high", "low", "close", "volume"}
+
+
+def _is_present(value: object) -> bool:
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return True
+    if isinstance(missing, bool):
+        return not missing
+    return True
+
 
 class HistoricalDataFeed:
     def __init__(self, bars: pd.DataFrame) -> None:
@@ -38,6 +50,11 @@ class HistoricalDataFeed:
                 low=float(row["low"]),
                 close=float(row["close"]),
                 volume=float(row["volume"]),
+                extra={
+                    key: value
+                    for key, value in row.items()
+                    if key not in BAR_BASE_COLUMNS and _is_present(value)
+                },
             )
             for row in rows
         ]

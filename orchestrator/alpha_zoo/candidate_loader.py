@@ -29,7 +29,7 @@ def load_candidates(args: Any) -> list[dict]:
     candidates: list[dict] = []
     allowed = {"PROMOTE_SINGLE_RUN_TIER3","PROMOTE_MULTIPLE_RUNS_TIER3","PROMOTE_FAMILY_TIER3","ADD_TO_ALPHA_ZOO","PROMOTE_FORWARD_TEST"}
     verdict_names: set[str] = set()
-    for vpath in verdict_dir.glob("*_verdict.json"):
+    for vpath in verdict_dir.rglob("*_verdict.json"):
         try:
             payload = json.loads(vpath.read_text(encoding="utf-8"))
         except Exception:
@@ -40,7 +40,7 @@ def load_candidates(args: Any) -> list[dict]:
             continue
         if verdict in allowed or (args.include_inconclusive and "INCONCLUSIVE" in str(verdict)):
             verdict_names.add(name)
-    for summary in outputs_root.glob("*/summaries/run_summary.csv"):
+    for summary in outputs_root.rglob("summaries/run_summary.csv"):
         structural_index = {}
         structural_path = summary.parent / "run_structural_summary.csv"
         if structural_path.exists():

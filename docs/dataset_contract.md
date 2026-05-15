@@ -5,9 +5,40 @@
 ### Supported input modes
 1. **Single file** (`.csv` or `.parquet`): loaded as in-memory dataframe feed.
 2. **Dataset directory** (`manifest.yaml` + per-symbol parquet files): loaded as streaming feed.
+3. **Research panel profile** (`data.dataset_kind: research_panel`): loaded from the canonical `research_data/` library by stable, volatile, or explicit-symbol profile.
 
 **Single-file vs dataset-dir difference:** dataset directories default to `data.mode=streaming`; single files default to `data.mode=dataframe` (and `streaming` is currently coerced back to dataframe for single files).  
 Repo Evidence: `src/bt/data/load_feed.py::load_feed`, `src/bt/data/load_feed.py::_resolve_mode`.
+
+### Research panel profile schema
+
+Research panel mode is selected from config, not from the positional `--data` path:
+
+```yaml
+data:
+  dataset_kind: research_panel
+  root: research_data
+  exchange: binance
+  universe: stable       # stable | volatile
+  timeframe: 1m
+  stable_manifest: research_data/manifests/stable_universe.parquet
+```
+
+For volatile runs, use:
+
+```yaml
+data:
+  dataset_kind: research_panel
+  root: research_data
+  exchange: binance
+  universe: volatile
+  timeframe: 1m
+  membership_path: research_data/manifests/volatile_universe_membership.parquet
+```
+
+The loader fails before execution when required manifests or panel parquet files are missing, when panel timestamps are not UTC, or when causal source timestamps such as `funding_source_ts` and `oi_source_ts` are later than the bar timestamp.
+
+Repo Evidence: `src/bt/data/load_feed.py::load_feed`, `src/bt/data/research_panel_loader.py`, `src/bt/research_orchestration/data_profiles.py`.
 
 ### Manifest schemas accepted for dataset directories
 - **Strict v1 manifest**
@@ -106,6 +137,8 @@ data:
 
 ## Repo Evidence index
 - `src/bt/data/load_feed.py::load_feed`
+- `src/bt/data/research_panel_loader.py`
+- `src/bt/research_orchestration/data_profiles.py`
 - `src/bt/data/dataset.py::load_dataset_manifest`
 - `src/bt/data/dataset.py::_apply_optional_filters`
 - `src/bt/data/stream_feed.py::StreamingHistoricalDataFeed.reset`

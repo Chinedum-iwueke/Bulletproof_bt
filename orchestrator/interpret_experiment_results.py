@@ -6,8 +6,8 @@ Example:
       --db research_db/research.sqlite \
       --name l1_h7c_high_selectivity_regime \
       --hypothesis research/hypotheses/l1_h7c_high_selectivity_regime.yaml \
-      --stable-root outputs/l1_h7c_high_selectivity_regime_parallel_stable \
-      --vol-root outputs/l1_h7c_high_selectivity_regime_parallel_vol \
+      --stable-root outputs/tier2/l1_h7c_high_selectivity_regime_parallel_stable \
+      --vol-root outputs/tier2/l1_h7c_high_selectivity_regime_parallel_vol \
       --llm-provider ollama \
       --model qwen2.5:14b
 """
@@ -22,6 +22,9 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 from orchestrator.analysis import (
     build_llm_packet,
@@ -35,6 +38,11 @@ from orchestrator.analysis import (
 from orchestrator.analysis.llm_client import call_llm_json
 from orchestrator.analysis.llm_packet import write_packet_files
 from orchestrator.db import ResearchDB
+from bt.paths import (
+    resolve_existing_experiment_root_from_path,
+    resolve_phase_artifact_dir,
+    resolve_phase_artifact_search_dirs,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,11 +53,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stable-root", required=True)
     parser.add_argument("--vol-root", required=True)
     parser.add_argument("--output-dir", default="research/verdicts")
+    parser.add_argument("--phase", default="tier2")
     parser.add_argument("--no-llm", action="store_true", default=False)
     parser.add_argument("--dry-run", action="store_true", default=False)
     parser.add_argument("--packet-only", action="store_true", default=False)
-    parser.add_argument("--max-top-runs", type=int, default=10)
-    parser.add_argument("--max-bottom-runs", type=int, default=5)
+    parser.add_argument("--max-top-runs", type=int, default=3)
+    parser.add_argument("--max-bottom-runs", type=int, default=2)
     parser.add_argument("--min-trades", type=int, default=30)
     parser.add_argument("--promotion-min-ev", type=float, default=0.05)
     parser.add_argument("--promotion-min-trades", type=int, default=50)
@@ -98,6 +107,13 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def resolve_input_roots(stable_root: str | Path, vol_root: str | Path) -> tuple[Path, Path]:
+    return (
+        resolve_existing_experiment_root_from_path(stable_root),
+        resolve_existing_experiment_root_from_path(vol_root),
+    )
+
+
 def _state_discovery_summary(args: argparse.Namespace) -> dict[str, Any] | None:
     json_paths: list[Path] = []
     md_paths: list[Path] = []
@@ -105,22 +121,24 @@ def _state_discovery_summary(args: argparse.Namespace) -> dict[str, Any] | None:
         json_paths.append(Path(args.state_discovery_json))
     if args.state_discovery_md:
         md_paths.append(Path(args.state_discovery_md))
-    if args.state_discovery_dir:
-        sd_dir = Path(args.state_discovery_dir)
-        json_paths.extend(
-            [
-                sd_dir / f"{args.name}_stable_state_findings.json",
-                sd_dir / f"{args.name}_vol_state_findings.json",
-                sd_dir / f"{args.name}_combined_state_findings.json",
-            ]
-        )
-        md_paths.extend(
-            [
-                sd_dir / f"{args.name}_stable_state_findings.md",
-                sd_dir / f"{args.name}_vol_state_findings.md",
-                sd_dir / f"{args.name}_combined_state_findings.md",
-            ]
-        )
+    sd_root = Path(args.state_discovery_dir) if args.state_discovery_dir else Path("research/state_findings")
+    for sd_dir in resolve_phase_artifact_search_dirs(artifact_root=sd_root, phase=args.phase):
+        prefixed_json = [
+            sd_dir / f"{args.name}_state_findings.json",
+            sd_dir / f"{args.name}_stable_state_findings.json",
+            sd_dir / f"{args.name}_vol_state_findings.json",
+            sd_dir / f"{args.name}_combined_state_findings.json",
+        ]
+        prefixed_md = [
+            sd_dir / f"{args.name}_state_findings.md",
+            sd_dir / f"{args.name}_stable_state_findings.md",
+            sd_dir / f"{args.name}_vol_state_findings.md",
+            sd_dir / f"{args.name}_combined_state_findings.md",
+        ]
+        json_paths.extend(prefixed_json if any(p.exists() for p in prefixed_json) else [sd_dir / "state_findings.json"])
+        md_paths.extend(prefixed_md if any(p.exists() for p in prefixed_md) else [sd_dir / "state_findings.md"])
+    json_paths = list(dict.fromkeys(json_paths))
+    md_paths = list(dict.fromkeys(md_paths))
     existing_json = [p for p in json_paths if p.exists()]
     existing_md = [p for p in md_paths if p.exists()]
     if not existing_json and not existing_md:
@@ -128,6 +146,7 @@ def _state_discovery_summary(args: argparse.Namespace) -> dict[str, Any] | None:
 
     findings: list[dict[str, Any]] = []
     missing_fields: list[dict[str, Any]] = []
+    markdown_excerpt: str | None = None
     for path in existing_json:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -138,18 +157,50 @@ def _state_discovery_summary(args: argparse.Namespace) -> dict[str, Any] | None:
             if isinstance(fs, list):
                 findings.extend([f for f in fs if isinstance(f, dict)])
     for path in existing_md:
+        if markdown_excerpt is None and "missing_fields" not in path.name:
+            try:
+                markdown_excerpt = path.read_text(encoding="utf-8")[:4000]
+            except Exception:
+                pass
+    for path in existing_md:
         if "missing_fields" in path.name:
             try:
                 missing_fields.append(json.loads(path.read_text(encoding="utf-8")))
             except Exception:
                 pass
 
+    finding_fields = [
+        "finding_type",
+        "state_variable",
+        "bucket",
+        "dataset_type",
+        "n_trades",
+        "ev_r_net",
+        "ev_r_gross",
+        "median_r_net",
+        "win_rate",
+        "tail_3r_rate",
+        "tail_5r_rate",
+        "tail_10r_rate",
+        "avg_mfe_r",
+        "avg_mae_r",
+        "avg_exit_efficiency",
+        "avg_cost_drag_r",
+        "cost_drag_to_ev_ratio",
+        "weak_sample",
+        "finding_score",
+    ]
+
+    def compact_finding(row: dict[str, Any]) -> dict[str, Any]:
+        return {key: row.get(key) for key in finding_fields if row.get(key) not in (None, "")}
+
     def top(find_type: str) -> list[dict[str, Any]]:
         subset = [f for f in findings if f.get("finding_type") == find_type]
         subset.sort(key=lambda x: (x.get("finding_score") or 0, x.get("n_trades") or 0), reverse=True)
-        return subset[:5]
+        return [compact_finding(row) for row in subset[:3]]
 
     return {
+        "state_discovery_available": True,
         "source_json_paths": [str(p) for p in existing_json],
         "source_md_paths": [str(p) for p in existing_md],
         "strongest_positive_states": top("POSITIVE_EDGE_STATE"),
@@ -158,6 +209,7 @@ def _state_discovery_summary(args: argparse.Namespace) -> dict[str, Any] | None:
         "cost_killed_states": top("COST_KILLED_STATE"),
         "exit_failure_states": top("EXIT_FAILURE_STATE"),
         "missing_state_fields_warnings": missing_fields,
+        "markdown_excerpt": None,
     }
 
 
@@ -243,14 +295,15 @@ def _register_db(
 def main() -> int:
     args = parse_args()
 
-    output_dir = Path(args.output_dir)
+    output_dir = resolve_phase_artifact_dir(artifact_root=args.output_dir, phase=args.phase)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    stable_root, vol_root = resolve_input_roots(args.stable_root, args.vol_root)
     context = load_experiment_context(
         name=args.name,
         hypothesis_path=Path(args.hypothesis),
-        stable_root=Path(args.stable_root),
-        vol_root=Path(args.vol_root),
+        stable_root=stable_root,
+        vol_root=vol_root,
     )
 
     stable_scored = score_runs(context.stable.summary_rows)
@@ -291,6 +344,8 @@ def main() -> int:
         input_files=input_files,
         stable_rows=stable_scored,
         vol_rows=volatile_scored,
+        stable_structural_rows=context.stable.structural_summary_rows,
+        vol_structural_rows=context.volatile.structural_summary_rows,
         diagnostics=diagnostics,
         preliminary=preliminary,
         max_top_runs=args.max_top_runs,
@@ -313,6 +368,9 @@ def main() -> int:
 
     raw_llm_output: str | None = None
     if not args.no_llm and not args.packet_only and args.llm_provider != "none":
+        stale_error_path = output_dir / f"{args.name}_llm_error.txt"
+        if stale_error_path.exists():
+            stale_error_path.unlink()
         try:
             llm_result = call_llm_json(
                 provider=args.llm_provider,
@@ -332,7 +390,9 @@ def main() -> int:
                 final_verdict["llm_used"] = True
                 final_verdict["verdict_source"] = "llm"
             else:
-                final_verdict["llm_parse_error"] = True
+                final_verdict["llm_parse_error"] = not (isinstance(parsed, dict) and isinstance(parsed.get("verdict"), str))
+                if isinstance(parsed, dict) and isinstance(parsed.get("verdict"), str):
+                    final_verdict["llm_invalid_verdict"] = parsed.get("verdict")
                 if raw_llm_output:
                     raw_output_path = output_dir / f"{args.name}_llm_raw_response.txt"
                     raw_output_path.write_text(raw_llm_output, encoding="utf-8")

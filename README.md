@@ -195,6 +195,9 @@ bulletproof_bt V1 is a single-strategy institutional research OS.
 src/bt/
   core/            # Engine loop, configuration resolution
   data/            # Dataset loading, validation, resampling
+  research_data/   # Canonical perpetual futures data library
+  research_orchestration/
+                   # Research-data profiles for daemon/grid runs
   execution/       # Execution profiles, pricing, slippage, spread
   risk/            # Position sizing, margin, stop handling
   portfolio/       # Cash, positions, liquidation logic
@@ -211,6 +214,18 @@ configs/
 scripts/
   run_backtest.py
   run_experiment_grid.py
+  run_parallel_hypothesis_grid.py
+  bootstrap_research_data_*.py
+
+orchestrator/
+  research_daemon.py
+  run_experiment_pipeline.py
+  research_memory.py
+
+research/
+  hypotheses/      # Pre-registered hypothesis contracts
+  verdicts/        # Interpreter verdicts
+  state_findings/  # State discovery outputs
 
 tests/
   Deterministic regression + contract validation
@@ -292,6 +307,39 @@ python scripts/run_backtest.py --data <PATH> --config configs/engine.yaml
 ```bash
 python scripts/run_experiment_grid.py --config configs/engine.yaml --experiment configs/experiments/h1_volfloor_donchian.yaml --data <PATH> --out <OUT_DIR>
 ```
+
+## Research data workflow
+
+The canonical research library lives under `research_data/` and is built with `bt.research_data`.
+It supports Binance, Bybit, and OKX perpetual futures adapters, stable and volatile universe manifests, causal research panels, validation reports, and forward-collected liquidation events.
+
+Start with:
+
+```bash
+python -m bt.research_data.cli refresh-instruments --exchange all
+python -m bt.research_data.cli fetch-backfill --exchange binance --dataset ohlcv --symbol BTCUSDT --timeframe 1m --start 2021-01-01 --end now
+python -m bt.research_data.cli build-panel --exchange binance --symbols BTCUSDT,ETHUSDT,SOLUSDT --timeframe 1m
+python -m bt.research_data.cli validate --all
+```
+
+Parallel hypothesis grids and the research daemon can consume those panels directly:
+
+```bash
+python scripts/run_parallel_hypothesis_grid.py \
+  --experiment-root outputs/tier2/l1_h7c_parallel_stable \
+  --manifest outputs/tier2/l1_h7c_parallel_stable/manifests/l1_h7c_high_selectivity_regime_tier2_grid.csv \
+  --config configs/engine.yaml \
+  --local-config configs/local/engine.lab.yaml \
+  --data-root research_data \
+  --data-kind research_panel \
+  --exchange binance \
+  --universe stable \
+  --timeframe 1m \
+  --max-workers 6 \
+  --skip-completed
+```
+
+See [docs/research_data.md](docs/research_data.md), [docs/research_orchestration.md](docs/research_orchestration.md), and [orchestrator/README_daemon.md](orchestrator/README_daemon.md).
 
 ### Quick-slice workflow (e.g., 6 months on BTC only)
 
@@ -525,7 +573,11 @@ for bar in bars:
 - `slippage_drag_pct`
 - `spread_drag_pct`
 
-## Client contracts
+## Project docs
+
+The full documentation set lives in [docs/](docs/). Start with the client contracts and research operations docs below.
+
+### Client contracts
 
 - [docs/dataset_contract.md](docs/dataset_contract.md)
 - [docs/data_market_contract.md](docs/data_market_contract.md)
@@ -536,3 +588,12 @@ for bar in bars:
 - [docs/output_artifacts_contract.md](docs/output_artifacts_contract.md)
 - [docs/config_layering_contract.md](docs/config_layering_contract.md)
 - [docs/beginner_vs_pro_contract.md](docs/beginner_vs_pro_contract.md)
+
+### Research operations
+
+- [docs/research_data.md](docs/research_data.md)
+- [docs/research_orchestration.md](docs/research_orchestration.md)
+- [docs/hypothesis_contract.md](docs/hypothesis_contract.md)
+- [docs/parallel_grid_runner.md](docs/parallel_grid_runner.md)
+- [orchestrator/README_daemon.md](orchestrator/README_daemon.md)
+- [orchestrator/README_dashboard.md](orchestrator/README_dashboard.md)

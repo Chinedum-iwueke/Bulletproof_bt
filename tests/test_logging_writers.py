@@ -139,3 +139,60 @@ def test_trades_csv_writer_expands_dynamic_columns_rectangularly(tmp_path: Path)
 
     assert "entry_state_csi_pctile" in rows[0]
     assert all(len(row) == len(rows[0]) for row in rows[1:])
+
+
+def test_trades_csv_writer_maps_l1_entry_context_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "trades.csv"
+    writer = TradesCsvWriter(path, run_id="run_1", hypothesis_id="L1-H1")
+    writer.write_trade(
+        Trade(
+            symbol="BTCUSDT",
+            side=Side.BUY,
+            entry_ts=pd.Timestamp("2024-01-01T00:00:00Z"),
+            exit_ts=pd.Timestamp("2024-01-01T01:00:00Z"),
+            entry_price=100.0,
+            exit_price=104.0,
+            qty=1.0,
+            pnl=4.0,
+            fees=0.5,
+            slippage=0.1,
+            mae_price=99.0,
+            mfe_price=106.0,
+            metadata={
+                "strategy": "l1_h1_vol_floor_trend",
+                "risk_amount": 10.0,
+                "entry_stop_distance": 10.0,
+                "entry_stop_price": 90.0,
+                "rv_t": 0.012,
+                "vol_pct_t": 0.91,
+                "gate_pass": True,
+                "trend_dir_t": 1,
+                "atr_entry": 5.0,
+                "tp_enabled": True,
+                "tp_price": 110.0,
+                "tp_distance": 10.0,
+                "signal_bars_held": 48,
+                "vwap_t": 101.5,
+                "custom_quality_score": 0.77,
+            },
+        )
+    )
+    writer.close()
+
+    with path.open(encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert row["identity_strategy_id"] == "l1_h1_vol_floor_trend"
+    assert float(row["rv_t"]) == 0.012
+    assert float(row["vol_pct_t"]) == 0.91
+    assert row["gate_pass"] == "True"
+    assert row["trend_dir_t"] == "1"
+    assert float(row["atr_entry"]) == 5.0
+    assert row["tp_enabled"] == "True"
+    assert float(row["tp_price"]) == 110.0
+    assert float(row["tp_distance"]) == 10.0
+    assert float(row["execution_take_profit_price_initial"]) == 110.0
+    assert row["holding_period_bars_signal"] == "48"
+    assert row["path_bars_held"] == "48"
+    assert float(row["vwap_t"]) == 101.5
+    assert float(row["custom_quality_score"]) == 0.77
