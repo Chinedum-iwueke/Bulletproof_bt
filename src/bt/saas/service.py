@@ -15,8 +15,15 @@ from bt.metrics.r_metrics import summarize_r
 from bt.saas.models import (
     AnalysisCapabilityProfile,
     AnalysisRunConfig,
+    CAPABILITY_PROFILE_VERSION,
+    DIAGNOSTIC_CONTRACT_VERSION,
     DiagnosticCapability,
+    ENGINE_ADAPTER_VERSION,
+    ENGINE_PARSER_VERSION,
+    ENGINE_SEAM_NAME,
+    ENGINE_SEAM_VERSION,
     EngineAnalysisResult,
+    EngineEnvelopeV1,
     EngineRunContext,
     IngestedRun,
     NormalizedTradeRecord,
@@ -385,6 +392,16 @@ class StrategyRobustnessLabService:
             has_parameter_sweep=parsed_artifact.parameter_sweep is not None,
         )
         return EngineAnalysisResult(
+            envelope=EngineEnvelopeV1(
+                engine_name="bt",
+                engine_version=None,
+                seam_name=ENGINE_SEAM_NAME,
+                seam_version=ENGINE_SEAM_VERSION,
+                adapter_version=ENGINE_ADAPTER_VERSION,
+                parser_version=ENGINE_PARSER_VERSION,
+                capability_profile_version=CAPABILITY_PROFILE_VERSION,
+                diagnostic_contract_version=DIAGNOSTIC_CONTRACT_VERSION,
+            ),
             run_context=run_context,
             capability_profile=capability_profile,
             warnings=warnings,

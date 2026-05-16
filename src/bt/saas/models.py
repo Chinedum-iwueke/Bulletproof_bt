@@ -126,6 +126,26 @@ class AnalysisCapabilityProfile:
     artifact_capabilities: dict[str, bool] = field(default_factory=dict)
 
 
+ENGINE_SEAM_NAME = "run_analysis_from_parsed_artifact"
+ENGINE_SEAM_VERSION = "1.0.0"
+ENGINE_ADAPTER_VERSION = "1.0.0"
+ENGINE_PARSER_VERSION = "1.0.0"
+CAPABILITY_PROFILE_VERSION = "1.0.0"
+DIAGNOSTIC_CONTRACT_VERSION = "1.0.0"
+
+
+@dataclass(frozen=True)
+class EngineEnvelopeV1:
+    engine_name: str
+    engine_version: str | None
+    seam_name: str
+    seam_version: str
+    adapter_version: str
+    parser_version: str
+    capability_profile_version: str
+    diagnostic_contract_version: str
+
+
 @dataclass(frozen=True)
 class EngineRunContext:
     artifact_kind: ArtifactKind
@@ -140,6 +160,7 @@ class EngineRunContext:
 
 @dataclass(frozen=True)
 class EngineAnalysisResult:
+    envelope: EngineEnvelopeV1
     run_context: EngineRunContext
     capability_profile: AnalysisCapabilityProfile
     warnings: list[str]

@@ -3,6 +3,7 @@
 from bt.saas.models import (
     AnalysisCapabilityProfile,
     AnalysisRunConfig,
+    EngineEnvelopeV1,
     DiagnosticCapability,
     EngineAnalysisResult,
     EngineRunContext,
@@ -18,6 +19,7 @@ from bt.saas.service import IngestionError, StrategyRobustnessLabService, run_an
 __all__ = [
     "AnalysisCapabilityProfile",
     "AnalysisRunConfig",
+    "EngineEnvelopeV1",
     "DiagnosticCapability",
     "EngineAnalysisResult",
     "EngineRunContext",

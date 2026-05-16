@@ -1,0 +1,9 @@
+{
+  "engine_name": "bt",
+  "seam_name": "run_analysis_from_parsed_artifact",
+  "seam_version": "1.0.0",
+  "adapter_version": "1.0.0",
+  "parser_version": "1.0.0",
+  "capability_profile_version": "1.0.0",
+  "diagnostic_contract_version": "1.0.0"
+}
