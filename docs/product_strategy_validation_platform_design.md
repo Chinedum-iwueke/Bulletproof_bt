@@ -2084,6 +2084,801 @@ Highest-priority implementation gaps:
 
 The first product is ready to sell only when a user can upload a messy artifact, understand what it proves, see what it fails to prove, export a defensible memo, and know the next evidence needed to strengthen the verdict.
 
+## First-Client Readiness Roadmap
+
+This roadmap is the implementation bridge from the current two-repo state to a sellable Approach A product: Strategy Truth Room as an artifact-first validation product. The goal is not to build the full research operating system yet. The goal is to create a world-class first product that can take a real client's strategy evidence, falsify it honestly, produce a defensible report, and expose the next evidence required.
+
+The repos already contain important foundations:
+
+- `bulletproof_bt` has the deterministic analysis seam, diagnostic envelopes, capability profiles, trade-based diagnostics, Monte Carlo, execution sensitivity, ruin, regime analysis, parameter stability, and report payloads.
+- `invariance_research` has auth, local and Postgres persistence, upload inspection, bundle intake, evidence ledger projection, analysis workers, diagnostic workspaces, chart adapters, report snapshots, export jobs, share tokens, Research Desk records, admin operations, and public product pages.
+
+The product is still not first-client ready because the foundations are not yet unified into a strict Strategy Truth Room contract. The current product can run useful analyses, but it does not yet consistently behave like a hostile validation room that tracks evidence, claims, assumptions, artifact sufficiency, report immutability, share safety, and paid-tier boundaries as first-class product objects.
+
+### Current Product Audit
+
+| Area | Current State | Sellable Gap | Primary Repo |
+| --- | --- | --- | --- |
+| Product framing | Public pages now describe validation, execution realism, report output, and Research Desk handoff. | App workbench still needs to fully embody "upload evidence, get hostile validation" on every completed-analysis surface. | `invariance_research` |
+| Design system | Research-red visual system, artifact surfaces, evidence panels, metric instruments, public-page refinements, and report snapshot UI exist. | Some analysis pages still mix old card grammar with new evidence instruments; workbench IA is not yet cohesive page-to-page. | `invariance_research` |
+| Artifact intake | CSV and ZIP uploads exist; generic trade CSV and generic bundle parser exist; upload inspection returns eligibility and an evidence ledger. | Needs canonical Strategy Truth Room bundle manifest, richer artifact families, templates, claim intake, stronger bundle validation, and file-level provenance. | Both |
+| Evidence ledger | Upload and engine statuses are reconciled into a diagnostic evidence ledger. | Needs to become a persistent evidence object, not only a diagnostic availability projection. It must include artifact facts, diagnostic unlock reasons, claims, assumptions, contradictions, and report-safe summaries. | `invariance_research` |
+| Assumption handling | Diagnostics emit assumptions, limitations, and recommendations; UI has context panels. | No normalized Assumption Ledger workspace yet. Assumptions are not source-linked, materiality-scored, contradicted, or tied to verdict movement. | Both |
+| Unsupported claims | Some copy and limitations warn about missing evidence. | No engine-native or app-native claim inventory that says which claims are supported, unsupported, contradicted, or outside scope. | Both |
+| Diagnostic coverage | Overview, Execution, Distribution, Monte Carlo, Ruin, Regime, Parameter Stability, and Report routes exist. | The routes need a shared analyst-workbench grammar and stronger falsification content. Gated/unavailable states must remain visible and useful. | `invariance_research` |
+| Engine diagnostics | `bulletproof_bt` supports core Approach A diagnostics with degradation behavior. | Diagnostics need stronger artifact-aware realism: broker fills, richer cost/slippage schedules, regime-aware Monte Carlo, stronger parameter topology, asset-class capability statements, and proof-report payloads. | `bulletproof_bt` |
+| Report export | Report page has export actions; export queue can render JSON/Markdown/PDF from snapshots. | Export must become a polished validation memo contract with evidence coverage, assumption ledger, unsupported claims, hashes, schema versions, redaction state, and share-room projection. | Both |
+| Share Room | Report snapshots, share tokens, share routes, and access events exist. | Needs productized Share Room: privacy controls, revoked/expired states, recipient-safe memo view, access log, redaction policy, and threat-model enforcement. | `invariance_research` |
+| Subscription model | Entitlements exist for `explorer`, `professional`, `research_lab`, and `advisory`; diagnostic locks exist. | Needs launch tiers aligned to the new Free/Individual/Pro/Team/Research Desk matrix, pricing, copy, Stripe mapping, and per-diagnostic unlock states. | `invariance_research` |
+| Research Desk | Request records, admin page, addenda, and report-page CTA exist. | Needs full handoff packet, human/agent review workflow, addendum approval policy, pricing path, and first-client operating procedure. | `invariance_research` |
+| Reliability | Workers, retries, export queue, admin ops, and Postgres schema initialization exist. | Needs end-to-end first-client readiness harness across local SQLite, production Postgres, worker startup, artifact storage, email, exports, and share links. | Both |
+
+### Engine Audit: `bulletproof_bt`
+
+The engine is strong enough to be the foundation of Approach A, but it is not yet the final Strategy Truth Room engine contract.
+
+Strengths already present:
+
+- deterministic SaaS seam: `StrategyRobustnessLabService.run_analysis_from_parsed_artifact`
+- structured models for normalized trades, parsed artifacts, analysis run config, engine envelope, run context, diagnostic status, and capability profiles
+- diagnostic names covering overview, distribution, Monte Carlo, stability, execution, regimes, ruin, and report
+- trade-only degradation and capability-profile signaling
+- execution stress, distribution diagnostics, Monte Carlo simulation, ruin diagnostics, OHLCV-gated regime analysis, parameter sweep stability, and report output
+- tests covering parsed-artifact engine seam behavior, trade-only degradation, skipped diagnostics, OHLCV regime metrics, parameter stability shape, and richer trade artifacts
+
+Engine gaps to close:
+
+| Requirement | Current Engine State | Required Change | Phase |
+| --- | --- | --- | --- |
+| Canonical artifact families | Engine artifact kinds are still coarse: trade CSV, artifact bundle, parameter sweep. | Add typed Strategy Truth Room artifacts: trade log, equity curve, broker export, backtest report, strategy config, OHLCV context, benchmark series, parameter sweep, declared claims, and full validation bundle. | Phase 1 |
+| Full bundle manifest | Engine can consume parsed artifact input but does not own the full Strategy Truth Room bundle manifest contract. | Add manifest validation or shared contract tests so app and engine agree on file roles, hashes, schema versions, required/optional files, and unlock rules. | Phase 1 |
+| Asset-class validation | Normalized trades are broadly asset-class agnostic. | Add explicit asset-class capability profile: crypto, FX, equity, index, futures/CFD where supported; mark unsupported execution details when broker/venue fields are absent. | Phase 1 |
+| Assumption Ledger | Assumptions exist as diagnostic strings. | Emit normalized assumptions with source, diagnostic, materiality, confidence, testability, verdict impact, rescue evidence, and share-safe wording. | Phase 2 |
+| Unsupported claims | No declared-claim support model. | Add claim objects and evidence mapping: supported, partially supported, unsupported, contradicted, outside scope. | Phase 2 |
+| Execution realism | Execution stress exists but is largely deterministic and scenario-based. | Add broker/fill-aware execution audit, fee model provenance, spread/slippage sensitivity schedules, venue/timeframe caveats, and "execution fantasy" verdict triggers. | Phase 3 |
+| Cost sensitivity | Fee/slippage stress exists. | Make stress ladders configurable from artifact, broker profile, asset class, and user assumptions; emit break-even friction and cost-kill threshold. | Phase 3 |
+| Distribution falsification | Distribution metrics exist. | Add rare-trade dependence, winner concentration, tail asymmetry, liquidity-sensitive outlier handling, and edge-source classification. | Phase 3 |
+| Monte Carlo | IID bootstrap Monte Carlo exists. | Add block bootstrap, regime-conditioned resampling when context exists, serial-dependence warning, and simulation model disclosure. | Phase 3 |
+| Ruin | Ruin can run with account/risk config. | Make account and sizing assumptions explicit in the Assumption Ledger, avoid advice-like deployment language, and emit capital survival verdicts as validation statements. | Phase 3 |
+| Regime | OHLCV-gated technical regimes exist. | Add regime definition metadata, regime coverage sufficiency, thin-sample warnings, optional benchmark-relative regimes, and future extension hooks for macro/event/liquidity regimes. | Phase 3 |
+| Parameter stability | Parameter sweep support exists. | Add plateau/cliff topology, sensitivity by parameter, robust-region scoring, optimization target disclosure, and unsupported-sweep reasons. | Phase 3 |
+| Proof report payload | Report payload exists. | Emit a report contract with verdict taxonomy, evidence coverage, assumptions, limitations, unsupported claims, diagnostic confidence, artifact hashes, and Research Desk packet hooks. | Phase 5 |
+| Verdict taxonomy | Engine verdicts are closer to robust/conditional/fragile/not-ready. | Map to Strategy Truth Room verdicts: structurally credible, promising but under-supported, likely overfit, execution-fantasy, data-insufficient, regime-dependent, untradeable after costs. | Phase 5 |
+
+### App Audit: `invariance_research`
+
+The web app has enough infrastructure to become the product surface, but the UX and data model must now be tightened around falsification.
+
+Strengths already present:
+
+- auth and account provisioning with local SQLite and production Postgres paths
+- upload inspection API with CSV and ZIP handling
+- generic trade CSV parser, generic bundle parser, semantic validation, and artifact storage
+- evidence ledger projection that reconciles artifact eligibility and engine capability profile
+- analysis queue, retry path, status polling, and worker runtime
+- diagnostic routes for the required core workspaces
+- chart adapters and dashboard components
+- report page with export actions
+- export queue and PDF/Markdown/JSON renderers
+- report snapshots, share tokens, share access events, Research Desk requests, reviewer addenda, and admin pages
+- entitlement policy and diagnostic lock models
+
+App gaps to close:
+
+| Requirement | Current App State | Required Change | Phase |
+| --- | --- | --- | --- |
+| Strategy Truth Room intake | New Analysis accepts CSV/ZIP and shows eligibility. | Rebuild as Evidence Intake: artifact classification, file manifest review, unlock matrix, missing evidence prompts, templates, and bundle repair guidance. | Phase 1 |
+| Canonical contracts | App has `bundle_v1`, `trade_csv`, `trade_history_bundle`, `backtest_result_bundle`, `research_bundle`. | Align contracts with the artifact schemas in this design doc and the engine models; version all file-level schemas. | Phase 1 |
+| Evidence ledger persistence | Upload response returns an evidence ledger projection. | Persist evidence ledger snapshots per artifact and per analysis; display them consistently across workspaces and exports. | Phase 2 |
+| Assumption Ledger route | No dedicated route. | Add `/app/analyses/[id]/assumptions` and make it a first-class sidebar item. | Phase 2 |
+| Claim inventory | No declared-claim workspace. | Add claim intake, claim extraction from reports/config where possible, unsupported-claim inventory, and report integration. | Phase 2 |
+| Workbench IA | Workspaces exist but are uneven in hierarchy, copy, and evidence density. | Redesign all analysis pages into a coherent analyst workbench with shared page anatomy, state blocks, diagnostics, figures, attack panels, and next-evidence prompts. | Phase 4 |
+| Sidebar visibility | Core routes exist. | Ensure all diagnostics are always visible; show evidence-limited and plan-locked states without hiding the page. | Phase 4 |
+| Analysis Library | Exists as run list. | Upgrade to case library with artifact richness, verdict, report status, share status, Research Desk status, and next-evidence filter. | Phase 4 |
+| Report artifact | Export exists but is still mostly renderer-driven. | Build proof report model and visual report surface around verdict, coverage, assumptions, unsupported claims, diagnostic confidence, limitations, appendices, and share policy. | Phase 5 |
+| Share Room | Share routes and tokens exist. | Build recipient-facing Share Room with report summary, redaction boundary, token status, expiration, access events, and revoke controls. | Phase 5 |
+| Subscription tiers | Entitlements exist but names and gates do not yet match launch packaging. | Update tier model, pricing copy, Stripe mapping, upgrade page, pricing page, billing page, and diagnostic lock messaging. | Phase 6 |
+| Research Desk handoff | Requests and addenda exist. | Add request wizard, packet generation, admin triage states, reviewer checklist, client-facing addenda, and status timeline. | Phase 7 |
+| Production readiness | Admin ops and schema auto-init exist. | Add migration discipline, startup checks, email deliverability, worker launch docs, storage checks, share security checks, and first-client smoke tests. | Phase 8 |
+
+### Implementation Phases
+
+Each phase below should be implemented as a Codex slice with tests and a short verification note. Phases are ordered to avoid building polished pages on unstable contracts.
+
+### Phase 0: Freeze The Strategy Truth Room Contract
+
+Repo ownership:
+
+- `bulletproof_bt`: diagnostic output contract, engine fixture outputs, version constants
+- `invariance_research`: app contract types, intake contracts, report/share contracts
+- Both repos: cross-repo fixture pack and contract tests
+
+Purpose:
+
+Create a single contract spine so the app and engine stop drifting. This phase should not chase visual polish. It should define the artifacts, statuses, verdicts, evidence objects, and report payloads that every later phase uses.
+
+Implementation tasks:
+
+- define `strategy_truth_room_contract_version`
+- define canonical diagnostic names and page slugs:
+  - overview
+  - execution
+  - distribution
+  - monte_carlo
+  - ruin
+  - regimes
+  - stability
+  - assumptions
+  - report
+  - share_room
+  - research_desk
+  - library
+- define canonical artifact families:
+  - `trade_log_v1`
+  - `equity_curve_v1`
+  - `broker_export_v1`
+  - `backtest_report_v1`
+  - `strategy_config_v1`
+  - `ohlcv_context_v1`
+  - `benchmark_series_v1`
+  - `parameter_sweep_v1`
+  - `declared_claims_v1`
+  - `strategy_truth_room_bundle_v1`
+- define canonical verdict taxonomy:
+  - structurally credible
+  - promising but under-supported
+  - likely overfit
+  - execution-fantasy
+  - data-insufficient
+  - regime-dependent
+  - untradeable after costs
+- define canonical evidence states:
+  - supported
+  - limited
+  - unsupported
+  - contradicted
+  - unavailable
+  - plan_locked
+  - pending_review
+- define immutable IDs and hashes required for artifacts, analyses, reports, snapshots, shares, and Research Desk packets
+- add fixture files representing:
+  - trade-only CSV
+  - trade CSV with fees and R-multiples
+  - full validation bundle
+  - bundle missing OHLCV
+  - bundle missing parameter sweep
+  - broker export with fills
+  - equity-curve-only artifact
+  - malformed bundle
+- add cross-repo contract tests:
+  - app fixture parses into engine-accepted payload
+  - engine emits app-accepted diagnostic envelope
+  - missing artifact inputs produce evidence-limited, not silent failure
+  - unsupported diagnostic remains visible in app navigation
+  - report payload includes evidence coverage and limitations
+
+Definition of done:
+
+- both repos expose matching contract version constants
+- a fixture from `invariance_research` can be sent through the `bulletproof_bt` bridge and validated against app contracts
+- existing tests continue to pass
+- contract drift fails tests before reaching UI work
+
+### Phase 1: Artifact Intake And Bundle Manifest
+
+Repo ownership:
+
+- `bulletproof_bt`: expand parsed artifact models, capability profiles, and artifact-aware diagnostic requirements
+- `invariance_research`: upload UI, parser routing, manifest validation, storage metadata, artifact templates
+- Both repos: fixture and manifest contract tests
+
+Purpose:
+
+Make the product artifact-first in a way a real client can understand. The user should know exactly what was accepted, what each file unlocked, what is missing, and what the system refuses to infer.
+
+Implementation tasks in `bulletproof_bt`:
+
+- expand artifact kind/type models to match the canonical artifact families
+- accept optional declared claims, strategy config, broker fills, benchmark series, OHLCV context, equity curve, and parameter sweep metadata
+- emit artifact-family-aware capability profiles
+- emit file-level required inputs and optional enrichments per diagnostic
+- emit asset-class capability statements:
+  - crypto supported when symbol, timestamp, quantity, prices, fees, exchange are present
+  - FX supported when pair, timestamp, quantity/lot, entry/exit, costs/spread assumptions are present
+  - equities/indexes supported when symbol, timestamp, shares/contracts, prices, fees, and market calendar assumptions are present
+  - futures/CFDs marked limited unless contract multiplier, tick value, margin, and session data are supplied
+- ensure engine does not imply broker-grade execution realism when only trade-level rows are provided
+
+Implementation tasks in `invariance_research`:
+
+- replace generic upload copy with Evidence Intake language
+- add artifact-type selector only as a fallback; prefer automatic classification
+- add manifest review UI:
+  - file list
+  - schema version
+  - checksum
+  - recognized/ignored/rejected
+  - diagnostic unlocks
+  - missing evidence
+  - parser warnings
+- add downloadable templates:
+  - trade log CSV
+  - equity curve CSV
+  - broker export mapping guide
+  - OHLCV context CSV
+  - parameter sweep CSV
+  - declared claims JSON
+  - full validation bundle ZIP example
+- persist file-level artifact metadata and parser provenance
+- distinguish artifact rejection, artifact-limited, and plan-limited states
+- support equity-curve-only inspection as limited, not as an invalid strategy when possible
+- show full-bundle readiness score before run creation
+
+Definition of done:
+
+- a user can upload a trade CSV and see exactly which diagnostics are available, limited, or unavailable
+- a user can upload a full bundle and see the full-suite unlock matrix
+- a malformed bundle produces repair instructions
+- a bundle with extra files does not silently discard them without showing ignored/unsupported status
+- engine and app agree on diagnostic unlock status
+
+### Phase 2: Evidence Ledger, Assumption Ledger, And Claim Inventory
+
+Repo ownership:
+
+- `bulletproof_bt`: emit normalized assumptions, evidence facts, and claim-support objects
+- `invariance_research`: persist/display ledgers, add Assumption Ledger workspace, add claim inventory UI
+
+Purpose:
+
+Turn the product from "analysis pages" into a truth room. The user should see what assumptions produced the result, what claims the artifact cannot support, and what evidence would change the verdict.
+
+Implementation tasks in `bulletproof_bt`:
+
+- emit `assumption_ledger` entries with:
+  - assumption id
+  - source: user, parser, engine default, inferred, missing
+  - diagnostic
+  - statement
+  - materiality: low, medium, high, critical
+  - confidence
+  - falsification test
+  - affected metrics
+  - verdict impact
+  - rescue evidence
+  - share-safe wording
+- emit `evidence_facts` with:
+  - file/source id
+  - field/value summary
+  - diagnostic relevance
+  - provenance
+  - confidence
+- support `declared_claims_v1`
+- emit `claim_inventory` with:
+  - claim id
+  - claim text
+  - source
+  - support status
+  - supporting diagnostics
+  - contradicting diagnostics
+  - missing evidence
+  - report wording
+- add tests for assumptions and claims in trade-only, full-bundle, and missing-context scenarios
+
+Implementation tasks in `invariance_research`:
+
+- persist evidence ledger snapshots on upload and analysis completion
+- add `Assumption Ledger` sidebar item
+- build Assumption Ledger workspace with:
+  - critical assumptions
+  - engine defaults
+  - user-declared assumptions
+  - inferred assumptions
+  - contradictions
+  - missing evidence
+  - "what would rescue this" actions
+- add unsupported claims panel to Overview and Report
+- add declared-claims intake field/file support
+- make assumptions and claims exportable in JSON/PDF
+- make Research Desk request prefill with critical assumptions and unsupported claims
+
+Definition of done:
+
+- every completed run has an evidence ledger and assumption ledger
+- every report has an unsupported-claims section, even if empty
+- Overview answers "what assumptions produced this result?"
+- Report answers "what this result does not prove"
+- Research Desk packet can be generated from the ledger state
+
+### Phase 3: Engine Diagnostic Hardening
+
+Repo ownership:
+
+- `bulletproof_bt`: primary owner
+- `invariance_research`: update mappers, charts, copy, fixtures, and workbench states as engine output expands
+
+Purpose:
+
+Make the diagnostics hostile enough that a serious trader, seller, educator, or allocator would trust the output as due diligence rather than a prettified backtest summary.
+
+Implementation tasks in `bulletproof_bt`:
+
+- Execution:
+  - add broker/fill-aware audit when broker export is supplied
+  - classify missing fees, suspicious zero-cost fills, impossible fill timestamps, duplicate fills, partial fills, and venue/timezone ambiguity
+  - compute break-even cost and break-even slippage
+  - emit cost-kill threshold
+  - emit execution-fantasy verdict triggers
+- Distribution:
+  - compute rare-trade dependence
+  - compute top-N trade contribution
+  - compute winner concentration and loser concentration
+  - flag strategies where edge comes from too few trades
+  - separate gross vs net distribution when fees exist
+- Monte Carlo:
+  - add IID bootstrap disclosure
+  - add block bootstrap mode
+  - add regime-conditioned bootstrap when OHLCV/regimes exist
+  - emit path survival, drawdown envelope, time-under-water, and model limitations
+- Ruin:
+  - require explicit capital and risk assumptions for full confidence
+  - separate validation language from investment advice
+  - emit sizing fragility and survivability status
+- Regime:
+  - emit regime definition metadata
+  - warn on thin samples per regime
+  - emit regime dominance and adverse-regime decay
+  - add benchmark-relative regime hooks
+- Parameter Stability:
+  - parse parameter sweep files into parameter surfaces
+  - compute robust region, cliff risk, plateau width, local optimum dependence, and optimization target risk
+  - emit stability confidence only when sweep coverage is sufficient
+- Report:
+  - emit diagnostic confidence per section
+  - emit proof-report payload with assumptions, unsupported claims, evidence coverage, and artifact provenance
+
+Implementation tasks in `invariance_research`:
+
+- update bridge types and mappers for new diagnostic fields
+- add charts/instruments for:
+  - cost-kill threshold
+  - rare-trade dependence
+  - Monte Carlo survival envelope
+  - regime dominance
+  - parameter plateau/cliff map
+  - assumption materiality
+- add regression tests so missing engine fields degrade cleanly
+
+Definition of done:
+
+- engine can falsify a strategy under worse fills, higher fees, rare-trade removal, adverse regimes, Monte Carlo path stress, ruin assumptions, and parameter perturbation
+- app displays every expanded diagnostic without raw JSON leakage
+- each diagnostic produces a verdict-driving statement, not only charts
+
+### Phase 4: Analyst Workbench IA And Page Redesign
+
+Repo ownership:
+
+- `invariance_research`: primary owner
+- `bulletproof_bt`: minor support for output naming and payload consistency
+
+Purpose:
+
+Make the dashboard the core sellable product. The user should feel they are inside a rigorous analyst workbench, not a generic metrics dashboard.
+
+Shared page anatomy:
+
+- verdict strip:
+  - current diagnostic posture
+  - evidence state
+  - artifact dependency
+  - plan state if locked
+- attack question:
+  - one direct falsification question the page answers
+- evidence instruments:
+  - metrics, charts, scenarios, and tables presented as instruments
+- assumption and limitation rail:
+  - source-linked assumptions
+  - material limitations
+  - unsupported claims
+- next evidence:
+  - what to upload or request next
+- report impact:
+  - how this page changes the final memo
+
+Page-specific implementation:
+
+- Overview:
+  - truth-room verdict
+  - credibility score
+  - evidence coverage
+  - strongest support
+  - strongest doubt
+  - unsupported claims
+  - next experiment
+- Execution:
+  - execution realism audit
+  - cost/slippage sensitivity
+  - broker/fill anomalies
+  - cost-kill threshold
+  - execution-fantasy triggers
+- Distribution:
+  - payoff anatomy
+  - rare-trade dependence
+  - outlier removal sensitivity
+  - winner concentration
+  - gross vs net behavior
+- Monte Carlo:
+  - simulation model disclosure
+  - survival envelope
+  - drawdown burden
+  - path dependence
+  - regime-aware mode when available
+- Ruin:
+  - capital/risk assumptions
+  - ruin probability
+  - sizing fragility
+  - survival under reduced/increased risk
+  - non-advisory language
+- Regime:
+  - regime definition
+  - coverage sufficiency
+  - favorable/adverse regime split
+  - regime concentration
+  - missing context state
+- Parameter Stability:
+  - sweep coverage
+  - robust plateau
+  - cliff zones
+  - local optimum dependence
+  - missing sweep state
+- Assumption Ledger:
+  - critical assumptions
+  - engine defaults
+  - inferred assumptions
+  - user-declared assumptions
+  - contradictions
+  - rescue evidence
+- Report:
+  - proof memo preview
+  - evidence coverage
+  - limitations
+  - unsupported claims
+  - assumptions
+  - export/share CTA
+- Share Room:
+  - recipient-safe report view
+  - redaction notice
+  - access state
+  - snapshot identity
+- Research Desk:
+  - request scope
+  - packet contents
+  - status timeline
+  - reviewer addenda
+- Library:
+  - case list
+  - artifact richness
+  - verdict
+  - evidence gaps
+  - report/share status
+  - Research Desk status
+
+Definition of done:
+
+- all required pages exist and are reachable from navigation
+- locked or evidence-limited pages are visible and useful
+- no completed-analysis page uses generic "card dump" structure as its dominant pattern
+- all pages answer a falsification question
+- all pages show what evidence is missing
+
+### Phase 5: Proof Report, Export, And Share Room
+
+Repo ownership:
+
+- `bulletproof_bt`: proof-report payload and verdict inputs
+- `invariance_research`: report UI, snapshot service, export renderer, Share Room, redaction/access controls
+
+Purpose:
+
+Make the report the demand object. A user should pay because the memo is defensible, shareable, and precise about its limits.
+
+Implementation tasks in `bulletproof_bt`:
+
+- emit proof-report sections:
+  - executive verdict
+  - artifact identity
+  - evidence coverage
+  - assumptions
+  - unsupported claims
+  - diagnostic confidence
+  - falsification results
+  - limitations
+  - next evidence
+  - Research Desk recommended scope
+- emit report-safe language that avoids investment advice
+- map engine verdicts to Strategy Truth Room taxonomy
+
+Implementation tasks in `invariance_research`:
+
+- version report snapshots with:
+  - analysis id
+  - artifact ids and hashes
+  - report schema version
+  - generated timestamp
+  - redaction policy
+  - included diagnostics
+  - excluded diagnostics and reasons
+- rebuild PDF export around proof-report structure
+- add Markdown and JSON export parity
+- add report preview state before export
+- add snapshot regeneration and superseded-state behavior
+- build Share Room:
+  - token creation
+  - expiration
+  - revoke
+  - recipient view
+  - report download policy
+  - access-event log
+  - private fields redaction
+- implement Report Sharing Threat Model from the design doc:
+  - no raw trade files in public share by default
+  - no PII in share payload
+  - no owner account ids exposed
+  - snapshot cannot mutate after share creation
+  - revoked tokens fail closed
+  - expired tokens fail closed
+
+Definition of done:
+
+- a completed run can generate a polished PDF
+- the PDF contains evidence coverage, assumptions, unsupported claims, limitations, and next evidence
+- a share link renders a recipient-safe report
+- revoked/expired shares cannot be accessed
+- report snapshots are immutable enough for client trust
+
+### Phase 6: Launch Subscription And Entitlement Model
+
+Repo ownership:
+
+- `invariance_research`: primary owner
+- `bulletproof_bt`: no major work unless diagnostics require plan-aware output labels
+
+Purpose:
+
+Make pricing match value without corrupting evidence truth. Evidence limitations and subscription limitations must remain separate.
+
+Implementation tasks:
+
+- update account plan ids or add mapping layer for launch packaging:
+  - Free
+  - Individual
+  - Pro
+  - Team
+  - Research Desk
+- align pricing page, upgrade page, billing page, Stripe checkout, webhook mapping, account state, and diagnostic locks
+- update entitlement matrix:
+  - uploads per month
+  - file size
+  - bundle support
+  - full diagnostic access
+  - export access
+  - share links
+  - retention
+  - Research Desk request eligibility
+  - seats
+  - priority processing
+- preserve visible locked pages
+- add quota and plan-copy tests
+- add Stripe test-mode path for each paid tier
+- add admin override for first-client pilots
+
+Launch-tier target:
+
+| Tier | Target Buyer | Price | Core Rights |
+| --- | --- | --- | --- |
+| Free | Curious trader or first-time evaluator | $0 | limited trade CSV runs, Overview/Distribution/Monte Carlo/Ruin preview, no export, short retention |
+| Individual | Serious self-directed trader | $49-$79/month | trade CSV and basic bundles, full report export, core diagnostics, limited shares |
+| Pro | strategy seller, educator, researcher | $149-$249/month | full automated suite when artifacts support it, parameter/regime access, share links, longer retention |
+| Team | prop desk, small fund, research group | $499-$999/month | seats, team library, shared reports, admin controls, higher limits, priority processing |
+| Research Desk | deep validation buyer | project-based, from $1,500 | human/agent-assisted review, addenda, execution/data QA, benchmark construction, claim formalization |
+
+Definition of done:
+
+- every locked diagnostic explains whether the lock is evidence-based, plan-based, or both
+- checkout works for all paid tiers in test mode
+- first-client accounts can be provisioned without manual database edits
+- pricing matches the product promises in this doc
+
+### Phase 7: Research Desk Handoff And First-Client Ops
+
+Repo ownership:
+
+- `invariance_research`: request workflow, admin operations, addenda, client state
+- `bulletproof_bt`: Research Desk packet payload and diagnostic artifacts where needed
+
+Purpose:
+
+Create the upgrade path from automated validation to deeper review. Research Desk should not be generic consulting. It should be a structured continuation of the evidence gaps the product already found.
+
+Implementation tasks:
+
+- add Research Desk packet generator:
+  - report snapshot
+  - artifact manifest
+  - evidence ledger
+  - assumption ledger
+  - unsupported claims
+  - diagnostic outputs
+  - requested questions
+  - client notes
+- build request wizard from Report and Assumption Ledger pages
+- add request scopes:
+  - execution audit
+  - data quality audit
+  - benchmark construction
+  - parameter stability review
+  - regime/context review
+  - claim validation
+  - investor/buyer memo review
+- add admin workflow:
+  - received
+  - scoped
+  - quoted
+  - in_review
+  - addendum_draft
+  - approved
+  - delivered
+  - closed
+- add reviewer addendum approval policy
+- add client-facing timeline
+- add email notifications
+- add manual first-client playbook
+
+Definition of done:
+
+- a user can request Research Desk from a specific report limitation
+- admin can see the full packet and move the request through states
+- approved addendum attaches to a report snapshot
+- the product can sell a high-touch review without pretending the automated run proved more than it did
+
+### Phase 8: Reliability, Security, And Deployment Hardening
+
+Repo ownership:
+
+- `invariance_research`: primary owner
+- `bulletproof_bt`: engine runtime reliability, deterministic outputs, packaging
+- Both repos: smoke fixtures and release gates
+
+Purpose:
+
+Make the system safe enough for a first external client using real strategy evidence.
+
+Implementation tasks in `invariance_research`:
+
+- formalize migration path instead of relying only on startup schema initialization
+- document local SQLite setup and production Postgres setup
+- add worker startup script and health checks
+- verify object storage for artifacts, exports, and snapshots
+- verify email flows:
+  - signup
+  - verification if enabled
+  - password reset
+  - Research Desk request
+  - share notification if added
+- add retention policy and cleanup jobs
+- add audit logs for:
+  - uploads
+  - report exports
+  - share creation/revoke/access
+  - Research Desk packet access
+  - admin addenda
+- add rate limits for upload, export, share access, and Research Desk request
+- add share-token brute-force protection
+- add production smoke route or admin health panel for:
+  - database
+  - queue
+  - worker heartbeat
+  - engine bridge
+  - storage
+  - email
+  - Stripe
+
+Implementation tasks in `bulletproof_bt`:
+
+- make engine package/runtime path explicit for the web app
+- add deterministic seed tests for all major diagnostics
+- add runtime failure modes with structured error envelopes
+- add performance benchmarks for large trade files and full bundles
+- ensure warnings and limitations are emitted rather than swallowed
+
+Definition of done:
+
+- local SQLite test path works
+- production Postgres path works
+- analysis worker and export worker can be launched with documented commands
+- first-client smoke test can run from upload through share link
+- failure states are visible, retryable, or intentionally terminal
+
+### Phase 9: First-Client Beta Protocol
+
+Repo ownership:
+
+- Both repos
+
+Purpose:
+
+Prove the product can handle a real client before calling Approach A sellable.
+
+Beta scope:
+
+- 3 to 5 serious users
+- 10 to 20 artifact uploads
+- at least 3 full validation bundles
+- at least 2 broker/export files
+- at least 2 parameter sweeps
+- at least 2 Research Desk request simulations
+- at least 2 external share recipients
+
+First-client acceptance checklist:
+
+- user can create account and sign in
+- user can upload trade CSV
+- user can upload structured bundle
+- user can inspect artifact sufficiency before running analysis
+- all workbench pages are visible
+- unavailable pages explain missing evidence
+- plan-locked pages explain subscription lock separately from evidence lock
+- Overview gives a clear credibility verdict
+- Execution explains what happens when fills/costs worsen
+- Distribution explains rare-trade dependence
+- Monte Carlo explains survival under path stress
+- Ruin explains capital/risk assumptions
+- Regime explains context dependence or missing context
+- Parameter Stability explains sweep support or missing sweep
+- Assumption Ledger shows assumptions and rescue evidence
+- Report states what the artifact does not prove
+- Export produces a polished PDF
+- Share Room renders a recipient-safe snapshot
+- Research Desk request can be submitted from a limitation
+- admin can see requests, exports, shares, and worker status
+- production deployment can run without missing tables
+- local test deployment can run without production Postgres
+
+Readiness metrics:
+
+- 95% of valid trade CSV uploads inspect successfully
+- 90% of full bundles produce the expected unlock matrix
+- 0 hidden failed diagnostics on completed analyses
+- 0 share links expose raw private artifacts by default
+- 0 report exports omit limitations when diagnostics are limited
+- median analysis runtime acceptable for first-client use
+- all first-client failures produce a rescue path or admin-visible error
+
+Exit criteria:
+
+- at least one real user exports and shares a report without assistance
+- at least one real user changes or abandons a strategy because of the output
+- at least one real user asks for the next experiment or Research Desk review from an evidence limitation
+- support burden is low enough that the next 10 users can be onboarded without custom database or code intervention
+
+### Recommended Codex Implementation Order
+
+The next implementation slices should follow this order:
+
+1. Phase 0 contract freeze and fixture harness.
+2. Phase 1 artifact intake and full bundle manifest.
+3. Phase 2 evidence ledger, assumption ledger, and unsupported claims.
+4. Phase 3 engine diagnostic hardening, starting with execution realism and distribution concentration.
+5. Phase 4 workbench redesign page-by-page, starting with Overview and Execution.
+6. Phase 5 proof report, export, and Share Room.
+7. Phase 6 subscription and entitlement alignment.
+8. Phase 7 Research Desk handoff.
+9. Phase 8 reliability hardening.
+10. Phase 9 first-client beta protocol.
+
+This order matters. The app should not spend another pass polishing workbench pages before the artifact contract, evidence ledger, assumption ledger, and claim inventory are stable enough to power the product truthfully.
+
 ## Moving From Approach A To Full Ambition
 
 Approach A should produce an excellent validation product. The full ambition emerges by adding research operating system concepts only when users need them.

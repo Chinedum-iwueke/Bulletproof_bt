@@ -107,6 +107,11 @@ def build_locked_by(config: dict[str, Any], cli_locked_by: str | None) -> str:
 
 
 def merge_payload_with_defaults(payload: dict[str, Any], config: dict[str, Any], cli_max_workers: int | None) -> dict[str, Any]:
+    data_mode = str(payload.get("data_mode", config.get("data_mode", "research_panel")))
+    if data_mode not in {"research_panel", "legacy_curated"}:
+        raise ValueError(f"Unsupported daemon data_mode: {data_mode}")
+    stable_data = payload.get("stable_data", config.get("stable_data")) if data_mode == "legacy_curated" else None
+    vol_data = payload.get("vol_data", config.get("vol_data")) if data_mode == "legacy_curated" else None
     merged: dict[str, Any] = {
         "hypothesis": payload.get("hypothesis"),
         "name": payload.get("name"),
@@ -114,8 +119,9 @@ def merge_payload_with_defaults(payload: dict[str, Any], config: dict[str, Any],
         "max_workers": payload.get("max_workers", cli_max_workers if cli_max_workers is not None else config.get("default_max_workers", 6)),
         "config": payload.get("config", config.get("default_config", "configs/engine.yaml")),
         "local_config": payload.get("local_config", config.get("default_local_config", "configs/local/engine.lab.yaml")),
-        "stable_data": payload.get("stable_data", config.get("stable_data")),
-        "vol_data": payload.get("vol_data", config.get("vol_data")),
+        "data_mode": data_mode,
+        "stable_data": stable_data,
+        "vol_data": vol_data,
         "data_root": payload.get("data_root", config.get("data_root", "research_data")),
         "data_kind": payload.get("data_kind", config.get("data_kind", "research_panel")),
         "exchange": payload.get("exchange", config.get("exchange", "binance")),

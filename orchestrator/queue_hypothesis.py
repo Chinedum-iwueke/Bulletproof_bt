@@ -24,6 +24,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--queue-name", default="approved_backtests")
     parser.add_argument("--config", default="configs/engine.yaml")
     parser.add_argument("--local-config", default="configs/local/engine.lab.yaml")
+    parser.add_argument(
+        "--data-mode",
+        choices=("research_panel", "legacy_curated"),
+        default="research_panel",
+        help="Use canonical research_data panels by default; legacy_curated enables --stable-data/--vol-data.",
+    )
     parser.add_argument("--stable-data", default=None, help="Legacy stable curated dataset path.")
     parser.add_argument("--vol-data", default=None, help="Legacy volatile curated dataset path.")
     parser.add_argument("--data-root", default="research_data")
@@ -64,6 +70,7 @@ def main() -> int:
         "max_workers": args.max_workers,
         "config": args.config,
         "local_config": args.local_config,
+        "data_mode": args.data_mode,
         "stable_data": args.stable_data,
         "vol_data": args.vol_data,
         "data_root": args.data_root,

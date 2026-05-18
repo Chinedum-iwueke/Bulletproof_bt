@@ -8,7 +8,7 @@ from bt.research_data.instruments import write_instrument_manifest
 from bt.research_data.schemas import VOLATILE_UNIVERSE_COLUMNS, normalize_frame
 from bt.research_data.storage import ResearchDataStore
 from bt.research_data.time import utc_ts
-from bt.research_data.universe import build_volatile_universe_from_ohlcv
+from bt.research_data.universe import rank_volatile_scores, score_volatile_symbol_from_ohlcv
 
 
 def _chunk_start_ts(path) -> pd.Timestamp | None:
@@ -80,7 +80,7 @@ def build_volatile_universe(
         native = "native_symbol" if "native_symbol" in stable.columns else "symbol"
         if native in stable.columns:
             stable_symbols = set(stable[native].astype(str))
-    frames = []
+    score_frames = []
     native_col = "native_symbol" if "native_symbol" in instruments.columns else "symbol"
     symbols = [symbol for symbol in instruments[native_col].astype(str).tolist() if symbol not in stable_symbols]
     for idx, symbol in enumerate(symbols, start=1):
@@ -88,25 +88,36 @@ def build_volatile_universe(
         if path.exists() or (path.parent / "chunks").exists():
             frame = _read_ohlcv_for_universe(path, start_ts, end_ts)
             if not frame.empty:
-                frames.append(frame)
+                instrument_row = instruments.loc[instruments[native_col].astype(str).eq(symbol)]
+                first_seen_ts = None
+                if not instrument_row.empty and "first_seen_ts" in instrument_row.columns:
+                    first_seen_ts = instrument_row["first_seen_ts"].iloc[0]
+                scores = score_volatile_symbol_from_ohlcv(
+                    frame,
+                    start=start_ts,
+                    end=end_ts,
+                    first_seen_ts=first_seen_ts,
+                    rebalance_freq=rebalance_freq,
+                    lookback=lookback,
+                    min_age_days=min_age_days,
+                    min_median_dollar_volume_7d=min_median_dollar_volume_7d,
+                )
+                if not scores.empty:
+                    score_frames.append(scores)
         if idx == 1 or idx % 50 == 0 or idx == len(symbols):
             print(f"{exchange} volatile universe loaded {idx}/{len(symbols)} instruments", flush=True)
-    bars = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    scores = pd.concat(score_frames, ignore_index=True) if score_frames else pd.DataFrame()
     print(
-        f"{exchange} volatile universe ranking bars={len(bars)} symbols={bars['symbol'].nunique() if not bars.empty else 0}",
+        f"{exchange} volatile universe ranking scores={len(scores)} symbols={scores['symbol'].nunique() if not scores.empty else 0}",
         flush=True,
     )
-    membership = build_volatile_universe_from_ohlcv(
-        bars=bars,
+    membership = rank_volatile_scores(
+        scores,
         exchange=exchange,
-        start=utc_ts(start),
-        end=utc_ts(end),
         rebalance_freq=rebalance_freq,
         lookback=lookback,
         top_gainers=top_gainers,
         top_losers=top_losers,
-        min_age_days=min_age_days,
-        min_median_dollar_volume_7d=min_median_dollar_volume_7d,
     )
     print(
         f"{exchange} volatile universe membership rows={len(membership)} symbols={membership['symbol'].nunique() if not membership.empty else 0}",

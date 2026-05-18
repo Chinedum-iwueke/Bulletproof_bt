@@ -63,6 +63,12 @@ WantedBy=multi-user.target
 - Heartbeat is written to `logs/research_daemon_heartbeat.json`.
 - Use `--dry-run` to preview the next command without executing a job.
 - Research Memory is manual/scheduled by default: `run_research_memory_after_pipeline: false`.
+- Data mode defaults to canonical Binance `research_data/` panels:
+  `data_mode: research_panel`, `data_root: research_data`, `data_kind: research_panel`,
+  `exchange: binance`, `timeframe: 1m`.
+- Stable grids use `--data-root research_data --data-kind research_panel --exchange binance --universe stable`.
+- Volatile grids use `--data-root research_data --data-kind research_panel --exchange binance --universe volatile --membership-path research_data/manifests/volatile_universe_membership.parquet`.
+- Legacy curated folders are ignored by default, even if stale queue payloads contain `stable_data` or `vol_data`. To intentionally use old curated folders, queue with `--data-mode legacy_curated --stable-data ... --vol-data ...`.
 
 ## Research Memory
 

@@ -5,6 +5,7 @@ default_phase: tier2
 default_max_workers: 8
 default_config: configs/engine.yaml
 default_local_config: configs/local/engine.lab.yaml
+data_mode: research_panel
 data_root: research_data
 data_kind: research_panel
 exchange: binance

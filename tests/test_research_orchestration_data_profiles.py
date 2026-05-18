@@ -168,6 +168,50 @@ def test_daemon_builds_research_data_profile_pipeline_command(tmp_path: Path) ->
     assert "research_panel" in cmd
     assert "/home/omenka/research_data/bt/curated/stable_data_1m_canonical" not in cmd
     assert "--stable-data" not in cmd
+    assert "--membership-path" in cmd
+    assert "research_data/manifests/volatile_universe_membership.parquet" in cmd
+
+
+def test_daemon_ignores_stale_curated_paths_in_research_panel_mode(tmp_path: Path) -> None:
+    payload = {
+        "hypothesis": "research/hypotheses/example.yaml",
+        "name": "l1_h7c",
+        "stable_data": "/home/omenka/research_data/bt/curated/stable_data_1m_canonical",
+        "vol_data": "/home/omenka/research_data/bt/curated/vol_data_1m_canonical",
+    }
+    config = {
+        "data_mode": "research_panel",
+        "data_root": "research_data",
+        "data_kind": "research_panel",
+        "exchange": "binance",
+        "timeframe": "1m",
+    }
+    merged = merge_payload_with_defaults(payload, config, cli_max_workers=6)
+    cmd = build_pipeline_command(tmp_path / "research.sqlite", merged)
+
+    assert merged["stable_data"] is None
+    assert merged["vol_data"] is None
+    assert "--stable-data" not in cmd
+    assert "--vol-data" not in cmd
+    assert "--data-root" in cmd
+    assert "research_data" in cmd
+
+
+def test_daemon_legacy_curated_mode_requires_explicit_opt_in(tmp_path: Path) -> None:
+    payload = {
+        "hypothesis": "research/hypotheses/example.yaml",
+        "name": "l1_h7c",
+        "data_mode": "legacy_curated",
+        "stable_data": "/home/omenka/research_data/bt/curated/stable_data_1m_canonical",
+        "vol_data": "/home/omenka/research_data/bt/curated/vol_data_1m_canonical",
+    }
+    merged = merge_payload_with_defaults(payload, {}, cli_max_workers=6)
+    cmd = build_pipeline_command(tmp_path / "research.sqlite", merged)
+
+    assert "--stable-data" in cmd
+    assert "/home/omenka/research_data/bt/curated/stable_data_1m_canonical" in cmd
+    assert "--vol-data" in cmd
+    assert "/home/omenka/research_data/bt/curated/vol_data_1m_canonical" in cmd
 
 
 def test_data_profile_config_contains_expected_mapping(tmp_path: Path) -> None:
