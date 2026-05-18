@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from bt.research_data.instruments import native_to_canonical_symbol
 from bt.research_data.schemas import VOLATILE_UNIVERSE_COLUMNS, normalize_frame
 from bt.research_data.time import utc_ts
 
@@ -24,55 +25,93 @@ def build_volatile_universe_from_ohlcv(
     if bars.empty:
         return pd.DataFrame(columns=VOLATILE_UNIVERSE_COLUMNS)
     data = normalize_frame(bars).sort_values(["symbol", "ts"]).copy()
+    start_ts = utc_ts(start)
+    end_ts = utc_ts(end)
     first_seen = data.groupby("symbol")["ts"].min()
-    data = data[(data["ts"] >= utc_ts(start) - pd.Timedelta(days=8)) & (data["ts"] <= utc_ts(end))]
+    data = data[(data["ts"] >= start_ts - pd.Timedelta(days=8)) & (data["ts"] <= end_ts)]
     data["dollar_volume"] = data["quote_volume"].where(data["quote_volume"].notna(), data["close"] * data["volume"])
-    rows: list[dict[str, object]] = []
-    rebalances = pd.date_range(utc_ts(start), utc_ts(end), freq=rebalance_freq, inclusive="left")
+    rebalances = pd.date_range(start_ts, end_ts, freq=rebalance_freq, inclusive="left")
     lookback_td = pd.Timedelta(lookback)
     stale_td = pd.Timedelta(stale_after)
-    for rebalance_id, ts in enumerate(rebalances):
-        scores: list[dict[str, object]] = []
-        for symbol, group in data.groupby("symbol", sort=False):
-            history = group[group["ts"] <= ts]
-            if history.empty:
-                continue
-            if ts - first_seen.loc[symbol] < pd.Timedelta(days=min_age_days):
-                continue
-            latest = history.iloc[-1]
-            if ts - latest["ts"] > stale_td or latest["close"] <= 0:
-                continue
-            prior = history[history["ts"] <= ts - lookback_td]
-            if prior.empty:
-                continue
-            lookback_row = prior.iloc[-1]
-            if lookback_row["close"] <= 0:
-                continue
-            volume_window = history[history["ts"] > ts - pd.Timedelta(days=7)]
-            median_dollar_volume_7d = float(volume_window["dollar_volume"].median()) if not volume_window.empty else 0.0
-            if median_dollar_volume_7d < min_median_dollar_volume_7d:
-                continue
-            ret = float(latest["close"] / lookback_row["close"] - 1.0)
-            scores.append({"symbol": symbol, "score": ret})
-        ranked = pd.DataFrame(scores)
-        if ranked.empty:
+    grid = pd.DataFrame({"ts": rebalances})
+    grid["prior_ts"] = grid["ts"] - lookback_td
+    grid["rebalance_id"] = range(len(grid))
+    score_frames: list[pd.DataFrame] = []
+    for symbol, group in data.groupby("symbol", sort=False):
+        group = group.sort_values("ts")
+        close_frame = group[["ts", "close"]].dropna()
+        if close_frame.empty:
             continue
-        gainers = ranked.sort_values("score", ascending=False).head(top_gainers).reset_index(drop=True)
-        losers = ranked.sort_values("score", ascending=True).head(top_losers).reset_index(drop=True)
-        for rank_type, selected in (("gainer", gainers), ("loser", losers)):
-            for rank, row in enumerate(selected.itertuples(index=False), start=1):
-                rows.append(
-                    {
-                        "ts": ts,
-                        "exchange": exchange,
-                        "symbol": row.symbol,
-                        "universe": "volatile_data_1m_canonical",
-                        "rank_type": rank_type,
-                        "rank": rank,
-                        "score": row.score,
-                        "rebalance_id": rebalance_id,
-                        "lookback": lookback,
-                        "rebalance_freq": rebalance_freq,
-                    }
-                )
-    return normalize_frame(pd.DataFrame(rows), VOLATILE_UNIVERSE_COLUMNS)
+
+        latest = pd.merge_asof(
+            grid[["ts", "rebalance_id"]],
+            close_frame.rename(columns={"ts": "source_ts", "close": "latest_close"}),
+            left_on="ts",
+            right_on="source_ts",
+            direction="backward",
+        )
+        prior = pd.merge_asof(
+            grid[["prior_ts"]].rename(columns={"prior_ts": "ts"}),
+            close_frame.rename(columns={"ts": "prior_source_ts", "close": "prior_close"}),
+            left_on="ts",
+            right_on="prior_source_ts",
+            direction="backward",
+        )
+        latest["prior_close"] = prior["prior_close"]
+        latest["prior_source_ts"] = prior["prior_source_ts"]
+
+        daily_dollar_volume = group.set_index("ts")["dollar_volume"].resample("1D").sum()
+        daily_median = daily_dollar_volume.rolling(7, min_periods=1).median().reset_index()
+        daily_median["asof_day"] = daily_median["ts"] + pd.Timedelta(days=1)
+        volume = pd.merge_asof(
+            grid[["ts"]],
+            daily_median[["asof_day", "dollar_volume"]].rename(
+                columns={"asof_day": "volume_source_ts", "dollar_volume": "median_dollar_volume_7d"}
+            ),
+            left_on="ts",
+            right_on="volume_source_ts",
+            direction="backward",
+        )
+        latest["median_dollar_volume_7d"] = volume["median_dollar_volume_7d"]
+
+        first = first_seen.loc[symbol]
+        valid = (
+            latest["latest_close"].gt(0)
+            & latest["prior_close"].gt(0)
+            & latest["source_ts"].notna()
+            & latest["prior_source_ts"].notna()
+            & latest["ts"].sub(latest["source_ts"]).le(stale_td)
+            & latest["ts"].sub(first).ge(pd.Timedelta(days=min_age_days))
+            & latest["median_dollar_volume_7d"].ge(min_median_dollar_volume_7d)
+        )
+        selected = latest.loc[valid, ["ts", "rebalance_id", "latest_close", "prior_close"]].copy()
+        if selected.empty:
+            continue
+        selected["symbol"] = symbol
+        selected["score"] = selected["latest_close"] / selected["prior_close"] - 1.0
+        score_frames.append(selected[["ts", "rebalance_id", "symbol", "score"]])
+
+    if not score_frames:
+        return pd.DataFrame(columns=VOLATILE_UNIVERSE_COLUMNS)
+    scores = pd.concat(score_frames, ignore_index=True)
+    rows: list[pd.DataFrame] = []
+    if top_gainers > 0:
+        gainers = scores.sort_values(["ts", "score"], ascending=[True, False]).groupby("ts", sort=False).head(top_gainers).copy()
+        gainers["rank_type"] = "gainer"
+        gainers["rank"] = gainers.groupby("ts")["score"].rank(method="first", ascending=False).astype(int)
+        rows.append(gainers)
+    if top_losers > 0:
+        losers = scores.sort_values(["ts", "score"], ascending=[True, True]).groupby("ts", sort=False).head(top_losers).copy()
+        losers["rank_type"] = "loser"
+        losers["rank"] = losers.groupby("ts")["score"].rank(method="first", ascending=True).astype(int)
+        rows.append(losers)
+    if not rows:
+        return pd.DataFrame(columns=VOLATILE_UNIVERSE_COLUMNS)
+    membership = pd.concat(rows, ignore_index=True)
+    membership["exchange"] = exchange
+    membership["canonical_symbol"] = membership["symbol"].map(lambda symbol: native_to_canonical_symbol(str(symbol)))
+    membership["universe"] = "volatile_data_1m_canonical"
+    membership["lookback"] = lookback
+    membership["rebalance_freq"] = rebalance_freq
+    membership = membership.drop_duplicates(["ts", "symbol", "rank_type"], keep="last")
+    return normalize_frame(membership, VOLATILE_UNIVERSE_COLUMNS)

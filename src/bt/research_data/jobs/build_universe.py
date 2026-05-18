@@ -5,9 +5,40 @@ import pandas as pd
 
 from bt.research_data.exchanges.factory import get_adapter
 from bt.research_data.instruments import write_instrument_manifest
+from bt.research_data.schemas import VOLATILE_UNIVERSE_COLUMNS, normalize_frame
 from bt.research_data.storage import ResearchDataStore
 from bt.research_data.time import utc_ts
 from bt.research_data.universe import build_volatile_universe_from_ohlcv
+
+
+def _chunk_start_ts(path) -> pd.Timestamp | None:
+    try:
+        stamp = path.name.split("-")[1]
+        return pd.Timestamp(stamp, tz="UTC")
+    except Exception:
+        return None
+
+
+def _read_ohlcv_for_universe(path, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    columns = ["ts", "exchange", "symbol", "close", "volume", "quote_volume"]
+    frames: list[pd.DataFrame] = []
+    if path.exists():
+        frames.append(pd.read_parquet(path, columns=columns))
+    chunk_root = path.parent / "chunks"
+    if chunk_root.exists():
+        for chunk_path in sorted(chunk_root.glob("year=*/month=*/*.parquet")):
+            chunk_start = _chunk_start_ts(chunk_path)
+            if chunk_start is not None and (chunk_start < start - pd.Timedelta(days=8) or chunk_start > end):
+                continue
+            frames.append(pd.read_parquet(chunk_path, columns=columns))
+    if not frames:
+        return pd.DataFrame(columns=columns)
+    out = pd.concat([frame for frame in frames if not frame.empty], ignore_index=True)
+    if out.empty:
+        return pd.DataFrame(columns=columns)
+    out["ts"] = pd.to_datetime(out["ts"], utc=True, errors="coerce")
+    out = out[(out["ts"] >= start - pd.Timedelta(days=8)) & (out["ts"] <= end)]
+    return out.drop_duplicates(["exchange", "symbol", "ts"], keep="last").sort_values(["symbol", "ts"]).reset_index(drop=True)
 
 
 def build_volatile_universe(
@@ -24,15 +55,47 @@ def build_volatile_universe(
 ) -> pd.DataFrame:
     store = store or ResearchDataStore()
     adapter = get_adapter(exchange)
-    instruments = adapter.fetch_usdt_perp_instruments()
-    write_instrument_manifest(store, instruments)
+    try:
+        instruments = adapter.fetch_usdt_perp_instruments()
+        write_instrument_manifest(store, instruments)
+    except Exception:
+        manifest_path = store.manifest_path("instruments")
+        if not manifest_path.exists():
+            raise
+        instruments = store.read(manifest_path)
+        if "exchange" in instruments.columns:
+            instruments = instruments[instruments["exchange"].eq(exchange)]
+        if instruments.empty:
+            raise
+    start_ts = utc_ts(start)
+    end_ts = utc_ts(end)
+    stable_symbols: set[str] = set()
+    stable_path = store.manifest_path("stable_universe")
+    if stable_path.exists():
+        stable = store.read(stable_path)
+        if not stable.empty and "exchange" in stable.columns:
+            stable = stable[stable["exchange"].eq(exchange)]
+        if "available" in stable.columns:
+            stable = stable[stable["available"].astype(bool)]
+        native = "native_symbol" if "native_symbol" in stable.columns else "symbol"
+        if native in stable.columns:
+            stable_symbols = set(stable[native].astype(str))
     frames = []
     native_col = "native_symbol" if "native_symbol" in instruments.columns else "symbol"
-    for symbol in instruments[native_col].astype(str):
+    symbols = [symbol for symbol in instruments[native_col].astype(str).tolist() if symbol not in stable_symbols]
+    for idx, symbol in enumerate(symbols, start=1):
         path = store.raw_path(exchange, symbol, "ohlcv", "1m")
-        if path.exists():
-            frames.append(store.read(path))
+        if path.exists() or (path.parent / "chunks").exists():
+            frame = _read_ohlcv_for_universe(path, start_ts, end_ts)
+            if not frame.empty:
+                frames.append(frame)
+        if idx == 1 or idx % 50 == 0 or idx == len(symbols):
+            print(f"{exchange} volatile universe loaded {idx}/{len(symbols)} instruments", flush=True)
     bars = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    print(
+        f"{exchange} volatile universe ranking bars={len(bars)} symbols={bars['symbol'].nunique() if not bars.empty else 0}",
+        flush=True,
+    )
     membership = build_volatile_universe_from_ohlcv(
         bars=bars,
         exchange=exchange,
@@ -45,9 +108,22 @@ def build_volatile_universe(
         min_age_days=min_age_days,
         min_median_dollar_volume_7d=min_median_dollar_volume_7d,
     )
-    store.upsert_parquet(
-        store.manifest_path("volatile_universe_membership"),
-        membership,
-        key=("exchange", "ts", "symbol", "universe"),
+    print(
+        f"{exchange} volatile universe membership rows={len(membership)} symbols={membership['symbol'].nunique() if not membership.empty else 0}",
+        flush=True,
     )
+    membership_path = store.manifest_path("volatile_universe_membership")
+    with store.write_lock():
+        existing = store.read(membership_path)
+        if not existing.empty and "exchange" in existing.columns:
+            existing = existing[~existing["exchange"].eq(exchange)]
+        frames = [frame for frame in (existing, membership) if not frame.empty]
+        combined = pd.concat(frames, ignore_index=True) if frames else membership
+        combined = normalize_frame(combined, VOLATILE_UNIVERSE_COLUMNS)
+        if not combined.empty:
+            combined = combined.drop_duplicates(
+                subset=["exchange", "ts", "symbol", "universe", "rank_type"],
+                keep="last",
+            ).sort_values(["exchange", "ts", "symbol", "rank_type"])
+        store.write_atomic(combined.reset_index(drop=True), membership_path)
     return membership
