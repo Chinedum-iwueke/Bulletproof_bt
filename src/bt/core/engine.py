@@ -34,6 +34,16 @@ from bt.audit.portfolio_audit import inspect_portfolio
 from bt.audit.alignment_audit import inspect_alignment
 
 
+def _state_feature_options(config: dict[str, Any]) -> tuple[bool, str]:
+    """Read state-feature controls without changing the default rich output."""
+    nested = config.get("state_features")
+    if not isinstance(nested, dict):
+        nested = {}
+    enabled = config.get("enable_state_features", nested.get("enabled", True))
+    profile = config.get("state_feature_profile", nested.get("profile", "full"))
+    return bool(enabled), str(profile or "full")
+
+
 class BacktestEngine:
     """Event-driven backtest engine."""
 
@@ -69,7 +79,8 @@ class BacktestEngine:
         self._indicators: dict[str, dict[str, Indicator]] = {}
         self._sanity_counters = sanity_counters
         self._audit = audit_manager
-        self._state_layer = OnlineStateFeatureLayer()
+        state_enabled, state_profile = _state_feature_options(config)
+        self._state_layer = OnlineStateFeatureLayer(enabled=state_enabled, profile=state_profile)
 
     def _positions_context(self) -> dict[str, dict[str, Any]]:
         positions_ctx: dict[str, dict[str, Any]] = {}
@@ -384,6 +395,7 @@ class BacktestEngine:
                         low=bar.low,
                         close=bar.close,
                         volume=bar.volume,
+                        extra=bar.extra,
                     )
 
                 tradeable = self._universe.tradeable_at(ts)

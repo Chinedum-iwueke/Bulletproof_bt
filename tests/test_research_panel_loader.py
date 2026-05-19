@@ -68,6 +68,49 @@ def test_stable_loader_loads_fixed_symbols(tmp_path) -> None:
     assert "mark_close" in loaded.columns
 
 
+def test_research_panel_config_applies_date_and_symbol_scope(tmp_path) -> None:
+    root = tmp_path / "research_data"
+    _panel(root, "BTCUSDT", [1.0, 2.0, 3.0])
+    _panel(root, "ETHUSDT", [4.0, 5.0, 6.0])
+    manifest = pd.DataFrame(
+        {
+            "exchange": ["binance", "binance"],
+            "native_symbol": ["BTCUSDT", "ETHUSDT"],
+            "available": [True, True],
+        }
+    )
+    manifest_path = root / "manifests" / "stable_universe.parquet"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest.to_parquet(manifest_path, index=False)
+
+    feed = load_feed(
+        str(root),
+        {
+            "data": {
+                "dataset_kind": "research_panel",
+                "exchange": "binance",
+                "universe": "stable",
+                "stable_manifest": str(manifest_path),
+                "root": str(root),
+                "timeframe": "1m",
+                "symbols_subset": ["ETHUSDT"],
+                "date_range": {"start": "2021-01-01T00:01:00Z", "end": "2021-01-01T00:03:00Z"},
+            }
+        },
+    )
+
+    first = feed.next()
+    second = feed.next()
+    third = feed.next()
+
+    assert first is not None
+    assert [bar.symbol for bar in first] == ["ETHUSDT"]
+    assert first[0].ts == pd.Timestamp("2021-01-01 00:01", tz="UTC")
+    assert second is not None
+    assert second[0].ts == pd.Timestamp("2021-01-01 00:02", tz="UTC")
+    assert third is None
+
+
 def test_volatile_loader_changes_active_universe_by_timestamp(tmp_path) -> None:
     root = tmp_path / "research_data"
     _panel(root, "BTCUSDT", [1.0, 2.0, 3.0])

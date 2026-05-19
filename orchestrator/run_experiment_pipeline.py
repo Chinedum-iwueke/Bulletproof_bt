@@ -71,6 +71,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stable-manifest", default="research_data/manifests/stable_universe.parquet")
     parser.add_argument("--membership-path", default="research_data/manifests/volatile_universe_membership.parquet")
     parser.add_argument("--outputs-root", default="outputs")
+    parser.add_argument("--max-workers-auto", action="store_true", default=False)
+    parser.add_argument("--reserve-ram-gb", type=float, default=8.0)
+    parser.add_argument("--max-ram-per-worker-gb", type=float, default=None)
+    parser.add_argument("--min-free-ram-gb", type=float, default=6.0)
+    parser.add_argument("--run-timeout-seconds", type=float, default=None)
+    parser.add_argument("--fail-fast", action="store_true", default=False)
+    parser.add_argument("--no-resume-strict", action="store_true", default=False)
 
     parser.add_argument("--retain-top-n", type=int, default=2)
     parser.add_argument("--retain-median", type=int, default=1)
@@ -192,6 +199,13 @@ def run_backtest(
     stable_manifest: str | None,
     membership_path: str | None,
     max_workers: int,
+    max_workers_auto: bool,
+    reserve_ram_gb: float,
+    max_ram_per_worker_gb: float | None,
+    min_free_ram_gb: float,
+    run_timeout_seconds: float | None,
+    fail_fast: bool,
+    resume_strict: bool,
     phase: str,
     project_root: Path,
     dry_run: bool,
@@ -218,7 +232,25 @@ def run_backtest(
         "--max-workers",
         str(max_workers),
         "--skip-completed",
+        "--reserve-ram-gb",
+        str(reserve_ram_gb),
+        "--min-free-ram-gb",
+        str(min_free_ram_gb),
     ]
+    if max_workers_auto:
+        cmd.append("--max-workers-auto")
+    if max_ram_per_worker_gb is not None:
+        cmd.extend(["--max-ram-per-worker-gb", str(max_ram_per_worker_gb)])
+    if run_timeout_seconds is not None:
+        cmd.extend(["--run-timeout-seconds", str(run_timeout_seconds)])
+    if fail_fast:
+        cmd.append("--fail-fast")
+    else:
+        cmd.append("--no-fail-fast")
+    if resume_strict:
+        cmd.append("--resume-strict")
+    else:
+        cmd.append("--no-resume-strict")
     if data_path:
         cmd.extend(["--data", data_path])
     else:
@@ -683,6 +715,13 @@ def main() -> int:
                 stable_manifest=args.stable_manifest,
                 membership_path=args.membership_path,
                 max_workers=args.max_workers,
+                max_workers_auto=args.max_workers_auto,
+                reserve_ram_gb=args.reserve_ram_gb,
+                max_ram_per_worker_gb=args.max_ram_per_worker_gb,
+                min_free_ram_gb=args.min_free_ram_gb,
+                run_timeout_seconds=args.run_timeout_seconds,
+                fail_fast=args.fail_fast,
+                resume_strict=not args.no_resume_strict,
                 phase=args.phase,
                 project_root=project_root,
                 dry_run=args.dry_run,
@@ -709,6 +748,13 @@ def main() -> int:
                 stable_manifest=args.stable_manifest,
                 membership_path=args.membership_path,
                 max_workers=args.max_workers,
+                max_workers_auto=args.max_workers_auto,
+                reserve_ram_gb=args.reserve_ram_gb,
+                max_ram_per_worker_gb=args.max_ram_per_worker_gb,
+                min_free_ram_gb=args.min_free_ram_gb,
+                run_timeout_seconds=args.run_timeout_seconds,
+                fail_fast=args.fail_fast,
+                resume_strict=not args.no_resume_strict,
                 phase=args.phase,
                 project_root=project_root,
                 dry_run=args.dry_run,

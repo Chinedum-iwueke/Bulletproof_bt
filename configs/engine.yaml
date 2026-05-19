@@ -65,6 +65,13 @@ outputs:
   root_dir: outputs/runs
   jsonl: true
 
+# Online entry-state enrichment. The default remains full so existing research
+# artifacts keep funding/OI/mark/index/liquidation fields. Production daemon
+# runs can set profile=minimal to keep causal OHLCV state only.
+state_features:
+  enabled: true
+  profile: full
+
 # Keep legacy HTF keys for compatibility with existing overlays.
 htf_timeframes: ["5m", "15m", "1h"]
 htf_strict: true

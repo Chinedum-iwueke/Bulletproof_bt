@@ -13,7 +13,7 @@ from bt.research_orchestration.data_profiles import (
 )
 from bt.experiments.parallel_grid import resolve_parallel_grid_data_args
 from bt.data.research_panel_loader import load_volatile_research_panel
-from orchestrator.research_daemon import build_pipeline_command, merge_payload_with_defaults
+from orchestrator.research_daemon import build_pipeline_command, build_research_memory_command, merge_payload_with_defaults
 
 
 def _panel(root: Path, symbol: str, rows: int = 2) -> None:
@@ -170,6 +170,26 @@ def test_daemon_builds_research_data_profile_pipeline_command(tmp_path: Path) ->
     assert "--stable-data" not in cmd
     assert "--membership-path" in cmd
     assert "research_data/manifests/volatile_universe_membership.parquet" in cmd
+
+
+def test_daemon_builds_research_memory_command_after_pipeline(tmp_path: Path) -> None:
+    payload = {
+        "hypothesis": "research/hypotheses/example.yaml",
+        "name": "l1_h7c",
+        "phase": "tier2",
+        "outputs_root": "outputs",
+    }
+    merged = merge_payload_with_defaults(payload, {}, cli_max_workers=6)
+    cmd = build_research_memory_command(tmp_path / "research.sqlite", merged, {})
+
+    assert "orchestrator/research_memory.py" in " ".join(cmd)
+    assert "--write-db" in cmd
+    assert "--outputs-root" in cmd
+    assert "outputs" in cmd
+    assert "--verdicts-dir" in cmd
+    assert "research/verdicts/tier2" in cmd
+    assert "--state-findings-dir" in cmd
+    assert "research/state_findings/tier2" in cmd
 
 
 def test_daemon_ignores_stale_curated_paths_in_research_panel_mode(tmp_path: Path) -> None:

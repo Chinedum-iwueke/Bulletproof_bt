@@ -37,6 +37,11 @@ def similar_state(conn: sqlite3.Connection, state: dict[str, Any]) -> dict[str, 
         "vol_pctile": 0.15,
         "spread_pctile": 0.20,
         "tr_over_atr": 0.75,
+        "funding_pctile": 0.15,
+        "oi_accel_pctile": 0.15,
+        "basis_pctile": 0.15,
+        "crowding_proxy_pctile": 0.20,
+        "constraint_stress_pctile": 0.20,
     }
     for field, width in windows.items():
         if state.get(field) is not None:

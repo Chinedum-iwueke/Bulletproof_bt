@@ -70,7 +70,9 @@ def _compact_packet_for_prompt(packet: dict[str, Any]) -> dict[str, Any]:
             "tail_generation_states": [_prompt_finding(row) for row in (state.get("tail_generation_states") or [])[:2] if isinstance(row, dict)],
             "cost_killed_states": [_prompt_finding(row) for row in (state.get("cost_killed_states") or [])[:2] if isinstance(row, dict)],
             "exit_failure_states": [_prompt_finding(row) for row in (state.get("exit_failure_states") or [])[:2] if isinstance(row, dict)],
+            "rich_derivative_states": [_prompt_finding(row) for row in (state.get("rich_derivative_states") or [])[:4] if isinstance(row, dict)],
         },
+        "rich_state_evidence": packet.get("rich_state_evidence"),
         "salvage_candidates": (packet.get("salvage_candidates") or [])[:4],
         "failure_mode": packet.get("failure_mode"),
         "preliminary_verdict": packet.get("preliminary_verdict"),
@@ -159,6 +161,40 @@ def _bucket_level_context(
     return out[:limit]
 
 
+def _rich_bucket_context(*rows: list[dict[str, Any]], limit: int = 5) -> dict[str, Any]:
+    keys = ("funding", "oi", "basis", "premium", "constraint")
+    flat = [row for group in rows for row in group]
+    rich = [
+        row
+        for row in flat
+        if any(token in str(row.get("best_bucket_type") or row.get("bucket") or row.get("state_variable") or "") for token in keys)
+        or any(token in str(row.get("best_bucket") or row.get("bucket_key") or "") for token in keys)
+    ]
+    rich.sort(key=lambda row: float(row.get("best_bucket_ev_r_net") or row.get("ev_r_net") or 0), reverse=True)
+    fields = [
+        "run_id",
+        "dataset",
+        "best_bucket_type",
+        "best_bucket",
+        "best_bucket_ev_r_net",
+        "best_bucket_n_trades",
+        "worst_bucket_type",
+        "worst_bucket",
+        "worst_bucket_ev_r_net",
+        "bucket",
+        "bucket_key",
+        "ev_r_net",
+        "n_trades",
+    ]
+    return {
+        "available": bool(rich),
+        "top_funding_oi_basis_evidence": [
+            {field: row.get(field) for field in fields if row.get(field) not in (None, "")}
+            for row in rich[:limit]
+        ],
+    }
+
+
 def build_llm_packet(
     *,
     name: str,
@@ -198,6 +234,7 @@ def build_llm_packet(
         "bottom_runs": bottom_runs,
         "dataset_comparison": diagnostics.get("dataset_comparison", {}),
         "bucket_level_context": bucket_context,
+        "rich_state_evidence": _rich_bucket_context(stable_structural_rows or [], vol_structural_rows or []),
         "promotion_candidates": diagnostics.get("promotion_candidates", []),
         "salvage_candidates": diagnostics.get("salvage_candidates", [])[:8],
         "scrap_evidence": diagnostics.get("scrap_evidence", []),

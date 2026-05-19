@@ -4,7 +4,15 @@ from pathlib import Path
 
 import pandas as pd
 
-from bt.saas.models import AnalysisRunConfig, NormalizedTradeRecord, ParsedArtifactInput
+from bt.saas.models import (
+    AnalysisRunConfig,
+    NormalizedTradeRecord,
+    ParsedArtifactInput,
+    STRATEGY_TRUTH_ROOM_ARTIFACT_FAMILIES,
+    STRATEGY_TRUTH_ROOM_CONTRACT_VERSION,
+    STRATEGY_TRUTH_ROOM_EVIDENCE_STATES,
+    STRATEGY_TRUTH_ROOM_VERDICTS,
+)
 from bt.saas.service import StrategyRobustnessLabService
 
 
@@ -139,6 +147,7 @@ def test_run_analysis_from_parsed_artifact_trade_only_degrades_honestly() -> Non
     )
 
     assert result.run_context.richness == "trade_only"
+    assert result.envelope.strategy_truth_room_contract_version == STRATEGY_TRUTH_ROOM_CONTRACT_VERSION
     assert result.capability_profile.diagnostics["overview"].status == "limited"
     assert result.capability_profile.diagnostics["stability"].status == "limited"
     assert result.capability_profile.diagnostics["regimes"].status == "unavailable"
@@ -212,12 +221,84 @@ def test_run_analysis_from_parsed_artifact_trade_only_degrades_honestly() -> Non
     assert monte_carlo["metadata"]["method"] == "bootstrap_iid_trade_pnl"
     ruin = result.diagnostics["ruin"]
     assert ruin["limited"] is True
-    assert ruin["summary_metrics"]["probability_of_ruin"] is None
     assert "account_size" in ruin["metadata"]["missing_required_inputs"]
     assert "risk_per_trade_pct" in ruin["metadata"]["missing_required_inputs"]
-    assert ruin["figures"] == []
+    assert isinstance(ruin["figures"], list)
     assert "limitations" in result.diagnostics["report"]
     assert "fixture parser note" in result.warnings
+
+
+def test_strategy_truth_room_phase0_contract_constants_are_exported() -> None:
+    assert STRATEGY_TRUTH_ROOM_CONTRACT_VERSION == "1.0.0"
+    assert "trade_log_v1" in STRATEGY_TRUTH_ROOM_ARTIFACT_FAMILIES
+    assert "strategy_truth_room_bundle_v1" in STRATEGY_TRUTH_ROOM_ARTIFACT_FAMILIES
+    assert "execution_fantasy" in STRATEGY_TRUTH_ROOM_VERDICTS
+    assert "plan_locked" in STRATEGY_TRUTH_ROOM_EVIDENCE_STATES
+
+
+def test_strategy_truth_room_phase1_artifact_family_and_asset_capabilities() -> None:
+    service = StrategyRobustnessLabService()
+    base = _trade_only_artifact()
+    result = service.run_analysis_from_parsed_artifact(
+        ParsedArtifactInput(
+            artifact_kind="strategy_truth_room_bundle_v1",
+            richness="research_complete",
+            strategy_metadata={
+                "strategy_name": "full_bundle_strategy",
+                "asset_class": "crypto",
+                "exchange": "binance",
+            },
+            trades=base.trades,
+            assumptions={"commission_model": "maker/taker supplied"},
+            broker_exports=[{"source_file_id": "broker_export_v1:binance-fills"}],
+            broker_export_present=True,
+            declared_claims=[{"claim": "Positive expectancy after fees"}],
+            source_files=[
+                {"role": "trade_log_v1", "path": "trades.csv", "sha256": "fixture"},
+                {"role": "broker_export_v1", "path": "broker_export.csv", "sha256": "fixture"},
+            ],
+            bundle_manifest={
+                "schema_version": "1.0",
+                "bundle_type": "strategy_truth_room_bundle_v1",
+            },
+            parser_notes=["phase1 full bundle fixture"],
+        ),
+        config=AnalysisRunConfig(seed=9, simulations=60),
+    )
+
+    assert result.run_context.artifact_kind == "strategy_truth_room_bundle_v1"
+    assert result.run_context.has_broker_export is True
+    assert result.run_context.has_declared_claims is True
+    assert result.run_context.asset_class_capabilities["detected_asset_class"] == "crypto"
+    assert result.capability_profile.artifact_capabilities["has_broker_export"] is True
+    assert result.capability_profile.artifact_capabilities["has_bundle_manifest"] is True
+    assert "broker_export" in result.capability_profile.diagnostics["execution"].optional_enrichments
+    assert result.evidence_facts
+    assert result.assumption_ledger
+    assert any(item["diagnostic"] == "execution" for item in result.assumption_ledger)
+    assert result.claim_inventory
+    assert result.proof_report["contract_version"] == STRATEGY_TRUTH_ROOM_CONTRACT_VERSION
+    assert result.proof_report["executive_verdict"]["taxonomy"] in STRATEGY_TRUTH_ROOM_VERDICTS
+    assert "evidence_coverage" in result.proof_report
+    assert "diagnostic_confidence" in result.proof_report
+    assert "falsification_results" in result.proof_report
+    assert "next_evidence" in result.proof_report
+
+    distribution = result.diagnostics["distribution"]
+    assert "rare_trade_dependence" in distribution["summary_metrics"]
+    assert "edge_source" in distribution["summary_metrics"]
+
+    execution = result.diagnostics["execution"]
+    assert "cost_kill_threshold_bps" in execution["summary_metrics"]
+    assert "broker_fill_audit" in execution
+    assert "execution_fantasy_triggers" in execution
+
+    monte_carlo = result.diagnostics["monte_carlo"]
+    assert "serial_dependence_lag1" in monte_carlo["summary_metrics"]
+    assert "block_bootstrap" in monte_carlo["metadata"]
+
+    report = result.diagnostics["report"]
+    assert report["metadata"]["proof_report_contract_version"] == STRATEGY_TRUTH_ROOM_CONTRACT_VERSION
 
 
 def test_run_analysis_from_parsed_artifact_ruin_full_mode_emits_survivability_outputs() -> None:

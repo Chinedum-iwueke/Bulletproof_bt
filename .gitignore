@@ -24,6 +24,7 @@ htmlcov/
 /research_db/
 /research/state_findings/
 /research/verdicts/
+/research/audits/rich_state_feature_sample.csv
 
 # Runtime databases and temporary files
 *.sqlite

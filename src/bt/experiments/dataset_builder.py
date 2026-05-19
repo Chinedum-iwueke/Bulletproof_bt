@@ -998,6 +998,20 @@ def extract_experiment_dataset(
             "runs_dropped": len(dropped_rows),
             "trade_rows": len(trades_df),
         },
+        "memory_estimate_bytes": {
+            "runs_dataset": int(runs_df.memory_usage(deep=True).sum()),
+            "trades_dataset": int(trades_df.memory_usage(deep=True).sum()),
+        },
+        "columns_written": {
+            "runs_dataset": list(runs_df.columns),
+            "trades_dataset": list(trades_df.columns),
+        },
+        "skipped_runs": [row["run_id"] for row in dropped_rows],
+        "failed_runs": [
+            row["run_id"]
+            for row in dropped_rows
+            if "fail" in str(row.get("reason", "")).lower() or "error" in str(row.get("reason", "")).lower()
+        ],
     }
 
     dataset_manifest = {

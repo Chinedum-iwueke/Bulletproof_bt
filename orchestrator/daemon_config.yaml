@@ -2,7 +2,7 @@ poll_interval_seconds: 60
 queue_name: approved_backtests
 locked_by_prefix: research-daemon
 default_phase: tier2
-default_max_workers: 8
+default_max_workers: 6
 default_config: configs/engine.yaml
 default_local_config: configs/local/engine.lab.yaml
 data_mode: research_panel
@@ -18,13 +18,20 @@ retain_median: 1
 retain_worst: 1
 cleanup_delete_logs: true
 cleanup_delete_nonretained_runs: true
+runner_max_workers_auto: false
+runner_reserve_ram_gb: 8
+runner_max_ram_per_worker_gb: null
+runner_min_free_ram_gb: 6
+runner_run_timeout_seconds: null
+runner_fail_fast: false
+runner_resume_strict: true
 log_path: logs/research_daemon.log
 heartbeat_path: logs/research_daemon_heartbeat.json
 max_job_attempts: 2
 stale_lock_minutes: 720
 run_interpretation_after_pipeline: true
 run_state_discovery_after_pipeline: true
-run_research_memory_after_pipeline: false
+run_research_memory_after_pipeline: true
 interpretation_after_state_discovery: true
 state_discovery_min_trades: 30
 state_discovery_min_bucket_trades: 10
@@ -39,3 +46,4 @@ default_num_ctx: 8192
 default_temperature: 0.1
 verdict_output_dir: research/verdicts
 state_discovery_output_dir: research/state_findings
+research_memory_output_dir: research/memory

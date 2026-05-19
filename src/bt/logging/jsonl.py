@@ -160,10 +160,12 @@ def to_jsonable(obj: Any) -> Any:
 
 
 class JsonlWriter:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, flush_every: int = 100):
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
         self._file = path.open("a", encoding="utf-8")
+        self._flush_every = max(int(flush_every), 1)
+        self._pending_lines = 0
 
     def write(self, record: dict[str, Any]) -> None:
         """Append one JSON line."""
@@ -171,8 +173,12 @@ class JsonlWriter:
         json_record = to_jsonable(_with_canonical_fill_costs(record))
         json.dump(json_record, self._file, ensure_ascii=False)
         self._file.write("\n")
-        self._file.flush()
+        self._pending_lines += 1
+        if self._pending_lines >= self._flush_every:
+            self._file.flush()
+            self._pending_lines = 0
 
     def close(self) -> None:
         if not self._file.closed:
+            self._file.flush()
             self._file.close()

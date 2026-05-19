@@ -47,6 +47,7 @@ def audit_strategy_file(path: Path | None) -> dict[str, Any]:
             "has_decision_trace", "has_state_snapshot", "has_reason_code", "has_setup_class", "has_conditions_bool_map", "has_blockers_bool_map", "has_gate_margins", "has_parameter_trace", "has_signal_metadata"
         )}
     t = path.read_text(encoding="utf-8")
+    preserves_metadata = ("metadata=" in t) or ("metadata.update" in t) or ("metadata |" in t)
     return {
         "has_decision_trace": ("decision_trace" in t),
         "has_state_snapshot": ("entry_state_" in t or "state_snapshot" in t),
@@ -56,7 +57,13 @@ def audit_strategy_file(path: Path | None) -> dict[str, Any]:
         "has_blockers_bool_map": ("blockers_bool_map" in t),
         "has_gate_margins": ("gate_margins" in t),
         "has_parameter_trace": ("parameter_combination" in t or "parameter_set_id" in t),
-        "has_signal_metadata": ("metadata=" in t),
+        "has_signal_metadata": preserves_metadata,
+        "supports_enriched_state_snapshot": True,
+        "has_funding_state_fields": ("entry_state_funding" in t),
+        "has_oi_state_fields": ("entry_state_oi" in t),
+        "has_basis_state_fields": ("entry_state_basis" in t),
+        "has_csi_source_field": ("entry_state_csi_source" in t),
+        "preserves_signal_metadata": preserves_metadata,
     }
 
 
@@ -137,6 +144,8 @@ def main() -> int:
             "status": status,
             **flags,
             "expected_structural_bucket_fields": "entry_state_csi_pctile,entry_state_vol_pctile,entry_state_spread_proxy_pctile,entry_state_tr_over_atr,entry_decision_setup_class",
+            "expected_enriched_state_fields": "entry_state_funding_raw,entry_state_funding_pctile,entry_state_oi_level,entry_state_oi_accel_pctile,entry_state_basis_pctile,entry_state_csi_source",
+            "enriched_state_missing_requirements": "",
             "missing_requirements": ";".join(missing),
             "notes": "Engine-level metadata fallback may provide decision trace/state snapshot.",
         })

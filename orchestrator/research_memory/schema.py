@@ -33,12 +33,29 @@ def ensure_research_memory_schema(conn: sqlite3.Connection) -> None:
             slippage_drag_r REAL,
             spread_drag_r REAL,
             csi_pctile REAL,
+            csi_source TEXT,
+            csi_components_json TEXT,
             vol_pctile REAL,
             spread_pctile REAL,
             tr_over_atr REAL,
             tr_over_atr_pctile REAL,
             volume_pctile REAL,
             vol_of_vol_pctile REAL,
+            funding_raw REAL,
+            funding_pctile REAL,
+            funding_z REAL,
+            oi_level REAL,
+            oi_accel REAL,
+            oi_accel_pctile REAL,
+            oi_z REAL,
+            mark_price REAL,
+            index_price REAL,
+            basis_raw REAL,
+            basis_pct REAL,
+            basis_pctile REAL,
+            premium_pctile REAL,
+            crowding_proxy_pctile REAL,
+            constraint_stress_pctile REAL,
             trend_state TEXT,
             vol_regime TEXT,
             liquidity_regime TEXT,
@@ -139,6 +156,26 @@ def ensure_research_memory_schema(conn: sqlite3.Connection) -> None:
     )
     _add_column_if_missing(conn, "research_memory_trades", "metrics_valid", "INTEGER DEFAULT 1")
     _add_column_if_missing(conn, "research_memory_trades", "invalid_reason", "TEXT")
+    for column, spec in {
+        "csi_source": "TEXT",
+        "csi_components_json": "TEXT",
+        "funding_raw": "REAL",
+        "funding_pctile": "REAL",
+        "funding_z": "REAL",
+        "oi_level": "REAL",
+        "oi_accel": "REAL",
+        "oi_accel_pctile": "REAL",
+        "oi_z": "REAL",
+        "mark_price": "REAL",
+        "index_price": "REAL",
+        "basis_raw": "REAL",
+        "basis_pct": "REAL",
+        "basis_pctile": "REAL",
+        "premium_pctile": "REAL",
+        "crowding_proxy_pctile": "REAL",
+        "constraint_stress_pctile": "REAL",
+    }.items():
+        _add_column_if_missing(conn, "research_memory_trades", column, spec)
     conn.commit()
 
 

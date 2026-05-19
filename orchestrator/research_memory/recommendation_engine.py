@@ -12,6 +12,8 @@ import pandas as pd
 RECOMMENDATION_TYPES = {
     "ADD_GATE", "REMOVE_GATE", "TIGHTEN_GATE", "LOOSEN_GATE", "CHANGE_SIZING", "REFINE_EXIT",
     "REFINE_ENTRY", "PROMOTE_TIER3", "AVOID_STATE", "WATCHLIST", "SCRAP_PATTERN", "TEST_NEXT",
+    "ADD_FUNDING_GATE", "ADD_OI_ACCEL_GATE", "ADD_BASIS_GATE", "ADD_CONSTRAINT_STRESS_GATE",
+    "AVOID_FUNDING_EXTREME", "SIZE_UP_CONSTRAINT_STRESS", "SIZE_DOWN_DERIVATIVE_FRAGILITY",
 }
 
 
@@ -55,14 +57,28 @@ def _bucket_recommendations(df: pd.DataFrame) -> list[dict[str, Any]]:
         state = {"state_key": row.get("state_key"), "bucket": row.get("bucket"), "joint_key": row.get("joint_key")}
         repeated = _repeat_count(df, row)
         if ev >= 0.15 and n >= 3 and repeated >= 1:
+            state_key = str(row.get("state_key") or "")
+            rec_kind = "ADD_GATE"
+            if "funding" in state_key:
+                rec_kind = "ADD_FUNDING_GATE"
+            elif "oi" in state_key:
+                rec_kind = "ADD_OI_ACCEL_GATE"
+            elif "basis" in state_key:
+                rec_kind = "ADD_BASIS_GATE"
+            elif "constraint" in state_key:
+                rec_kind = "ADD_CONSTRAINT_STRESS_GATE"
             text = f"Add gate favoring {row.get('state_key')}={row.get('bucket')}"
             if row.get("setup_class"):
                 text += f" for {row.get('setup_class')} setups"
-            recs.append(_rec("ADD_GATE", "state_bucket", row.get("id"), text + ".", row, state, min(1, ev), min(1, n / 30)))
+            recs.append(_rec(rec_kind, "state_bucket", row.get("id"), text + ".", row, state, min(1, ev), min(1, n / 30)))
         if ev <= -0.10 and n >= 3:
-            recs.append(_rec("AVOID_STATE", "state_bucket", row.get("id"), f"Block or avoid trades when {row.get('state_key')}={row.get('bucket')}.", row, state, abs(ev), min(1, n / 30)))
+            rec_kind = "AVOID_FUNDING_EXTREME" if "funding" in str(row.get("state_key") or "") else "AVOID_STATE"
+            recs.append(_rec(rec_kind, "state_bucket", row.get("id"), f"Block or avoid trades when {row.get('state_key')}={row.get('bucket')}.", row, state, abs(ev), min(1, n / 30)))
         if ev > 0 and cost >= 0.35:
-            recs.append(_rec("CHANGE_SIZING", "state_bucket", row.get("id"), f"Reduce size in {row.get('state_key')}={row.get('bucket')} because edge is cost-fragile.", row, state, cost, min(1, n / 30)))
+            rec_kind = "SIZE_DOWN_DERIVATIVE_FRAGILITY" if any(token in str(row.get("state_key") or "") for token in ("funding", "oi", "basis", "constraint")) else "CHANGE_SIZING"
+            recs.append(_rec(rec_kind, "state_bucket", row.get("id"), f"Reduce size in {row.get('state_key')}={row.get('bucket')} because edge is cost-fragile.", row, state, cost, min(1, n / 30)))
+        if "constraint" in str(row.get("state_key") or "") and ev >= 0.20 and cost < 0.25:
+            recs.append(_rec("SIZE_UP_CONSTRAINT_STRESS", "state_bucket", row.get("id"), f"Review controlled size-up in {row.get('state_key')}={row.get('bucket')}; evidence is positive after costs.", row, state, ev, min(1, n / 30)))
         if (row.get("avg_mfe_r") or 0) >= 1.5 and (row.get("avg_exit_efficiency") or 1) <= 0.35 and ev < 0.25:
             recs.append(_rec("REFINE_EXIT", "state_bucket", row.get("id"), f"Test trailing or chandelier exits for {row.get('state_key')}={row.get('bucket')}.", row, state, row.get("avg_mfe_r") or 0, min(1, n / 30)))
     return recs

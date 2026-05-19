@@ -1,0 +1,90 @@
+{
+  "generated_at": "2026-05-19T00:00:00Z",
+  "scope": [
+    "scripts/build_hypothesis_grid.py",
+    "scripts/run_parallel_hypothesis_grid.py",
+    "bt.experiments.grid_runner.execute_hypothesis_variant",
+    "scripts/post_run_analysis.py",
+    "scripts/extract_experiment_dataset.py",
+    "scripts/cleanup_experiment_runs.py",
+    "orchestrator/research_daemon.py",
+    "orchestrator/run_experiment_pipeline.py"
+  ],
+  "required_truth_artifacts": [
+    "config_used.yaml",
+    "decisions.jsonl",
+    "fills.jsonl",
+    "trades.csv",
+    "equity.csv",
+    "performance.json"
+  ],
+  "implemented": {
+    "resource_controls": [
+      "--max-workers-auto",
+      "--reserve-ram-gb",
+      "--max-ram-per-worker-gb",
+      "--min-free-ram-gb",
+      "--run-timeout-seconds"
+    ],
+    "failure_isolation": [
+      "--fail-fast",
+      "--no-fail-fast",
+      "atomic run_status.json",
+      "parallel_failures.json"
+    ],
+    "resume_safety": [
+      "--resume-strict",
+      "--no-resume-strict",
+      "required artifact validation",
+      "performance.json validity check",
+      "metrics_valid=false rejection"
+    ],
+    "daemon_stability": [
+      "heartbeat memory snapshots",
+      "heartbeat queue counts",
+      "stage reporting",
+      "gc.collect after jobs",
+      "resource flags passed through pipeline"
+    ],
+    "logging": [
+      "JSONL flush batching",
+      "disk command logs",
+      "bounded daemon command tails"
+    ],
+    "state_features": [
+      "state_features.enabled",
+      "state_features.profile=minimal|full",
+      "default full profile preserves existing rich logging"
+    ],
+    "benchmarking": [
+      "scripts/benchmark_runner_performance.py"
+    ]
+  },
+  "rejected": [
+    {
+      "optimization": "cross-run mutable dataframe cache",
+      "reason": "risk of mutation, stale config reuse, and nondeterminism"
+    },
+    {
+      "optimization": "forward-filled OHLCV gaps",
+      "reason": "violates missing bars = missing decisions"
+    },
+    {
+      "optimization": "always-active volatile symbols",
+      "reason": "would leak future universe membership"
+    },
+    {
+      "optimization": "pre-extraction JSONL compression",
+      "reason": "downstream readers are not guaranteed gzip-aware"
+    }
+  ],
+  "measured_observations": {
+    "research_panel_loader_init_rss_before_gb": 4.1,
+    "research_panel_loader_init_rss_after_gb": 1.1,
+    "four_worker_rss_observed_gb_each": "1.1-1.2"
+  },
+  "focused_tests": {
+    "command": "PYTHONPATH=src pytest -q tests/test_runner_resource_controls.py tests/test_runner_resume_safety.py tests/test_parallel_grid_hardening.py tests/test_parallel_grid_runner.py tests/test_online_state_layer.py tests/test_post_run_analysis_efficiency.py tests/test_dataset_extraction_preserves_enriched_fields.py tests/test_extract_experiment_dataset_phase9.py tests/test_research_orchestration_data_profiles.py",
+    "result": "38 passed"
+  }
+}

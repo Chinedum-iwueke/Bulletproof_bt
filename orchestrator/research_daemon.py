@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import gc
 import json
 import logging
 import os
@@ -34,6 +35,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from orchestrator.db import ResearchDB
 from orchestrator.process_logging import CommandExecutionError, run_logged_command
+from bt.experiments.resource_controls import memory_snapshot
 from bt.paths import (
     resolve_daemon_command_log_dir,
     resolve_existing_experiment_root,
@@ -134,6 +136,13 @@ def merge_payload_with_defaults(payload: dict[str, Any], config: dict[str, Any],
             "membership_path",
             config.get("membership_path", "research_data/manifests/volatile_universe_membership.parquet"),
         ),
+        "max_workers_auto": payload.get("max_workers_auto", config.get("runner_max_workers_auto", False)),
+        "reserve_ram_gb": payload.get("reserve_ram_gb", config.get("runner_reserve_ram_gb", 8)),
+        "max_ram_per_worker_gb": payload.get("max_ram_per_worker_gb", config.get("runner_max_ram_per_worker_gb")),
+        "min_free_ram_gb": payload.get("min_free_ram_gb", config.get("runner_min_free_ram_gb", 6)),
+        "run_timeout_seconds": payload.get("run_timeout_seconds", config.get("runner_run_timeout_seconds")),
+        "fail_fast": payload.get("fail_fast", config.get("runner_fail_fast", False)),
+        "resume_strict": payload.get("resume_strict", config.get("runner_resume_strict", True)),
         "outputs_root": payload.get("outputs_root", config.get("outputs_root", "outputs")),
         "retain_top_n": payload.get("retain_top_n", config.get("retain_top_n", 2)),
         "retain_median": payload.get("retain_median", config.get("retain_median", 1)),
@@ -179,6 +188,10 @@ def build_pipeline_command(db_path: Path, merged_payload: dict[str, Any]) -> lis
         str(merged_payload["stable_manifest"]),
         "--membership-path",
         str(merged_payload["membership_path"]),
+        "--reserve-ram-gb",
+        str(merged_payload["reserve_ram_gb"]),
+        "--min-free-ram-gb",
+        str(merged_payload["min_free_ram_gb"]),
         "--outputs-root",
         str(merged_payload["outputs_root"]),
         "--retain-top-n",
@@ -190,6 +203,16 @@ def build_pipeline_command(db_path: Path, merged_payload: dict[str, Any]) -> lis
         "--research-db",
         str(db_path),
     ]
+    if bool(merged_payload.get("max_workers_auto")):
+        cmd.append("--max-workers-auto")
+    if merged_payload.get("max_ram_per_worker_gb") is not None:
+        cmd.extend(["--max-ram-per-worker-gb", str(merged_payload["max_ram_per_worker_gb"])])
+    if merged_payload.get("run_timeout_seconds") is not None:
+        cmd.extend(["--run-timeout-seconds", str(merged_payload["run_timeout_seconds"])])
+    if bool(merged_payload.get("fail_fast")):
+        cmd.append("--fail-fast")
+    if not bool(merged_payload.get("resume_strict", True)):
+        cmd.append("--no-resume-strict")
     if merged_payload.get("stable_data"):
         cmd.extend(["--stable-data", str(merged_payload["stable_data"])])
     if merged_payload.get("vol_data"):
@@ -250,20 +273,41 @@ def write_heartbeat(
     started_at: str,
     current_queue_id: str | None,
     current_job_name: str | None,
+    current_stage: str | None = None,
     status: str,
+    queue_counts: dict[str, int] | None = None,
 ) -> None:
     heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+    mem = memory_snapshot()
     payload = {
         "daemon_id": daemon_id,
         "hostname": socket.gethostname(),
         "pid": os.getpid(),
         "started_at": started_at,
         "last_heartbeat_at": utc_now_iso(),
+        "uptime_seconds": max(0.0, (datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds()),
         "current_queue_id": current_queue_id,
         "current_job_name": current_job_name,
+        "current_stage": current_stage,
         "status": status,
+        "queue_counts": queue_counts or {},
     }
+    if mem is not None:
+        payload["memory"] = {
+            "available_gb": round(mem.available_gb, 3),
+            "used_gb": round(mem.used_gb, 3),
+            "total_gb": round(mem.total_gb, 3),
+            "source": mem.source,
+        }
     heartbeat_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def queue_counts(db: ResearchDB, queue_name: str) -> dict[str, int]:
+    rows = db.connect().execute(
+        "SELECT status, COUNT(*) AS n FROM queues WHERE queue_name = ? GROUP BY status",
+        (queue_name,),
+    ).fetchall()
+    return {str(row["status"]): int(row["n"]) for row in rows}
 
 
 def build_interpret_command(db_path: Path, merged_payload: dict[str, Any], config: dict[str, Any]) -> list[str]:
@@ -385,6 +429,27 @@ def build_state_discovery_command(
     return cmd
 
 
+def build_research_memory_command(db_path: Path, merged_payload: dict[str, Any], config: dict[str, Any]) -> list[str]:
+    phase = str(merged_payload.get("phase", "tier2"))
+    return [
+        sys.executable,
+        str(PROJECT_ROOT / "orchestrator" / "research_memory.py"),
+        "--db",
+        str(db_path),
+        "--outputs-root",
+        str(merged_payload.get("outputs_root", config.get("outputs_root", "outputs"))),
+        "--verdicts-dir",
+        str(resolve_phase_artifact_dir(artifact_root=config.get("verdict_output_dir", "research/verdicts"), phase=phase)),
+        "--state-findings-dir",
+        str(resolve_phase_artifact_dir(artifact_root=config.get("state_discovery_output_dir", "research/state_findings"), phase=phase)),
+        "--alpha-zoo-dir",
+        str(resolve_phase_artifact_dir(artifact_root=config.get("alpha_zoo_dir", "research/alpha_zoo"), phase=phase)),
+        "--output-dir",
+        str(resolve_phase_artifact_dir(artifact_root=config.get("research_memory_output_dir", "research/memory"), phase=phase)),
+        "--write-db",
+    ]
+
+
 def main() -> int:
     args = parse_args()
     config = load_config(Path(args.config))
@@ -429,7 +494,9 @@ def main() -> int:
                 started_at=started_at,
                 current_queue_id=current_queue_id,
                 current_job_name=current_job_name,
+                current_stage=None,
                 status="idle",
+                queue_counts=queue_counts(db, queue_name),
             )
 
             if args.dry_run:
@@ -467,7 +534,9 @@ def main() -> int:
                 started_at=started_at,
                 current_queue_id=current_queue_id,
                 current_job_name=current_job_name,
+                current_stage="001_pipeline",
                 status="running",
+                queue_counts=queue_counts(db, queue_name),
             )
 
             cmd = build_pipeline_command(Path(args.db), merged_payload)
@@ -514,6 +583,15 @@ def main() -> int:
                                 db.register_artifact(artifact_type="interpreter_error", path=Path(interp_art.get("stderr") or interp_art.get("stdout") or "logs/research_daemon.log"), description="interpreter error", metadata={"queue_id": current_queue_id, "name": current_job_name, "returncode": interp_code, "root_cause_hint": interp_art.get("root_cause_hint"), "stdout_log": interp_art.get("stdout"), "stderr_log": interp_art.get("stderr")})
                     except Exception as interp_exc:
                         logger.exception("Interpreter exception for name=%s: %s", current_job_name, interp_exc)
+                run_memory = bool(config.get("run_research_memory_after_pipeline", True))
+                if run_memory:
+                    mem_cmd = build_research_memory_command(Path(args.db), merged_payload, config)
+                    mem_code, mem_art = _run_daemon_stage(cmd=mem_cmd, stage="004_research_memory", logger=logger, queue_id=current_queue_id, name=current_job_name, command_log_dir=command_log_dir, db=db, artifact_types=("daemon_research_memory_stdout_log", "daemon_research_memory_stderr_log"))
+                    if mem_code != 0:
+                        warning = {"stage": "research_memory", "returncode": mem_code, **(mem_art or {})}
+                        post_agent_warnings.append(warning)
+                        if mem_art:
+                            db.register_artifact(artifact_type="research_memory_error", path=Path(mem_art.get("stderr") or mem_art.get("stdout") or "logs/research_daemon.log"), description="research memory error", metadata={"queue_id": current_queue_id, "name": current_job_name, "returncode": mem_code, "root_cause_hint": mem_art.get("root_cause_hint"), "stdout_log": mem_art.get("stdout"), "stderr_log": mem_art.get("stderr")})
                 if post_agent_warnings:
                     db.register_artifact(artifact_type="post_agent_warnings", path=log_path, description="post pipeline agent warnings", metadata={"queue_id": current_queue_id, "name": current_job_name, "post_agent_warnings": post_agent_warnings})
             else:
@@ -529,6 +607,7 @@ def main() -> int:
 
             current_queue_id = None
             current_job_name = None
+            gc.collect()
 
             if args.once:
                 break
@@ -549,7 +628,9 @@ def main() -> int:
         started_at=started_at,
         current_queue_id=current_queue_id,
         current_job_name=current_job_name,
+        current_stage="shutdown",
         status="shutting_down",
+        queue_counts=queue_counts(db, queue_name),
     )
     logger.info("Graceful shutdown complete.")
     db.close()

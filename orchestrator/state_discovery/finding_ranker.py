@@ -20,6 +20,7 @@ def classify_and_rank_findings(metrics: pd.DataFrame, *, min_trades: int, includ
     kinds: list[str] = []
     scores: list[float] = []
     for _, row in df.iterrows():
+        state_variable = str(row.get("state_variable") or "")
         n = int(row.get("n_trades", 0) or 0)
         ev_net = _safe(row.get("ev_r_net"))
         ev_gross = _safe(row.get("ev_r_gross"))
@@ -36,6 +37,31 @@ def classify_and_rank_findings(metrics: pd.DataFrame, *, min_trades: int, includ
         if n < min_trades:
             kind = "FRAGILE_STATE"
             score = positive_edge_score
+        elif any(token in state_variable for token in ("funding", "basis", "oi", "constraint")):
+            if ev_gross > 0 and ev_net < 0 and cost > 0:
+                kind = "COST_KILLED_DERIVATIVE_STRESS_STATE"
+                score = cost_killed_score
+            elif "funding" in state_variable and ev_net >= 0.05:
+                kind = "FUNDING_EXTREME_EDGE_STATE"
+                score = positive_edge_score
+            elif "funding" in state_variable and ev_net <= -0.05:
+                kind = "FUNDING_EXTREME_AVOID_STATE"
+                score = abs(ev_net) * log1p(max(n, 1))
+            elif "oi" in state_variable and ev_net >= 0.05:
+                kind = "OI_BUILDUP_EDGE_STATE"
+                score = positive_edge_score
+            elif "oi" in state_variable and ev_net <= -0.05:
+                kind = "OI_BUILDUP_AVOID_STATE"
+                score = abs(ev_net) * log1p(max(n, 1))
+            elif "basis" in state_variable and ev_net >= 0.05:
+                kind = "BASIS_PREMIUM_EDGE_STATE"
+                score = positive_edge_score
+            elif "constraint" in state_variable and (tail5 >= 0.05 or cost >= 0.5 or ev_net <= -0.05):
+                kind = "CONSTRAINT_STRESS_TAIL_STATE"
+                score = tail_score + abs(cost)
+            else:
+                kind = "STRUCTURELESS"
+                score = 0.0
         elif ev_gross > 0 and ev_net < 0 and cost > 0:
             kind = "COST_KILLED_STATE"
             score = cost_killed_score

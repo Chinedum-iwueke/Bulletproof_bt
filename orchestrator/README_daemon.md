@@ -62,7 +62,7 @@ WantedBy=multi-user.target
 - Logs are written to `logs/research_daemon.log`.
 - Heartbeat is written to `logs/research_daemon_heartbeat.json`.
 - Use `--dry-run` to preview the next command without executing a job.
-- Research Memory is manual/scheduled by default: `run_research_memory_after_pipeline: false`.
+- Research Memory runs automatically after a successful pipeline by default: `run_research_memory_after_pipeline: true`.
 - Data mode defaults to canonical Binance `research_data/` panels:
   `data_mode: research_panel`, `data_root: research_data`, `data_kind: research_panel`,
   `exchange: binance`, `timeframe: 1m`.
@@ -72,7 +72,7 @@ WantedBy=multi-user.target
 
 ## Research Memory
 
-Build or refresh the deterministic research memory after a batch:
+The daemon builds or refreshes deterministic research memory after each successful pipeline. To run it manually after a batch:
 
 ```bash
 python orchestrator/research_memory.py \

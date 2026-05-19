@@ -87,6 +87,38 @@ def _resolve_requested_symbols(data_cfg: dict[str, Any]) -> tuple[list[str] | No
         )
     return (normalized_subset if normalized_subset is not None else normalized_symbols), requested_subset_raw, requested_symbols_raw
 
+
+def _research_panel_symbols(data_cfg: dict[str, Any]) -> list[str]:
+    root = Path(str(data_cfg.get("root", "research_data")))
+    exchange = str(data_cfg.get("exchange", "binance"))
+    universe = str(data_cfg.get("universe", "stable"))
+    if universe == "stable":
+        manifest_path = Path(str(data_cfg.get("stable_manifest") or root / "manifests" / "stable_universe.parquet"))
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"stable research-data manifest missing: {manifest_path}")
+        frame = pd.read_parquet(manifest_path)
+        native_col = "native_symbol" if "native_symbol" in frame.columns else "symbol"
+        if "exchange" in frame.columns:
+            frame = frame[frame["exchange"].astype(str).str.lower().eq(exchange.lower())]
+        if "available" in frame.columns:
+            frame = frame[frame["available"].fillna(False).astype(bool)]
+        return frame[native_col].astype(str).drop_duplicates().tolist()
+    if universe == "volatile":
+        membership_path = Path(str(data_cfg.get("membership_path") or root / "manifests" / "volatile_universe_membership.parquet"))
+        if not membership_path.exists():
+            raise FileNotFoundError(f"volatile research-data membership missing: {membership_path}")
+        frame = pd.read_parquet(membership_path, columns=["exchange", "symbol"])
+        if "exchange" in frame.columns:
+            frame = frame[frame["exchange"].astype(str).str.lower().eq(exchange.lower())]
+        return frame["symbol"].astype(str).drop_duplicates().tolist()
+    symbols = data_cfg.get("symbols")
+    if isinstance(symbols, str):
+        return [item.strip() for item in symbols.split(",") if item.strip()]
+    if isinstance(symbols, list):
+        return _normalize_requested_symbols(symbols, key_path="data.symbols")
+    return []
+
+
 def write_data_scope(run_dir: Path, *, config: dict, dataset_dir: str | None = None) -> None:
     """
     Write data_scope.json into run_dir if any scope-reducing knobs are active.
@@ -141,7 +173,20 @@ def write_data_scope(run_dir: Path, *, config: dict, dataset_dir: str | None = N
             "end": parsed_range[1].isoformat(),
         }
 
-    if dataset_dir is not None:
+    if data_cfg.get("dataset_kind") == "research_panel":
+        symbols = _research_panel_symbols(data_cfg)
+        if requested_symbols is not None:
+            requested_set = set(requested_symbols)
+            symbols = [symbol for symbol in symbols if symbol in requested_set]
+        if requested_max_symbols is not None:
+            symbols = symbols[: int(requested_max_symbols)]
+        payload["dataset_kind"] = "research_panel"
+        payload["universe"] = data_cfg.get("universe")
+        payload["exchange"] = data_cfg.get("exchange")
+        payload["timeframe"] = data_cfg.get("timeframe")
+        payload["effective_symbols"] = symbols
+        payload["effective_symbol_count"] = len(symbols)
+    elif dataset_dir is not None:
         try:
             manifest = load_dataset_manifest(dataset_dir, config)
         except Exception as exc:

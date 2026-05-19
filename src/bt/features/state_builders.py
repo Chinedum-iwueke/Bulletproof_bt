@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import json
 import numpy as np
 import pandas as pd
 
@@ -27,6 +28,85 @@ def _bucket(value: float | None, edges: list[tuple[float, float, str]]) -> str |
         if value >= lo and value < hi:
             return label
     return edges[-1][2]
+
+
+def _first_numeric(df: pd.DataFrame, aliases: tuple[str, ...]) -> pd.Series | None:
+    for col in aliases:
+        if col in df.columns:
+            return pd.to_numeric(df[col], errors="coerce")
+    return None
+
+
+def _zscore(series: pd.Series, window: int = 50) -> pd.Series:
+    values = pd.to_numeric(series, errors="coerce")
+    return (values - values.rolling(window, min_periods=10).mean()) / values.rolling(window, min_periods=10).std()
+
+
+def _signed_regime(value: float | None, pctile: float | None, prefix: str) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    p = 0.5 if pctile is None or pd.isna(pctile) else float(pctile)
+    if p <= 0.1:
+        return f"{prefix}_very_negative"
+    if p <= 0.3:
+        return f"{prefix}_negative"
+    if p < 0.7:
+        return f"{prefix}_neutral"
+    if p < 0.9:
+        return f"{prefix}_positive"
+    return f"{prefix}_very_positive"
+
+
+def _high_regime(value: float | None, pctile: float | None, prefix: str) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    p = 0.5 if pctile is None or pd.isna(pctile) else float(pctile)
+    if p < 0.3:
+        return f"{prefix}_low"
+    if p < 0.7:
+        return f"{prefix}_mid"
+    if p < 0.9:
+        return f"{prefix}_high"
+    return f"{prefix}_extreme"
+
+
+def _extreme_score(pctile: pd.Series) -> pd.Series:
+    return (pd.to_numeric(pctile, errors="coerce") - 0.5).abs().mul(2.0).clip(0.0, 1.0)
+
+
+def _renormalized_csi(row: pd.Series) -> tuple[float, str, str, str]:
+    components: dict[str, float] = {}
+    weights: dict[str, float] = {}
+    for name, weight in (
+        ("entry_state_vol_pctile", 0.20),
+        ("entry_state_tr_over_atr_pctile", 0.20),
+        ("entry_state_funding_extreme_score", 0.20),
+        ("entry_state_oi_accel_pctile", 0.20),
+        ("entry_state_basis_extreme_score", 0.10),
+        ("entry_state_spread_proxy_pctile", -0.10),
+    ):
+        value = row.get(name)
+        if value is None or pd.isna(value):
+            continue
+        short = name.removeprefix("entry_state_")
+        components[short] = float(value)
+        weights[short] = float(weight)
+    if "funding_extreme_score" not in components and "oi_accel_pctile" not in components and "basis_extreme_score" not in components:
+        components = {
+            "vol_pctile": float(row.get("entry_state_vol_pctile") or 0.0),
+            "tr_over_atr_pctile": float(row.get("entry_state_tr_over_atr_pctile") or 0.0),
+            "spread_proxy_pctile": float(row.get("entry_state_spread_proxy_pctile") or 0.0),
+        }
+        weights = {"vol_pctile": 0.35, "tr_over_atr_pctile": 0.35, "spread_proxy_pctile": -0.30}
+    denom = sum(abs(v) for v in weights.values()) or 1.0
+    raw = sum(weights[k] * components[k] for k in components) / denom
+    source = "enriched" if any(k in components for k in ("funding_extreme_score", "oi_accel_pctile", "basis_extreme_score")) else "ohlcv_proxy"
+    return (
+        float(min(1.0, max(0.0, raw))),
+        source,
+        json.dumps(components, sort_keys=True, separators=(",", ":")),
+        json.dumps({k: True for k in components}, sort_keys=True, separators=(",", ":")),
+    )
 
 
 def build_state_features(
@@ -87,13 +167,6 @@ def build_state_features(
     out["entry_state_tr_over_atr_pctile"] = _rolling_percentile(out["entry_state_tr_over_atr"], percentile_window)
     out["entry_state_volume_z"] = (volume - volume.rolling(50, min_periods=10).mean()) / volume.rolling(50, min_periods=10).std()
 
-    out["entry_state_csi_raw"] = (
-        0.35 * out["entry_state_vol_pctile"].fillna(0.0)
-        + 0.35 * out["entry_state_tr_over_atr_pctile"].fillna(0.0)
-        - 0.30 * out["entry_state_spread_proxy_pctile"].fillna(0.0)
-    ).clip(0.0, 1.0)
-    out["entry_state_csi_pctile"] = _rolling_percentile(out["entry_state_csi_raw"], percentile_window)
-
     out["entry_state_trend_state"] = np.where(
         out["entry_state_ema_fast"] > out["entry_state_ema_slow"],
         "uptrend",
@@ -108,14 +181,95 @@ def build_state_features(
     out["entry_state_displacement_regime"] = out["entry_state_tr_over_atr"].apply(
         lambda v: _bucket(v, [(0.0, 1.0, "no_impulse"), (1.0, 1.5, "mild_impulse"), (1.5, 2.0, "strong_impulse"), (2.0, float("inf"), "extreme_impulse")])
     )
-    out["entry_state_csi_bucket"] = out["entry_state_csi_raw"].apply(
-        lambda v: _bucket(v, [(0.0, 0.5, "csi_low"), (0.5, 0.7, "csi_mid"), (0.7, 0.85, "csi_high"), (0.85, 1.01, "csi_extreme")])
-    )
     ts = pd.to_datetime(out["ts"], utc=True, errors="coerce")
     out["entry_state_time_of_day_bucket"] = ts.dt.hour.apply(lambda h: f"h{int(h):02d}" if pd.notna(h) else None)
     out["entry_state_day_of_week"] = ts.dt.day_name()
     out["entry_state_asset_bucket"] = symbol[:3] if symbol else None
     out["entry_state_dataset_bucket"] = dataset_id
+    mark = _first_numeric(df, ("mark_close", "mark_price", "mark"))
+    index = _first_numeric(df, ("index_close", "index_price", "index"))
+    funding = _first_numeric(df, ("funding_rate", "funding", "funding_raw", "funding_rate_realized"))
+    oi = _first_numeric(df, ("open_interest", "oi", "oi_value", "oi_contracts", "oi_usd"))
+    premium = _first_numeric(df, ("premium_mark_vs_index", "premium", "premium_pct"))
+    basis = _first_numeric(df, ("basis_close_vs_index", "basis", "basis_pct", "mark_index_basis", "mark_index_basis_pct"))
+    if mark is not None:
+        out["entry_state_mark_price"] = mark
+        out["entry_state_mark_close"] = mark
+    if index is not None:
+        out["entry_state_index_price"] = index
+        out["entry_state_index_close"] = index
+    if funding is not None:
+        out["entry_state_funding_raw"] = funding
+        out["entry_state_funding_rate"] = funding
+        out["entry_state_funding_pctile"] = _rolling_percentile(funding, percentile_window)
+        out["entry_state_funding_z"] = _zscore(funding)
+        out["entry_state_funding_regime"] = [
+            _signed_regime(v, p, "funding")
+            for v, p in zip(funding, out["entry_state_funding_pctile"])
+        ]
+        out["entry_state_funding_extreme_score"] = _extreme_score(out["entry_state_funding_pctile"])
+    for source, target in (("funding_source_ts", "entry_state_funding_source_ts"), ("funding_available_at", "entry_state_funding_available_at"), ("oi_source_ts", "entry_state_oi_source_ts"), ("oi_available_at", "entry_state_oi_available_at")):
+        if source in df.columns:
+            out[target] = df[source]
+    if oi is not None:
+        oi_change = _first_numeric(df, ("oi_change_1", "oi_change", "open_interest_change"))
+        if oi_change is None:
+            oi_change = oi.diff()
+        oi_change_pct = _first_numeric(df, ("oi_change_pct_1", "oi_change_pct", "open_interest_change_pct"))
+        if oi_change_pct is None:
+            oi_change_pct = oi_change / oi.shift(1).replace(0, np.nan)
+        oi_accel = oi_change_pct.diff()
+        out["entry_state_open_interest"] = oi
+        out["entry_state_oi_level"] = oi
+        out["entry_state_oi_change"] = oi_change
+        out["entry_state_oi_change_1"] = oi_change
+        out["entry_state_oi_change_pct"] = oi_change_pct
+        out["entry_state_oi_change_pct_1"] = oi_change_pct
+        out["entry_state_oi_accel"] = oi_accel
+        out["entry_state_oi_accel_pctile"] = _rolling_percentile(oi_accel, percentile_window)
+        out["entry_state_oi_z"] = _zscore(oi)
+        oi_pct = _rolling_percentile(oi, percentile_window)
+        out["entry_state_oi_regime"] = [_high_regime(v, p, "oi") for v, p in zip(oi, oi_pct)]
+    if premium is not None:
+        out["entry_state_premium_mark_vs_index"] = premium
+        out["entry_state_premium_raw"] = premium
+        out["entry_state_premium_pctile"] = _rolling_percentile(premium, percentile_window)
+    if basis is not None:
+        out["entry_state_basis_close_vs_index"] = basis
+        out["entry_state_basis_raw"] = basis
+        out["entry_state_basis_pct"] = basis
+        out["entry_state_basis_pctile"] = _rolling_percentile(basis, percentile_window)
+        out["entry_state_basis_regime"] = [
+            _signed_regime(v, p, "basis")
+            for v, p in zip(basis, out["entry_state_basis_pctile"])
+        ]
+        out["entry_state_basis_extreme_score"] = _extreme_score(out["entry_state_basis_pctile"])
+    if "entry_state_funding_extreme_score" in out or "entry_state_oi_accel_pctile" in out:
+        out["entry_state_crowding_proxy"] = pd.concat(
+            [
+                out.get("entry_state_funding_raw", pd.Series(index=out.index, dtype="float64")).abs(),
+                out.get("entry_state_oi_change_pct", pd.Series(index=out.index, dtype="float64")).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        out["entry_state_crowding_proxy_pctile"] = _rolling_percentile(out["entry_state_crowding_proxy"], percentile_window)
+    csi_rows = out.apply(_renormalized_csi, axis=1, result_type="expand")
+    out["entry_state_csi_raw"] = csi_rows[0]
+    out["entry_state_csi_source"] = csi_rows[1]
+    out["entry_state_csi_components_json"] = csi_rows[2]
+    out["entry_state_csi_components_available_json"] = csi_rows[3]
+    out["entry_state_csi_pctile"] = _rolling_percentile(out["entry_state_csi_raw"], percentile_window)
+    out["entry_state_csi_bucket"] = out["entry_state_csi_raw"].apply(
+        lambda v: _bucket(v, [(0.0, 0.5, "csi_low"), (0.5, 0.7, "csi_mid"), (0.7, 0.85, "csi_high"), (0.85, 1.01, "csi_extreme")])
+    )
+    out["entry_state_constraint_stress_proxy"] = out["entry_state_csi_raw"]
+    out["entry_state_constraint_stress_pctile"] = out["entry_state_csi_pctile"]
+    if "entry_state_liq_buy_notional" in out and "entry_state_liq_sell_notional" in out:
+        total_liq = pd.to_numeric(out["entry_state_liq_buy_notional"], errors="coerce").fillna(0.0) + pd.to_numeric(out["entry_state_liq_sell_notional"], errors="coerce").fillna(0.0)
+        out["entry_state_liq_imbalance"] = (
+            (pd.to_numeric(out["entry_state_liq_buy_notional"], errors="coerce").fillna(0.0) - pd.to_numeric(out["entry_state_liq_sell_notional"], errors="coerce").fillna(0.0))
+            / total_liq.replace(0, np.nan)
+        )
 
     out["entry_state_trend_ready"] = out["entry_state_ema_slow"].notna()
     out["entry_state_vol_ready"] = out["entry_state_vol_pctile"].notna()

@@ -43,7 +43,7 @@ def test_l1_h1c_manifest_row_count_matches_registered_grid() -> None:
         hypothesis_path=Path("research/hypotheses/l1_h1c_volfloor_ema_pullback.yaml"),
         phase="tier2",
     )
-    assert len(rows) == 54
+    assert len(rows) == 108
     assert {row["tier"] for row in rows} == {"Tier2"}
 
 
@@ -81,6 +81,7 @@ def test_completion_detection_requires_required_artifacts(tmp_path: Path) -> Non
 
     for name in REQUIRED_ARTIFACTS:
         (run_dir / name).write_text("ok", encoding="utf-8")
+    (run_dir / "performance.json").write_text("{}", encoding="utf-8")
     assert detect_run_artifact_status(run_dir).state == "SUCCESS"
 
 
@@ -91,6 +92,7 @@ def test_skip_completed_behavior(tmp_path: Path) -> None:
     (completed / "run_status.json").write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
     for name in REQUIRED_ARTIFACTS:
         (completed / name).write_text("ok", encoding="utf-8")
+    (completed / "performance.json").write_text("{}", encoding="utf-8")
 
     config = tmp_path / "engine.yaml"
     config.write_text("{}", encoding="utf-8")

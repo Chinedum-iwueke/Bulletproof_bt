@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import os
 
 from bt.logging.run_contract import REQUIRED_ARTIFACTS
 
@@ -31,7 +32,14 @@ class RunArtifactStatus:
     message: str
 
 
-def detect_run_artifact_status(run_dir: Path) -> RunArtifactStatus:
+def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def detect_run_artifact_status(run_dir: Path, *, strict_resume: bool = True) -> RunArtifactStatus:
     try:
         exists = run_dir.exists()
     except OSError as exc:
@@ -50,17 +58,27 @@ def detect_run_artifact_status(run_dir: Path) -> RunArtifactStatus:
         return RunArtifactStatus(state="INCOMPLETE", return_code=None, message="run_status.json invalid shape")
 
     status_value = str(payload.get("status", "")).upper()
-    if status_value == "PASS":
+    if status_value in {"PASS", "COMPLETED", "SUCCESS"}:
         missing_required = sorted(name for name in REQUIRED_ARTIFACTS if not (run_dir / name).exists())
-        if missing_required:
+        if strict_resume and missing_required:
             return RunArtifactStatus(
                 state="INCOMPLETE",
                 return_code=None,
                 message=f"missing artifacts: {','.join(missing_required)}",
             )
+        perf_path = run_dir / "performance.json"
+        if strict_resume and perf_path.exists():
+            try:
+                perf_payload = json.loads(perf_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return RunArtifactStatus(state="INCOMPLETE", return_code=None, message="performance.json unreadable")
+            if isinstance(perf_payload, dict) and perf_payload.get("metrics_valid") is False:
+                return RunArtifactStatus(state="INCOMPLETE", return_code=None, message="performance metrics_valid=false")
         return RunArtifactStatus(state="SUCCESS", return_code=0, message="PASS")
-    if status_value == "FAIL":
+    if status_value in {"FAIL", "FAILED"}:
         return RunArtifactStatus(state="FAILED", return_code=1, message=str(payload.get("error_message", "")))
+    if status_value in {"RUNNING", "PENDING", "SKIPPED"}:
+        return RunArtifactStatus(state=status_value, return_code=None, message=status_value.lower())
     return RunArtifactStatus(state="INCOMPLETE", return_code=None, message=f"unknown status={status_value!r}")
 
 

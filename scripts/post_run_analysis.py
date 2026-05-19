@@ -24,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--per-run-bucket-min-trades", type=int, default=5); p.add_argument("--per-run-min-trades", type=int, default=20)
     p.add_argument("--per-run-ready-min-ev", type=float, default=0.05); p.add_argument("--per-run-cost-fragile-ratio", type=float, default=0.5)
     p.add_argument("--force-structural-buckets", action="store_true", default=False)
+    p.add_argument("--force", action="store_true", default=False)
+    p.add_argument("--jobs", type=int, default=1, help="Reserved for per-run diagnostics parallelism; default keeps memory bounded.")
     return p
 
 def _trade_df(run_dir: Path, all_df: pd.DataFrame) -> pd.DataFrame:
@@ -74,7 +76,7 @@ def main()->None:
     for run_dir in sorted((root/"runs").glob("*")):
         if not run_dir.is_dir(): continue
         analysis=run_dir/"analysis"; summary_json=analysis/"structural_diagnostics_summary.json"
-        if args.skip_existing and summary_json.exists() and not args.force_structural_buckets: continue
+        if args.skip_existing and summary_json.exists() and not (args.force or args.force_structural_buckets): continue
         analysis.mkdir(parents=True, exist_ok=True)
         rdf=_trade_df(run_dir, all_df)
         if rdf.empty:

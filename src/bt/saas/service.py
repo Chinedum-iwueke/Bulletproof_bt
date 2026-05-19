@@ -31,6 +31,8 @@ from bt.saas.models import (
     ParameterSweepRunInput,
     ParsedArtifactInput,
     ScorePayload,
+    STRATEGY_TRUTH_ROOM_CONTRACT_VERSION,
+    STRATEGY_TRUTH_ROOM_VERDICTS,
 )
 
 
@@ -190,6 +192,7 @@ class StrategyRobustnessLabService:
             params_present=bool(run.metadata.get("params_present", False)),
             parameter_sweep_present=False,
         )
+        semantic_capabilities["has_broker_export"] = bool(run.metadata.get("broker_export_present", False))
         equity_start = float(
             account_size
             if account_size is not None
@@ -356,6 +359,14 @@ class StrategyRobustnessLabService:
             params_present=parsed_artifact.params is not None,
             parameter_sweep_present=parsed_artifact.parameter_sweep is not None,
         )
+        asset_class_capabilities = self._asset_class_capability_profile(parsed_artifact)
+        artifact_capabilities.update(
+            {
+                "has_broker_export": bool(parsed_artifact.broker_export_present or parsed_artifact.broker_exports),
+                "has_declared_claims": bool(parsed_artifact.declared_claims),
+                "has_bundle_manifest": parsed_artifact.bundle_manifest is not None,
+            }
+        )
         capability_profile = AnalysisCapabilityProfile(
             diagnostics=self._diagnostic_capability_profile(
                 parsed_artifact,
@@ -380,6 +391,37 @@ class StrategyRobustnessLabService:
             for name, payload_block in diagnostics.items()
         }
         warnings = list(payload["overview"].get("warnings", [])) + list(parsed_artifact.parser_notes)
+        evidence_facts = self._build_evidence_facts(
+            parsed_artifact=parsed_artifact,
+            diagnostics=diagnostics,
+            capability_profile=capability_profile,
+            asset_class_capabilities=asset_class_capabilities,
+        )
+        assumption_ledger = self._build_assumption_ledger(
+            parsed_artifact=parsed_artifact,
+            diagnostics=diagnostics,
+            config=config,
+        )
+        claim_inventory = self._build_claim_inventory(
+            parsed_artifact=parsed_artifact,
+            diagnostics=diagnostics,
+            capability_profile=capability_profile,
+        )
+        proof_report = self._build_proof_report_payload(
+            parsed_artifact=parsed_artifact,
+            diagnostics=diagnostics,
+            evidence_facts=evidence_facts,
+            assumption_ledger=assumption_ledger,
+            claim_inventory=claim_inventory,
+            asset_class_capabilities=asset_class_capabilities,
+        )
+        payload["strategy_truth_room"] = {
+            "contract_version": STRATEGY_TRUTH_ROOM_CONTRACT_VERSION,
+            "evidence_facts": evidence_facts,
+            "assumption_ledger": assumption_ledger,
+            "claim_inventory": claim_inventory,
+            "proof_report": proof_report,
+        }
 
         run_context = EngineRunContext(
             artifact_kind=parsed_artifact.artifact_kind,
@@ -390,11 +432,15 @@ class StrategyRobustnessLabService:
             has_assumptions=parsed_artifact.assumptions is not None,
             has_params=parsed_artifact.params is not None,
             has_parameter_sweep=parsed_artifact.parameter_sweep is not None,
+            has_broker_export=bool(parsed_artifact.broker_export_present or parsed_artifact.broker_exports),
+            has_declared_claims=bool(parsed_artifact.declared_claims),
+            asset_class_capabilities=asset_class_capabilities,
         )
         return EngineAnalysisResult(
             envelope=EngineEnvelopeV1(
                 engine_name="bt",
                 engine_version=None,
+                strategy_truth_room_contract_version=STRATEGY_TRUTH_ROOM_CONTRACT_VERSION,
                 seam_name=ENGINE_SEAM_NAME,
                 seam_version=ENGINE_SEAM_VERSION,
                 adapter_version=ENGINE_ADAPTER_VERSION,
@@ -407,6 +453,10 @@ class StrategyRobustnessLabService:
             warnings=warnings,
             diagnostics=diagnostics,
             raw_payload=payload,
+            evidence_facts=evidence_facts,
+            assumption_ledger=assumption_ledger,
+            claim_inventory=claim_inventory,
+            proof_report=proof_report,
         )
 
     def _ingested_run_from_parsed_artifact(self, parsed_artifact: ParsedArtifactInput) -> IngestedRun:
@@ -473,9 +523,14 @@ class StrategyRobustnessLabService:
                 "benchmark_present": parsed_artifact.benchmark_present,
                 "params_present": parsed_artifact.params is not None,
                 "assumptions_present": parsed_artifact.assumptions is not None,
+                "broker_export_present": bool(parsed_artifact.broker_export_present or parsed_artifact.broker_exports),
+                "declared_claims_present": bool(parsed_artifact.declared_claims),
+                "source_file_count": len(parsed_artifact.source_files),
                 "equity_curve_provenance": equity_curve_provenance,
             }
         )
+        if parsed_artifact.bundle_manifest is not None:
+            metadata["bundle_manifest"] = parsed_artifact.bundle_manifest
         if parsed_artifact.ohlcv:
             metadata["_ohlcv_context"] = self._normalize_ohlcv(parsed_artifact.ohlcv)
 
@@ -548,6 +603,440 @@ class StrategyRobustnessLabService:
             "can_build_parameter_stability": has_parameter_grid,
             "can_build_trade_distribution": has_net_pnl,
         }
+
+    def _asset_class_capability_profile(self, parsed_artifact: ParsedArtifactInput) -> dict[str, Any]:
+        symbols = {
+            str(trade.symbol).upper()
+            for trade in parsed_artifact.trades
+            if getattr(trade, "symbol", None)
+        }
+        markets = {
+            str(trade.market).lower()
+            for trade in parsed_artifact.trades
+            if getattr(trade, "market", None)
+        }
+        exchanges = {
+            str(trade.exchange).lower()
+            for trade in parsed_artifact.trades
+            if getattr(trade, "exchange", None)
+        }
+        metadata = parsed_artifact.strategy_metadata or {}
+        declared_asset_class = str(
+            metadata.get("asset_class")
+            or metadata.get("market")
+            or metadata.get("assetClass")
+            or ""
+        ).lower()
+
+        joined = " ".join([declared_asset_class, *symbols, *markets, *exchanges])
+        if any(token in joined for token in ("crypto", "btc", "eth", "usdt", "binance", "bybit", "coinbase")):
+            detected = "crypto"
+        elif any(token in joined for token in ("forex", "fx", "eurusd", "gbpusd", "usdjpy")):
+            detected = "fx"
+        elif any(token in joined for token in ("futures", "cme", "contract", "perp")):
+            detected = "futures_or_cfd"
+        elif any(token in joined for token in ("index", "spy", "qqq", "nasdaq", "s&p")):
+            detected = "index_or_etf"
+        elif symbols:
+            detected = "listed_equity_or_unknown_symbol"
+        else:
+            detected = "unknown"
+
+        has_contract_terms = bool(
+            metadata.get("contract_multiplier")
+            or metadata.get("tick_value")
+            or metadata.get("margin_model")
+        )
+        broker_grade = bool(parsed_artifact.broker_export_present or parsed_artifact.broker_exports)
+        venue_supported = bool(exchanges or metadata.get("exchange") or metadata.get("broker"))
+
+        if detected == "futures_or_cfd" and not has_contract_terms:
+            confidence = "limited"
+            limitation = "Futures/CFD validation is limited without contract multiplier, tick value, margin, and session details."
+        elif broker_grade:
+            confidence = "supported"
+            limitation = None
+        elif venue_supported:
+            confidence = "limited"
+            limitation = "Asset-class recognition is supported, but execution realism remains limited without broker/fill exports."
+        else:
+            confidence = "limited"
+            limitation = "Asset class inferred from symbols; broker, venue, and contract details are missing."
+
+        return {
+            "detected_asset_class": detected,
+            "confidence": confidence,
+            "broker_grade_execution_available": broker_grade,
+            "venue_context_available": venue_supported,
+            "contract_terms_available": has_contract_terms,
+            "limitations": [limitation] if limitation else [],
+        }
+
+    def _build_evidence_facts(
+        self,
+        *,
+        parsed_artifact: ParsedArtifactInput,
+        diagnostics: dict[str, dict[str, Any]],
+        capability_profile: AnalysisCapabilityProfile,
+        asset_class_capabilities: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        facts: list[dict[str, Any]] = [
+            {
+                "fact_id": "artifact.trade_count",
+                "source": "parsed_artifact.trades",
+                "statement": f"{len(parsed_artifact.trades)} normalized trades were supplied.",
+                "value": len(parsed_artifact.trades),
+                "diagnostics": ["overview", "distribution", "monte_carlo", "execution", "ruin", "report"],
+                "confidence": "high" if parsed_artifact.trades else "low",
+            },
+            {
+                "fact_id": "artifact.asset_class",
+                "source": "strategy_metadata",
+                "statement": f"Asset class classified as {asset_class_capabilities.get('detected_asset_class', 'unknown')}.",
+                "value": asset_class_capabilities.get("detected_asset_class"),
+                "diagnostics": ["overview", "execution", "report"],
+                "confidence": asset_class_capabilities.get("confidence", "limited"),
+            },
+            {
+                "fact_id": "artifact.broker_export",
+                "source": "broker_exports",
+                "statement": "Broker/fill export was supplied." if parsed_artifact.broker_export_present or parsed_artifact.broker_exports else "Broker/fill export was not supplied.",
+                "value": bool(parsed_artifact.broker_export_present or parsed_artifact.broker_exports),
+                "diagnostics": ["execution", "report"],
+                "confidence": "high" if parsed_artifact.broker_export_present or parsed_artifact.broker_exports else "limited",
+            },
+            {
+                "fact_id": "artifact.market_context",
+                "source": "ohlcv",
+                "statement": "OHLCV market context was supplied." if parsed_artifact.ohlcv_present or parsed_artifact.ohlcv else "OHLCV market context was not supplied.",
+                "value": bool(parsed_artifact.ohlcv_present or parsed_artifact.ohlcv),
+                "diagnostics": ["regimes", "monte_carlo", "report"],
+                "confidence": "high" if parsed_artifact.ohlcv_present or parsed_artifact.ohlcv else "limited",
+            },
+        ]
+        for diagnostic, capability in capability_profile.diagnostics.items():
+            facts.append(
+                {
+                    "fact_id": f"diagnostic.{diagnostic}.status",
+                    "source": "capability_profile",
+                    "statement": f"{diagnostic} is {capability.status}: {capability.reason}",
+                    "value": capability.status,
+                    "diagnostics": [diagnostic],
+                    "confidence": "high",
+                }
+            )
+        return facts
+
+    def _build_assumption_ledger(
+        self,
+        *,
+        parsed_artifact: ParsedArtifactInput,
+        diagnostics: dict[str, dict[str, Any]],
+        config: AnalysisRunConfig,
+    ) -> list[dict[str, Any]]:
+        ledger: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add(
+            *,
+            source: str,
+            diagnostic: str,
+            statement: str,
+            materiality: str,
+            confidence: str,
+            rescue_evidence: str,
+            affected_metrics: list[str] | None = None,
+        ) -> None:
+            key = (diagnostic, statement)
+            if key in seen:
+                return
+            seen.add(key)
+            ledger.append(
+                {
+                    "assumption_id": f"A{len(ledger) + 1:03d}",
+                    "source": source,
+                    "diagnostic": diagnostic,
+                    "statement": statement,
+                    "materiality": materiality,
+                    "confidence": confidence,
+                    "testability": "testable_with_additional_artifact",
+                    "affected_metrics": affected_metrics or [],
+                    "verdict_impact": "Can weaken or strengthen the final validation verdict.",
+                    "rescue_evidence": rescue_evidence,
+                    "share_safe": True,
+                }
+            )
+
+        if parsed_artifact.assumptions:
+            for key, value in parsed_artifact.assumptions.items():
+                add(
+                    source="user_declared",
+                    diagnostic="report",
+                    statement=f"{key}: {value}",
+                    materiality="medium",
+                    confidence="user_declared",
+                    rescue_evidence="Attach source configuration or broker/export evidence supporting this assumption.",
+                )
+        for diagnostic, payload in diagnostics.items():
+            for statement in payload.get("assumptions", []) or []:
+                add(
+                    source="engine_emitted",
+                    diagnostic=diagnostic,
+                    statement=str(statement),
+                    materiality="high" if diagnostic in {"execution", "ruin", "monte_carlo"} else "medium",
+                    confidence="engine_emitted",
+                    rescue_evidence=f"Provide richer artifacts for {diagnostic} if this assumption is too broad.",
+                )
+        if config.account_size is None:
+            add(
+                source="missing_input",
+                diagnostic="ruin",
+                statement="account_size was not explicitly provided.",
+                materiality="critical",
+                confidence="high",
+                affected_metrics=["probability_of_ruin", "survival_probability"],
+                rescue_evidence="Provide account_size in runtime configuration or bundle assumptions.",
+            )
+        if config.risk_per_trade_pct is None:
+            add(
+                source="missing_input",
+                diagnostic="ruin",
+                statement="risk_per_trade_pct was not explicitly provided.",
+                materiality="critical",
+                confidence="high",
+                affected_metrics=["probability_of_ruin", "max_tolerable_risk_per_trade"],
+                rescue_evidence="Provide risk_per_trade_pct in runtime configuration or bundle assumptions.",
+            )
+        if not (parsed_artifact.broker_export_present or parsed_artifact.broker_exports):
+            add(
+                source="missing_input",
+                diagnostic="execution",
+                statement="Execution realism is limited because broker/fill exports were not supplied.",
+                materiality="critical",
+                confidence="high",
+                affected_metrics=["edge_decay_pct", "cost_kill_threshold_bps"],
+                rescue_evidence="Attach broker/fill exports with fees, fills, timestamps, venue, and order ids.",
+            )
+        if not (parsed_artifact.ohlcv_present or parsed_artifact.ohlcv):
+            add(
+                source="missing_input",
+                diagnostic="regimes",
+                statement="Regime conclusions are unavailable or limited without OHLCV market context.",
+                materiality="high",
+                confidence="high",
+                affected_metrics=["regime_dependence", "adverse_regime_decay"],
+                rescue_evidence="Attach OHLCV context aligned to trade timestamps.",
+            )
+        return ledger
+
+    def _build_claim_inventory(
+        self,
+        *,
+        parsed_artifact: ParsedArtifactInput,
+        diagnostics: dict[str, dict[str, Any]],
+        capability_profile: AnalysisCapabilityProfile,
+    ) -> list[dict[str, Any]]:
+        declared = parsed_artifact.declared_claims or []
+        if not declared:
+            declared = [
+                {
+                    "claim_id": "auto_positive_edge",
+                    "claim": "The strategy has positive edge after costs.",
+                    "source": "engine_default",
+                    "priority": "high",
+                },
+                {
+                    "claim_id": "auto_execution_realism",
+                    "claim": "The backtest execution assumptions are realistic enough for decisioning.",
+                    "source": "engine_default",
+                    "priority": "critical",
+                },
+                {
+                    "claim_id": "auto_regime_robustness",
+                    "claim": "The edge persists outside the favorable regime.",
+                    "source": "engine_default",
+                    "priority": "high",
+                },
+            ]
+
+        execution_status = capability_profile.diagnostics["execution"].status
+        regimes_status = capability_profile.diagnostics["regimes"].status
+        distribution = diagnostics.get("distribution", {})
+        execution = diagnostics.get("execution", {})
+        expectancy = distribution.get("summary_metrics", {}).get("expectancy")
+        edge_decay = execution.get("summary_metrics", {}).get("edge_decay_pct")
+        inventory: list[dict[str, Any]] = []
+        for index, raw_claim in enumerate(declared):
+            claim_text = str(raw_claim.get("claim") or raw_claim.get("text") or raw_claim)
+            lowered = claim_text.lower()
+            status = "unsupported"
+            supporting = []
+            contradicting = []
+            missing = []
+            if "edge" in lowered or "expectancy" in lowered or "profit" in lowered:
+                supporting.append("distribution")
+                if isinstance(expectancy, (int, float)) and expectancy > 0:
+                    status = "partially_supported" if execution_status != "supported" else "supported"
+                else:
+                    status = "contradicted"
+                    contradicting.append("distribution")
+                if execution_status != "supported":
+                    missing.append("broker/fill export or execution cost calibration")
+            elif "execution" in lowered or "fill" in lowered or "slippage" in lowered:
+                supporting.append("execution")
+                status = "supported" if execution_status == "supported" and edge_decay is not None else "partially_supported"
+                if not (parsed_artifact.broker_export_present or parsed_artifact.broker_exports):
+                    status = "unsupported"
+                    missing.append("broker/fill export")
+            elif "regime" in lowered:
+                supporting.append("regimes")
+                status = "supported" if regimes_status == "supported" else "unsupported"
+                if regimes_status != "supported":
+                    missing.append("OHLCV or regime-labeled context")
+            else:
+                missing.append("explicit mapping from claim to diagnostic evidence")
+
+            inventory.append(
+                {
+                    "claim_id": str(raw_claim.get("claim_id") or f"claim_{index + 1}"),
+                    "claim": claim_text,
+                    "source": str(raw_claim.get("source") or "declared_claims"),
+                    "priority": str(raw_claim.get("priority") or "medium"),
+                    "support_status": status,
+                    "supporting_diagnostics": supporting,
+                    "contradicting_diagnostics": contradicting,
+                    "missing_evidence": missing,
+                    "report_wording": f"Claim is {status.replace('_', ' ')} under the supplied artifact bundle.",
+                }
+            )
+        return inventory
+
+    def _build_proof_report_payload(
+        self,
+        *,
+        parsed_artifact: ParsedArtifactInput,
+        diagnostics: dict[str, dict[str, Any]],
+        evidence_facts: list[dict[str, Any]],
+        assumption_ledger: list[dict[str, Any]],
+        claim_inventory: list[dict[str, Any]],
+        asset_class_capabilities: dict[str, Any],
+    ) -> dict[str, Any]:
+        unavailable = [
+            name for name, payload in diagnostics.items()
+            if payload.get("status") in {"unavailable", "skipped"}
+        ]
+        limited = [
+            name for name, payload in diagnostics.items()
+            if payload.get("status") == "limited"
+        ]
+        unsupported_claims = [
+            claim for claim in claim_inventory
+            if claim.get("support_status") in {"unsupported", "contradicted"}
+        ]
+        available = [name for name, payload in diagnostics.items() if payload.get("status") == "available"]
+        diagnostic_confidence = {
+            name: {
+                "status": payload.get("status", "unavailable"),
+                "confidence": (
+                    "high" if payload.get("status") == "available"
+                    else "medium" if payload.get("status") == "limited"
+                    else "low"
+                ),
+                "limitations": payload.get("limitations", [])[:5],
+            }
+            for name, payload in diagnostics.items()
+        }
+        falsification_results = {
+            "execution": diagnostics.get("execution", {}).get("sensitivity_classification"),
+            "rare_trade_dependence": diagnostics.get("distribution", {}).get("summary_metrics", {}).get("rare_trade_dependence"),
+            "monte_carlo": diagnostics.get("monte_carlo", {}).get("summary_metrics", {}),
+            "ruin": diagnostics.get("ruin", {}).get("summary_metrics", {}),
+            "regime": diagnostics.get("regimes", {}).get("classification"),
+            "stability": diagnostics.get("stability", {}).get("summary_metrics", {}),
+        }
+        taxonomy_verdict = self._strategy_truth_room_verdict(
+            diagnostics=diagnostics,
+            unsupported_claims=unsupported_claims,
+            unavailable=unavailable,
+            limited=limited,
+        )
+        next_evidence = sorted({
+            *(str(item) for claim in unsupported_claims for item in claim.get("missing_evidence", [])),
+            *(str(item.get("rescue_evidence")) for item in assumption_ledger if item.get("rescue_evidence")),
+            *(f"Add evidence required by {name} diagnostic." for name in unavailable),
+        })
+        return {
+            "contract_version": STRATEGY_TRUTH_ROOM_CONTRACT_VERSION,
+            "executive_verdict": {
+                "taxonomy": taxonomy_verdict,
+                "allowed_verdicts": list(STRATEGY_TRUTH_ROOM_VERDICTS),
+                "summary": "Verdict is a validation classification, not investment advice.",
+            },
+            "artifact_identity": {
+                "artifact_kind": parsed_artifact.artifact_kind,
+                "richness": parsed_artifact.richness,
+                "source_files": parsed_artifact.source_files,
+                "bundle_manifest": parsed_artifact.bundle_manifest,
+            },
+            "evidence_coverage": {
+                "available": available,
+                "limited": limited,
+                "unavailable": unavailable,
+            },
+            "diagnostic_confidence": diagnostic_confidence,
+            "falsification_results": falsification_results,
+            "asset_class_capabilities": asset_class_capabilities,
+            "assumptions": assumption_ledger,
+            "critical_assumptions": [
+                item for item in assumption_ledger
+                if item.get("materiality") in {"critical", "high"}
+            ],
+            "unsupported_claims": unsupported_claims,
+            "limitations": [
+                *(str(limitation) for payload in diagnostics.values() for limitation in payload.get("limitations", [])[:3]),
+                *(f"{name} diagnostic was not fully available." for name in unavailable),
+            ],
+            "what_this_result_does_not_prove": [
+                *(f"Does not fully support claim: {claim.get('claim')}" for claim in unsupported_claims),
+                *(f"{name} diagnostic was not fully available." for name in unavailable),
+            ],
+            "next_evidence": next_evidence,
+            "research_desk_packet_hooks": {
+                "recommended": bool(unsupported_claims or unavailable or limited),
+                "suggested_scopes": sorted({
+                    *("execution_audit" for claim in unsupported_claims if "execution" in claim.get("missing_evidence", [])),
+                    *("claim_validation" for _ in unsupported_claims),
+                    *("regime_context_review" for name in unavailable if name == "regimes"),
+                    *("parameter_stability_review" for name in unavailable if name == "stability"),
+                }),
+            },
+            "evidence_facts": evidence_facts,
+        }
+
+    def _strategy_truth_room_verdict(
+        self,
+        *,
+        diagnostics: dict[str, dict[str, Any]],
+        unsupported_claims: list[dict[str, Any]],
+        unavailable: list[str],
+        limited: list[str],
+    ) -> str:
+        execution = diagnostics.get("execution", {})
+        regimes = diagnostics.get("regimes", {})
+        stability = diagnostics.get("stability", {})
+        if len(unavailable) >= 4 or "overview" in unavailable:
+            return "data_insufficient"
+        if execution.get("sensitivity_classification") in {"cost_killed", "negative"}:
+            return "untradeable_after_costs"
+        if execution.get("execution_fantasy_triggers"):
+            return "execution_fantasy"
+        if regimes.get("classification") in {"regime_dependent", "fragile"}:
+            return "regime_dependent"
+        if stability.get("classification") in {"fragile", "cliff"} or stability.get("status") in {"limited", "unavailable"}:
+            return "likely_overfit"
+        if unsupported_claims or limited:
+            return "promising_but_under_supported"
+        return "structurally_credible"
 
     def _diagnostic_capability_profile(
         self,
@@ -679,12 +1168,12 @@ class StrategyRobustnessLabService:
                 DiagnosticCapability(
                     status="supported" if has_trades else "unavailable",
                     reason=(
-                        "Execution sensitivity computed from fees/slippage/spread when present; defaults to zero costs otherwise."
+                        "Execution sensitivity computed from fees/slippage/spread when present; broker-grade realism requires fill or broker export context."
                         if has_trades
                         else "No trades supplied in parsed artifact."
                     ),
                     required_inputs=["trades"],
-                    optional_enrichments=["assumptions", "params"],
+                    optional_enrichments=["assumptions", "broker_export", "fees", "slippage", "spread", "params"],
                 )
             ),
             "regimes": regimes,
@@ -1510,6 +1999,35 @@ class StrategyRobustnessLabService:
             if len(losses) >= 2 and gross_loss_abs > 0
             else None
         )
+        abs_total_pnl = float(np.abs(pnl.to_numpy(dtype=float)).sum()) if trade_count else 0.0
+        sorted_profit = sorted((float(value) for value in pnl_values if value > 0.0), reverse=True)
+        top_trade_profit_contribution = (
+            float(sorted_profit[0] / gross_profit)
+            if sorted_profit and gross_profit > 0.0
+            else None
+        )
+        top_5_trade_profit_contribution = (
+            float(sum(sorted_profit[:5]) / gross_profit)
+            if sorted_profit and gross_profit > 0.0
+            else None
+        )
+        rare_trade_dependence = (
+            "severe"
+            if top_trade_profit_contribution is not None and top_trade_profit_contribution >= 0.5
+            else "elevated"
+            if top_5_trade_profit_contribution is not None and top_5_trade_profit_contribution >= 0.75
+            else "moderate"
+            if top_5_trade_profit_contribution is not None and top_5_trade_profit_contribution >= 0.5
+            else "low"
+        )
+        pnl_without_top_winner = float(sum(pnl_values) - sorted_profit[0]) if sorted_profit else float(sum(pnl_values))
+        edge_source = (
+            "rare_winner_dominated"
+            if rare_trade_dependence in {"severe", "elevated"}
+            else "broad_trade_distribution"
+            if win_count > 1 and gross_profit > 0.0
+            else "insufficient_trade_dispersion"
+        )
 
         shape_insights: list[dict[str, Any]] = []
         skew_direction = "right_skewed" if skewness > 0.25 else ("left_skewed" if skewness < -0.25 else "approximately_symmetric")
@@ -1572,6 +2090,8 @@ class StrategyRobustnessLabService:
             cautions.append(f"Distribution confidence is limited by sample size ({trade_count} trades).")
         if return_std == 0.0 and trade_count > 1:
             cautions.append("Trade outcomes have near-zero dispersion; stress assumptions may be understated.")
+        if rare_trade_dependence in {"severe", "elevated"}:
+            cautions.append("Edge is materially dependent on a small number of winning trades.")
 
         summary = (
             "Trade outcomes show "
@@ -1690,6 +2210,12 @@ class StrategyRobustnessLabService:
                 "percentile_90": percentile_90,
                 "skewness": skewness,
                 "kurtosis": kurtosis,
+                "top_trade_profit_contribution": top_trade_profit_contribution,
+                "top_5_trade_profit_contribution": top_5_trade_profit_contribution,
+                "rare_trade_dependence": rare_trade_dependence,
+                "pnl_without_top_winner": pnl_without_top_winner,
+                "edge_source": edge_source,
+                "absolute_pnl_concentration_basis": abs_total_pnl,
             },
             "figures": figures,
             "interpretation": {
@@ -1697,6 +2223,13 @@ class StrategyRobustnessLabService:
                 "positives": positives,
                 "cautions": cautions,
                 "shape_insights": shape_insights,
+                "rare_trade_dependence": {
+                    "classification": rare_trade_dependence,
+                    "top_trade_profit_contribution": top_trade_profit_contribution,
+                    "top_5_trade_profit_contribution": top_5_trade_profit_contribution,
+                    "pnl_without_top_winner": pnl_without_top_winner,
+                    "edge_source": edge_source,
+                },
             },
             "warnings": warnings,
             "assumptions": [
@@ -1722,6 +2255,8 @@ class StrategyRobustnessLabService:
                 "completeness_notes": limitations,
                 "has_durations": has_duration,
                 "has_mae_mfe": has_mae_mfe,
+                "rare_trade_dependence": rare_trade_dependence,
+                "edge_source": edge_source,
             },
             "r_multiple_distribution": r_values,
             "r_multiple_summary": {
@@ -1826,6 +2361,18 @@ class StrategyRobustnessLabService:
 
         rng = np.random.default_rng(seed)
         sampled = rng.choice(pnl, size=(simulations, pnl.size), replace=True)
+        block_size = int(min(max(2, round(np.sqrt(float(pnl.size)))), max(2, pnl.size))) if pnl.size > 1 else 1
+        block_paths: np.ndarray | None = None
+        if pnl.size >= 4 and simulations > 0:
+            block_rows: list[np.ndarray] = []
+            for _ in range(simulations):
+                values: list[float] = []
+                while len(values) < pnl.size:
+                    start = int(rng.integers(0, max(1, pnl.size - block_size + 1)))
+                    values.extend(float(item) for item in pnl[start : start + block_size].tolist())
+                block_rows.append(np.asarray(values[: pnl.size], dtype=float))
+            block_sampled = np.vstack(block_rows)
+            block_paths = float(initial_equity) + np.cumsum(block_sampled, axis=1)
 
         equity_paths = float(initial_equity) + np.cumsum(sampled, axis=1)
         running_peaks = np.maximum.accumulate(equity_paths, axis=1)
@@ -1853,6 +2400,23 @@ class StrategyRobustnessLabService:
         never_recovered = np.all(equity_paths < float(initial_equity), axis=1)
         recovery_steps = np.where(never_recovered, np.nan, recovery_steps.astype(float))
         recovery_success_rate = float(np.isfinite(recovery_steps).mean())
+        serial_dependence = (
+            float(np.corrcoef(pnl[:-1], pnl[1:])[0, 1])
+            if pnl.size > 2 and np.std(pnl[:-1]) > 0.0 and np.std(pnl[1:]) > 0.0
+            else None
+        )
+        block_bootstrap_metrics = None
+        if block_paths is not None:
+            block_peaks = np.maximum.accumulate(block_paths, axis=1)
+            block_drawdowns = np.where(block_peaks > 0, (block_paths - block_peaks) / block_peaks, 0.0)
+            block_max_drawdowns = block_drawdowns.min(axis=1)
+            block_bootstrap_metrics = {
+                "block_size": block_size,
+                "worst_drawdown_pct": float(block_max_drawdowns.min() * 100.0),
+                "p95_drawdown_pct": float(np.quantile(block_max_drawdowns, 0.05) * 100.0),
+                "median_drawdown_pct": float(np.median(block_max_drawdowns) * 100.0),
+                "simulation_model": "contiguous_block_bootstrap_trade_pnl",
+            }
 
         return {
             "methodology": {
@@ -1903,6 +2467,10 @@ class StrategyRobustnessLabService:
                 "drawdown_p95_pct": float(quantiles["0.95"] * 100.0),
                 "probability_of_ruin": probability_of_ruin,
                 "ruin_threshold_equity": ruin_threshold_equity,
+                "serial_dependence_lag1": serial_dependence,
+                "block_bootstrap_p95_drawdown_pct": (
+                    block_bootstrap_metrics["p95_drawdown_pct"] if block_bootstrap_metrics else None
+                ),
             },
             "figures": [
                 {
@@ -1960,6 +2528,7 @@ class StrategyRobustnessLabService:
             ],
             "limitations": [
                 "No serial dependence, volatility clustering, or regime-aware sequencing is modeled.",
+                "Block bootstrap is reported as a secondary sensitivity check when enough trades exist; it is not a full regime-aware simulator.",
                 "No liquidity, slippage amplification, or execution-gapping stress is injected beyond supplied trade PnL.",
                 "Baseline Monte Carlo is unconditional IID bootstrap; conditional/context-aware simulation is not implemented here.",
             ],
@@ -1981,6 +2550,9 @@ class StrategyRobustnessLabService:
                 "fan_chart_band_percentiles": [5, 25, 50, 75, 95],
                 "drawdown_distribution_mode": "max_drawdown_histogram_and_percentiles",
                 "compute_simplifications": ["iid_resampling", "fixed_horizon_equal_to_observed_trade_count"],
+                "serial_dependence_lag1": serial_dependence,
+                "block_bootstrap": block_bootstrap_metrics,
+                "regime_conditioned_mode_available": bool(semantic_capabilities.get("can_build_regime_analysis", False)),
                 "capability_used": bool(semantic_capabilities.get("can_build_monte_carlo_paths", True)),
             },
         }
@@ -2097,13 +2669,28 @@ class StrategyRobustnessLabService:
         plateau_ratio = float((metric_series >= top_quantile).mean())
         peak = float(metric_series.max())
         median = float(metric_series.median())
+        lower_quartile = float(metric_series.quantile(0.25))
+        robust_region_ratio = float((metric_series >= median).mean())
         fragility = 1.0 if peak == 0 else max(0.0, min(1.0, 1.0 - (median / peak)))
+        cliff_risk = (
+            float((peak - lower_quartile) / abs(peak))
+            if peak != 0.0
+            else 1.0
+        )
+        topology = (
+            "broad_plateau" if plateau_ratio >= 0.25 and cliff_risk < 0.5 else
+            "local_optimum" if plateau_ratio < 0.15 and cliff_risk >= 0.5 else
+            "mixed_surface"
+        )
         score = max(0.0, min(100.0, (plateau_ratio * 60.0) + ((1.0 - fragility) * 40.0)))
         return {
             "summary_metrics": {
                 "stability_score": score,
                 "plateau_ratio": plateau_ratio,
                 "peak_fragility": fragility,
+                "robust_region_ratio": robust_region_ratio,
+                "cliff_risk": cliff_risk,
+                "topology": topology,
             },
             "figures": [
                 {
@@ -2120,10 +2707,19 @@ class StrategyRobustnessLabService:
             "warnings": [],
             "assumptions": ["Stability is derived from the selected grid metric topology."],
             "recommendations": ["Validate top plateau parameters out-of-sample before deployment."],
-            "metadata": {"grid_points": int(len(metric_series)), "axes": {"x": x_key, "y": y_key, "value": "metric"}},
+            "metadata": {
+                "grid_points": int(len(metric_series)),
+                "axes": {"x": x_key, "y": y_key, "value": "metric"},
+                "topology": topology,
+                "robust_region_ratio": robust_region_ratio,
+                "cliff_risk": cliff_risk,
+            },
             "stability_score": score,
             "plateau_ratio": plateau_ratio,
             "peak_fragility": fragility,
+            "robust_region_ratio": robust_region_ratio,
+            "cliff_risk": cliff_risk,
+            "topology": topology,
             "heatmap": heatmap,
             "axes": {"x": x_key, "y": y_key, "value": "metric"},
         }
@@ -2278,6 +2874,22 @@ class StrategyRobustnessLabService:
         richer_cost_fields = bool((spread.abs() > 0).any() or (slippage.abs() > 0).any() or (fees.abs() > 0).any())
         has_notional = bool(resolved_notional.notna().any())
         execution_model_type = "enhanced" if (has_notional and richer_cost_fields) else "baseline"
+        has_broker_export = bool(semantic_capabilities.get("has_broker_export", False))
+        execution_fantasy_triggers: list[str] = []
+        if not has_broker_export:
+            execution_fantasy_triggers.append("broker_or_fill_export_missing")
+        if not richer_cost_fields:
+            execution_fantasy_triggers.append("explicit_cost_fields_sparse")
+        if break_even_cost_threshold is not None and break_even_cost_threshold <= 20.0:
+            execution_fantasy_triggers.append("edge_dies_under_small_cost_increase")
+        if stressed_expectancy <= 0.0:
+            execution_fantasy_triggers.append("stressed_expectancy_negative")
+        broker_fill_audit = {
+            "broker_export_present": has_broker_export,
+            "fill_quality_model": "broker_export_proxy" if has_broker_export else "not_available",
+            "anomalies": [] if has_broker_export else ["No broker/fill export supplied; cannot verify fills, venue fees, partial fills, or timestamp realism."],
+            "confidence": "limited" if has_broker_export else "unsupported",
+        }
         dominant = {
             "spread_bps": float(spread.abs().mean()),
             "slippage_bps": float(slippage.abs().mean()),
@@ -2327,6 +2939,8 @@ class StrategyRobustnessLabService:
                 "baseline_profit_factor": baseline_profit_factor,
                 "stressed_profit_factor": stressed_profit_factor,
                 "break_even_cost_threshold_bps": break_even_cost_threshold,
+                "cost_kill_threshold_bps": break_even_cost_threshold,
+                "execution_fantasy_trigger_count": len(execution_fantasy_triggers),
                 "stressed_scenario": stressed_row["name"],
                 "baseline_ev_net": baseline_expectancy,
                 "execution_resilience_score": resilience,
@@ -2401,6 +3015,9 @@ class StrategyRobustnessLabService:
                     },
                 },
                 "dominant_cost_dimension": dominant_dimension,
+                "broker_fill_audit": broker_fill_audit,
+                "execution_fantasy_triggers": execution_fantasy_triggers,
+                "cost_kill_threshold_bps": break_even_cost_threshold,
                 "capability_used": bool(semantic_capabilities.get("can_build_execution_sensitivity_baseline", True)),
                 "cost_drag_supported": bool(semantic_capabilities.get("can_build_cost_drag_summary", False)),
                 "uses_ohlcv": False,
@@ -2409,6 +3026,9 @@ class StrategyRobustnessLabService:
             "baseline_ev_net": baseline_expectancy,
             "execution_resilience_score": resilience,
             "break_even_cost_multiplier": None,
+            "broker_fill_audit": broker_fill_audit,
+            "execution_fantasy_triggers": execution_fantasy_triggers,
+            "cost_kill_threshold_bps": break_even_cost_threshold,
         }
 
     def _regime_analysis(self, trades: pd.DataFrame, *, ohlcv: pd.DataFrame | None = None) -> dict[str, Any]:
@@ -2474,6 +3094,12 @@ class StrategyRobustnessLabService:
         dominant = max(regime_metrics, key=lambda row: int(row["trade_count"]))
         dispersion = float(np.var(expectancy_values)) if expectancy_values else 0.0
         consistency = float(max(0.0, min(100.0, 100.0 - (dispersion * 100.0))))
+        thin_regimes = [str(row["regime"]) for row in regime_metrics if int(row["trade_count"]) < 10]
+        adverse_regime_decay = (
+            float(float(best["expectancy"]) - float(worst["expectancy"]))
+            if best and worst
+            else 0.0
+        )
         regime_classification = "regime-agnostic"
         if expectancy_values and (max(expectancy_values) - min(expectancy_values)) > 0.15:
             regime_classification = "regime-dependent"
@@ -2490,6 +3116,8 @@ class StrategyRobustnessLabService:
                 "regime_consistency_score": consistency,
                 "regime_count_observed": len(regime_metrics),
                 "mapped_trade_count": int(sum(counts)),
+                "thin_regime_count": len(thin_regimes),
+                "adverse_regime_decay": adverse_regime_decay,
             },
             "figures": [
                 {
@@ -2514,7 +3142,10 @@ class StrategyRobustnessLabService:
                 "weak_regime": str(worst["regime"]),
                 "classification": regime_classification,
             },
-            "warnings": [],
+            "warnings": [
+                f"Thin regime sample: {name} has fewer than 10 mapped trades."
+                for name in thin_regimes
+            ],
             "assumptions": [
                 "Trend is defined from EMA slope and close-vs-EMA context.",
                 "Volatility is defined from ATR percentage relative to its rolling median.",
@@ -2544,6 +3175,8 @@ class StrategyRobustnessLabService:
                 },
                 "mapped_trade_count": int(sum(counts)),
                 "ohlcv_bar_count": int(len(bars)),
+                "thin_regimes": thin_regimes,
+                "adverse_regime_decay": adverse_regime_decay,
             },
             "regime_consistency_score": consistency,
         }
@@ -2894,7 +3527,7 @@ class StrategyRobustnessLabService:
                 "limitations": limitations,
                 "recommendations": [
                     "Set explicit account_size and risk_per_trade_pct to activate full capital-survivability translation.",
-                    "Validate sizing with Monte Carlo-linked survivability checks before deployment.",
+                    "Validate sizing with Monte Carlo-linked survivability checks before relying on the result.",
                 ],
                 "metadata": {
                     "ruin_model_type": "fixed_fractional_bootstrap_ruin_model",
@@ -3078,10 +3711,10 @@ class StrategyRobustnessLabService:
 
         recommendations = [
             "Use explicit account_size and risk_per_trade_pct as required controls for survivability decisions.",
-            "Run Monte Carlo-linked ruin checks before deployment whenever sizing assumptions change.",
+            "Run Monte Carlo-linked ruin checks whenever sizing assumptions change.",
         ]
         if probability_of_ruin is not None and probability_of_ruin > 0.10:
-            recommendations.append("Do not deploy at current sizing; reduce risk_per_trade_pct or increase capital.")
+            recommendations.append("Current sizing fails the validation threshold; reduce risk_per_trade_pct or increase capital before relying on it.")
         elif probability_of_ruin is not None and probability_of_ruin > 0.03:
             recommendations.append("Sizing appears aggressive; consider reducing risk_per_trade_pct and retesting.")
 
@@ -3196,6 +3829,7 @@ class StrategyRobustnessLabService:
                 "sizing_model": "fixed_fractional",
                 "compounding_model": "fixed_notional_over_horizon",
                 "iid_trade_sequencing_assumed": True,
+                "non_advisory_language": True,
                 "monte_carlo_linked": True,
                 "drawdown_levels": list(levels.keys()),
             },
@@ -3440,6 +4074,7 @@ class StrategyRobustnessLabService:
                 "analysis_date": analysis_date,
                 "analysis_id": f"{strategy_name or 'strategy'}::{analysis_date}",
                 "available_diagnostics": available_diagnostics,
+                "proof_report_contract_version": STRATEGY_TRUTH_ROOM_CONTRACT_VERSION,
                 "export_readiness": {
                     "screen_rendering_ready": True,
                     "pdf_ready_core_sections": True,
@@ -3467,6 +4102,16 @@ class StrategyRobustnessLabService:
             "recommendations": recommendations,
             "metadata": {
                 "available_diagnostics": available_diagnostics,
+                "proof_report_contract_version": STRATEGY_TRUTH_ROOM_CONTRACT_VERSION,
+                "required_proof_sections": [
+                    "executive_verdict",
+                    "artifact_identity",
+                    "evidence_coverage",
+                    "assumption_ledger",
+                    "unsupported_claims",
+                    "limitations",
+                    "next_evidence",
+                ],
                 "export_sections": [
                     "executive_summary",
                     "diagnostics_summary",

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow.parquet as pq
 import yaml
 
 REQUIRED_PANEL_COLUMNS = {"ts", "symbol", "open", "high", "low", "close", "volume"}
@@ -115,10 +116,12 @@ def _validate_panel_file(profile: ResearchDataProfile, symbol: str) -> None:
     path = profile.root / "canonical" / profile.exchange / symbol / f"timeframe={profile.timeframe}" / "research_panel.parquet"
     if not path.exists():
         raise FileNotFoundError(f"research panel missing for {profile.exchange}/{symbol}: {path}")
-    df = pd.read_parquet(path)
-    missing = REQUIRED_PANEL_COLUMNS - set(df.columns)
+    available_columns = set(pq.ParquetFile(path).schema_arrow.names)
+    missing = REQUIRED_PANEL_COLUMNS - available_columns
     if missing:
         raise ValueError(f"research panel missing required columns {sorted(missing)}: {path}")
+    read_columns = sorted(REQUIRED_PANEL_COLUMNS | ({"funding_source_ts", "oi_source_ts"} & available_columns))
+    df = pd.read_parquet(path, columns=read_columns)
     ts = pd.to_datetime(df["ts"], utc=True, errors="raise")
     if str(ts.dt.tz) != "UTC":
         raise ValueError(f"research panel timestamps must be UTC: {path}")

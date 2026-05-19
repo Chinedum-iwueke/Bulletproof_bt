@@ -8,7 +8,8 @@ import hashlib
 import json
 import multiprocessing
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
@@ -17,8 +18,9 @@ from typing import Any
 from bt.experiments.hypothesis_runner import execute_hypothesis_variant, resolve_phase_tiers
 from bt.experiments.manifest import decode_params, encode_params, read_manifest_csv, write_manifest_csv
 from bt.experiments.precompute_cache import PrecomputeRegistry, build_registry, stable_cache_key
+from bt.experiments.resource_controls import memory_snapshot, resolve_auto_workers, wait_for_memory
 from bt.experiments.shared_data import SharedDatasetPlan, build_shared_dataset_plan, write_shared_cache_manifest
-from bt.experiments.status import detect_run_artifact_status, write_status_csv
+from bt.experiments.status import atomic_write_json, detect_run_artifact_status, write_status_csv
 from bt.experiments.wave_scheduler import iter_waves, resolve_wave_size
 from bt.experiments.worker_bootstrap import (
     WorkerLogger,
@@ -269,6 +271,20 @@ def _execute_manifest_row(
 ) -> tuple[int, str]:
     run_dir = Path(experiment_root) / row["output_dir"]
     run_dir.mkdir(parents=True, exist_ok=True)
+    run_started_at = _utc_now()
+    atomic_write_json(
+        run_dir / "run_status.json",
+        {
+            "status": "RUNNING",
+            "started_at": run_started_at,
+            "completed_at": None,
+            "duration_seconds": None,
+            "error_message": "",
+            "pid": os.getpid(),
+            "worker": {"pid": os.getpid()},
+            "runner_status_schema_version": 1,
+        },
+    )
     logger = WorkerLogger(run_dir)
     faulthandler_path = enable_worker_faulthandler(run_dir)
     bootstrap = apply_thread_caps(default_threads="1")
@@ -329,12 +345,29 @@ def _execute_manifest_row(
             override_paths=override_paths,
             run_slug=run_slug,
         )
+        # The engine writes the authoritative PASS status and required truth
+        # artifacts. The runner intentionally does not overwrite successful
+        # run_status.json, preserving engine-level semantics and metadata.
         logger.finish_phase("execution", status="completed")
         logger.event("completion", status="completed")
         logger.close()
         return 0, ""
     except Exception as exc:
         write_worker_exception(run_dir, exc)
+        atomic_write_json(
+            run_dir / "run_status.json",
+            {
+                "status": "FAIL",
+                "started_at": run_started_at,
+                "completed_at": _utc_now(),
+                "duration_seconds": None,
+                "error_message": str(exc),
+                "traceback_path": str(run_dir / "worker_exception.txt"),
+                "pid": os.getpid(),
+                "worker": {"pid": os.getpid()},
+                "runner_status_schema_version": 1,
+            },
+        )
         logger.finish_phase("execution", status="failed", error=str(exc))
         logger.event("completion", status="failed", error=str(exc))
         logger.close()
@@ -367,6 +400,10 @@ def run_hypothesis_manifest_in_parallel(
     skip_completed: bool,
     override_paths: list[Path],
     dry_run: bool,
+    run_timeout_seconds: float | None = None,
+    min_free_ram_gb: float = 6.0,
+    fail_fast: bool = False,
+    resume_strict: bool = True,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     status_rows: list[dict[str, Any]] = []
     launch_rows: list[dict[str, str]] = []
@@ -405,7 +442,7 @@ def run_hypothesis_manifest_in_parallel(
 
     for row in normalized_rows:
         row_out_dir = experiment_root / row["output_dir"]
-        completed_state = detect_run_artifact_status(row_out_dir)
+        completed_state = detect_run_artifact_status(row_out_dir, strict_resume=resume_strict)
         if row["enabled"] == "false":
             status_rows.append({
                 "row_id": row["row_id"],
@@ -454,15 +491,19 @@ def run_hypothesis_manifest_in_parallel(
                     "duration_sec": "",
                     "output_dir": row["output_dir"],
                     "error_message": "",
-                "traceback": "",
+                    "traceback": "",
                 }
             )
     else:
         ctx = multiprocessing.get_context("spawn")
         wave_size = resolve_wave_size(max_workers=max_workers)
         failure_records: list[dict[str, Any]] = []
-        with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
-            for wave_idx, wave_rows in enumerate(iter_waves(launch_rows, wave_size=wave_size), start=1):
+        completed_count = 0
+        skipped_count = len([row for row in status_rows if row["status"] == "SKIPPED"])
+        total_count = skipped_count + len(launch_rows)
+        for wave_idx, wave_rows in enumerate(iter_waves(launch_rows, wave_size=wave_size), start=1):
+            wait_for_memory(min_free_ram_gb=min_free_ram_gb, logger=lambda msg: print(f"[resource] {msg}", flush=True))
+            with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
                 future_context: dict[Any, dict[str, Any]] = {}
                 for row in wave_rows:
                     started_at = _utc_now()
@@ -510,54 +551,127 @@ def run_hypothesis_manifest_in_parallel(
                             "duration_sec": "",
                             "output_dir": row["output_dir"],
                             "error_message": "",
-                "traceback": "",
+                            "traceback": "",
                         }
                     )
 
-                for future in as_completed(list(future_context.keys())):
-                    context = future_context[future]
-                    started_clock = float(context["started_clock"])
-                    try:
-                        return_code, error_message = future.result()
-                    except Exception as exc:
-                        return_code = 1
-                        error_message = f"{type(exc).__name__}: {exc}"
-                    ended_at = _utc_now()
-                    duration = monotonic() - started_clock
-                    row_id = str(context["row_id"])
-                    row = next(item for item in wave_rows if item["row_id"] == row_id)
-                    artifact_state = detect_run_artifact_status(experiment_root / row["output_dir"])
-                    status = "COMPLETED" if return_code == 0 and artifact_state.state == "SUCCESS" else "FAILED"
-                    status_rows = [
-                        existing
-                        for existing in status_rows
-                        if not (existing["row_id"] == row_id and existing["status"] == "RUNNING")
-                    ]
-                    status_rows.append(
-                        {
-                            "row_id": row_id,
-                            "variant_id": row["variant_id"],
-                            "tier": row["tier"],
-                            "status": status,
-                            "return_code": str(return_code),
-                            "started_at": str(context["started_at"]),
-                            "ended_at": ended_at,
-                            "duration_sec": f"{duration:.3f}",
-                            "output_dir": row["output_dir"],
-                            "error_message": error_message or artifact_state.message,
-                            "traceback": _read_worker_traceback(experiment_root / row["output_dir"]) if status == "FAILED" else "",
-                        }
-                    )
-                    if status == "FAILED":
-                        failure_records.append(
+                pending = set(future_context.keys())
+                while pending:
+                    done, pending = wait(pending, timeout=5.0, return_when=FIRST_COMPLETED)
+                    if not done:
+                        if run_timeout_seconds is not None:
+                            timed_out = [
+                                future
+                                for future in pending
+                                if monotonic() - float(future_context[future]["started_clock"]) > run_timeout_seconds
+                            ]
+                            for future in timed_out:
+                                future.cancel()
+                                pending.remove(future)
+                                done.add(future)
+                        if done:
+                            # Timed-out futures are handled below like normal completions so
+                            # they receive run_status.json and manifest_status.csv rows.
+                            pass
+                        else:
+                            snap = memory_snapshot()
+                            msg = (
+                                f"progress completed={completed_count} skipped={skipped_count} "
+                                f"failed={len(failure_records)} running={len(pending)} total={total_count}"
+                            )
+                            if snap is not None:
+                                msg += f" mem_available_gb={snap.available_gb:.2f}"
+                            print(msg, flush=True)
+                            continue
+                    for future in done:
+                        if future not in future_context:
+                            continue
+                        context = future_context[future]
+                        started_clock = float(context["started_clock"])
+                        try:
+                            if run_timeout_seconds is not None and monotonic() - started_clock > run_timeout_seconds and future.cancelled():
+                                return_code, error_message = 1, f"run timeout after {run_timeout_seconds}s"
+                            else:
+                                return_code, error_message = future.result()
+                        except BrokenProcessPool as exc:
+                            return_code = 1
+                            error_message = f"BrokenProcessPool: {exc}"
+                        except Exception as exc:
+                            return_code = 1
+                            error_message = f"{type(exc).__name__}: {exc}"
+                        ended_at = _utc_now()
+                        duration = monotonic() - started_clock
+                        row_id = str(context["row_id"])
+                        row = next(item for item in wave_rows if item["row_id"] == row_id)
+                        artifact_state = detect_run_artifact_status(experiment_root / row["output_dir"], strict_resume=resume_strict)
+                        status = "COMPLETED" if return_code == 0 and artifact_state.state == "SUCCESS" else "FAILED"
+                        status_rows = [
+                            existing
+                            for existing in status_rows
+                            if not (existing["row_id"] == row_id and existing["status"] == "RUNNING")
+                        ]
+                        status_rows.append(
                             {
-                                **{k: v for k, v in context.items() if k != "started_clock"},
-                                "failed_at": ended_at,
+                                "row_id": row_id,
+                                "variant_id": row["variant_id"],
+                                "tier": row["tier"],
+                                "status": status,
+                                "return_code": str(return_code),
+                                "started_at": str(context["started_at"]),
+                                "ended_at": ended_at,
+                                "duration_sec": f"{duration:.3f}",
+                                "output_dir": row["output_dir"],
                                 "error_message": error_message or artifact_state.message,
-                                "traceback": _read_worker_traceback(experiment_root / row["output_dir"]),
+                                "traceback": _read_worker_traceback(experiment_root / row["output_dir"]) if status == "FAILED" else "",
                             }
                         )
-                    write_status_csv(experiment_root / "summaries" / "manifest_status.csv", sorted(status_rows, key=lambda x: x["row_id"]))
+                        if status == "FAILED":
+                            run_dir = experiment_root / row["output_dir"]
+                            if not (run_dir / "run_status.json").exists() or "timeout" in str(error_message).lower():
+                                atomic_write_json(
+                                    run_dir / "run_status.json",
+                                    {
+                                        "status": "FAIL",
+                                        "started_at": str(context["started_at"]),
+                                        "completed_at": ended_at,
+                                        "duration_seconds": duration,
+                                        "error_message": error_message or artifact_state.message,
+                                        "traceback_path": str(run_dir / "worker_exception.txt") if (run_dir / "worker_exception.txt").exists() else "",
+                                        "pid": os.getpid(),
+                                        "worker": {"pid": os.getpid()},
+                                        "runner_status_schema_version": 1,
+                                    },
+                                )
+                            failure_records.append(
+                                {
+                                    **{k: v for k, v in context.items() if k != "started_clock"},
+                                    "failed_at": ended_at,
+                                    "error_message": error_message or artifact_state.message,
+                                    "traceback": _read_worker_traceback(experiment_root / row["output_dir"]),
+                                }
+                            )
+                            if fail_fast:
+                                executor.shutdown(wait=False, cancel_futures=True)
+                                raise RuntimeError(f"fail-fast: row_id={row_id} failed: {error_message or artifact_state.message}")
+                        else:
+                            completed_count += 1
+                        snap = memory_snapshot()
+                        finished = completed_count + len(failure_records)
+                        avg_duration = sum(
+                            float(row.get("duration_sec") or 0.0)
+                            for row in status_rows
+                            if row.get("status") in {"COMPLETED", "FAILED"}
+                        ) / max(finished, 1)
+                        remaining = max(len(launch_rows) - finished, 0)
+                        msg = (
+                            f"progress completed={completed_count} skipped={skipped_count} failed={len(failure_records)} "
+                            f"running={len(pending)} total={total_count} avg_sec_per_run={avg_duration:.1f} "
+                            f"eta_sec={avg_duration * remaining:.0f}"
+                        )
+                        if snap is not None:
+                            msg += f" mem_available_gb={snap.available_gb:.2f}"
+                        print(msg, flush=True)
+                        write_status_csv(experiment_root / "summaries" / "manifest_status.csv", sorted(status_rows, key=lambda x: x["row_id"]))
 
                 future_context.clear()
                 gc.collect()
@@ -634,12 +748,30 @@ def cli_run_parallel_hypothesis_grid(argv: list[str] | None = None) -> int:
     parser.add_argument("--phase", choices=("tier2", "tier3", "validate"))
     parser.add_argument("--override", action="append", default=[])
     parser.add_argument("--max-workers", type=int, default=6)
+    parser.add_argument("--max-workers-auto", action="store_true", default=False)
+    parser.add_argument("--reserve-ram-gb", type=float, default=8.0)
+    parser.add_argument("--max-ram-per-worker-gb", type=float)
+    parser.add_argument("--min-free-ram-gb", type=float, default=6.0)
+    parser.add_argument("--run-timeout-seconds", type=float)
+    parser.add_argument("--fail-fast", dest="fail_fast", action="store_true", default=False)
+    parser.add_argument("--no-fail-fast", dest="fail_fast", action="store_false")
+    parser.add_argument("--resume-strict", dest="resume_strict", action="store_true", default=True)
+    parser.add_argument("--no-resume-strict", dest="resume_strict", action="store_false")
     parser.add_argument("--skip-completed", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
     if args.max_workers <= 0:
         raise ValueError("--max-workers must be > 0")
+    resolved_max_workers = resolve_auto_workers(
+        requested_max_workers=args.max_workers,
+        use_auto=bool(args.max_workers_auto),
+        reserve_ram_gb=float(args.reserve_ram_gb),
+        min_free_ram_gb=float(args.min_free_ram_gb),
+        max_ram_per_worker_gb=args.max_ram_per_worker_gb,
+    )
+    if resolved_max_workers != args.max_workers:
+        print(f"resolved_max_workers={resolved_max_workers} requested_max_workers={args.max_workers}", flush=True)
 
     experiment_root = Path(args.experiment_root)
     data_path, generated_overrides = resolve_parallel_grid_data_args(args, experiment_root)
@@ -654,10 +786,14 @@ def cli_run_parallel_hypothesis_grid(argv: list[str] | None = None) -> int:
         config_path=Path(args.config),
         local_config=Path(args.local_config) if args.local_config else None,
         data_path=data_path,
-        max_workers=args.max_workers,
+        max_workers=resolved_max_workers,
         skip_completed=bool(args.skip_completed),
         override_paths=[Path(p) for p in args.override] + generated_overrides,
         dry_run=bool(args.dry_run),
+        run_timeout_seconds=args.run_timeout_seconds,
+        min_free_ram_gb=float(args.min_free_ram_gb),
+        fail_fast=bool(args.fail_fast),
+        resume_strict=bool(args.resume_strict),
     )
     print(f"runs_total={len(statuses)}")
     print(f"runs_failed={len(failures)}")

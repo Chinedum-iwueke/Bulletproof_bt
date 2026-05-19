@@ -34,6 +34,12 @@ def test_spawn_pool_context_is_used(monkeypatch, tmp_path: Path) -> None:
         def result(self) -> tuple[int, str]:
             return 0, ""
 
+        def cancelled(self) -> bool:
+            return False
+
+        def cancel(self) -> bool:
+            return False
+
     class DummyExecutor:
         def __init__(self, *args, **kwargs):
             captured["mp_context"] = kwargs.get("mp_context")
@@ -48,7 +54,7 @@ def test_spawn_pool_context_is_used(monkeypatch, tmp_path: Path) -> None:
             return DummyFuture()
 
     monkeypatch.setattr(parallel_grid, "ProcessPoolExecutor", DummyExecutor)
-    monkeypatch.setattr(parallel_grid, "as_completed", lambda futures: list(futures))
+    monkeypatch.setattr(parallel_grid, "wait", lambda futures, timeout=None, return_when=None: (set(futures), set()))
     monkeypatch.setattr(parallel_grid, "_execute_manifest_row", lambda **kwargs: (0, ""))
 
     config = tmp_path / "engine.yaml"

@@ -17,7 +17,57 @@ DiagnosticName = Literal[
 ]
 
 CapabilityStatus = Literal["supported", "limited", "unavailable"]
-ArtifactKind = Literal["trade_csv", "artifact_bundle", "parameter_sweep"]
+STRATEGY_TRUTH_ROOM_CONTRACT_VERSION = "1.0.0"
+
+STRATEGY_TRUTH_ROOM_ARTIFACT_FAMILIES = (
+    "trade_log_v1",
+    "equity_curve_v1",
+    "broker_export_v1",
+    "backtest_report_v1",
+    "strategy_config_v1",
+    "ohlcv_context_v1",
+    "benchmark_series_v1",
+    "parameter_sweep_v1",
+    "declared_claims_v1",
+    "strategy_truth_room_bundle_v1",
+)
+
+STRATEGY_TRUTH_ROOM_VERDICTS = (
+    "structurally_credible",
+    "promising_but_under_supported",
+    "likely_overfit",
+    "execution_fantasy",
+    "data_insufficient",
+    "regime_dependent",
+    "untradeable_after_costs",
+)
+
+STRATEGY_TRUTH_ROOM_EVIDENCE_STATES = (
+    "supported",
+    "limited",
+    "unsupported",
+    "contradicted",
+    "unavailable",
+    "plan_locked",
+    "pending_review",
+)
+
+ArtifactKind = Literal[
+    "trade_csv",
+    "bundle_v1",
+    "artifact_bundle",
+    "parameter_sweep",
+    "trade_log_v1",
+    "equity_curve_v1",
+    "broker_export_v1",
+    "backtest_report_v1",
+    "strategy_config_v1",
+    "ohlcv_context_v1",
+    "benchmark_series_v1",
+    "parameter_sweep_v1",
+    "declared_claims_v1",
+    "strategy_truth_room_bundle_v1",
+]
 ArtifactRichness = Literal[
     "trade_only",
     "trade_plus_metadata",
@@ -96,8 +146,15 @@ class ParsedArtifactInput:
     params: dict[str, Any] | None = None
     parameter_sweep: ParameterSweepInput | None = None
     ohlcv: list[dict[str, Any]] | None = None
+    benchmark_series: list[dict[str, Any]] | None = None
+    broker_exports: list[dict[str, Any]] | None = None
+    declared_claims: list[dict[str, Any]] | None = None
+    source_files: list[dict[str, Any]] = field(default_factory=list)
+    bundle_manifest: dict[str, Any] | None = None
+    asset_class_capabilities: dict[str, Any] = field(default_factory=dict)
     ohlcv_present: bool = False
     benchmark_present: bool = False
+    broker_export_present: bool = False
     parser_notes: list[str] = field(default_factory=list)
     diagnostic_eligibility: dict[str, bool] = field(default_factory=dict)
 
@@ -138,6 +195,7 @@ DIAGNOSTIC_CONTRACT_VERSION = "1.0.0"
 class EngineEnvelopeV1:
     engine_name: str
     engine_version: str | None
+    strategy_truth_room_contract_version: str
     seam_name: str
     seam_version: str
     adapter_version: str
@@ -156,6 +214,9 @@ class EngineRunContext:
     has_assumptions: bool
     has_params: bool
     has_parameter_sweep: bool
+    has_broker_export: bool = False
+    has_declared_claims: bool = False
+    asset_class_capabilities: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -166,3 +227,7 @@ class EngineAnalysisResult:
     warnings: list[str]
     diagnostics: dict[DiagnosticName, dict[str, Any]]
     raw_payload: dict[str, Any]
+    evidence_facts: list[dict[str, Any]] = field(default_factory=list)
+    assumption_ledger: list[dict[str, Any]] = field(default_factory=list)
+    claim_inventory: list[dict[str, Any]] = field(default_factory=list)
+    proof_report: dict[str, Any] = field(default_factory=dict)

@@ -84,3 +84,39 @@ def test_write_data_scope_serializes_date_range(tmp_path: Path) -> None:
         "start": "2025-01-01T00:00:00+00:00",
         "end": "2025-01-02T00:00:00+00:00",
     }
+
+
+def test_write_data_scope_supports_research_panel_without_legacy_manifest(tmp_path: Path) -> None:
+    root = tmp_path / "research_data"
+    manifest = root / "manifests" / "stable_universe.parquet"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "exchange": ["binance", "binance"],
+            "native_symbol": ["BTCUSDT", "ETHUSDT"],
+            "available": [True, True],
+        }
+    ).to_parquet(manifest, index=False)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    write_data_scope(
+        run_dir,
+        config={
+            "data": {
+                "dataset_kind": "research_panel",
+                "root": str(root),
+                "exchange": "binance",
+                "universe": "stable",
+                "stable_manifest": str(manifest),
+                "date_range": {"start": "2025-01-01", "end": "2025-01-02"},
+            }
+        },
+        dataset_dir=str(root),
+    )
+
+    payload = json.loads((run_dir / "data_scope.json").read_text(encoding="utf-8"))
+    assert payload["dataset_kind"] == "research_panel"
+    assert payload["universe"] == "stable"
+    assert payload["effective_symbols"] == ["BTCUSDT", "ETHUSDT"]
+    assert payload["effective_symbol_count"] == 2

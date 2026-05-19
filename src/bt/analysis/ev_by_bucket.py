@@ -10,6 +10,27 @@ import pandas as pd
 
 from bt.analysis.structural_buckets import CSI_SPEC, DISP_SPEC, LIQ_SPEC, VOL_SPEC, assign_bucket
 
+FUNDING_SPEC = [
+    (0.0, 0.1, "funding_very_negative"),
+    (0.1, 0.3, "funding_negative"),
+    (0.3, 0.7, "funding_neutral"),
+    (0.7, 0.9, "funding_positive"),
+    (0.9, 1.01, "funding_very_positive"),
+]
+OI_ACCEL_SPEC = [
+    (0.0, 0.3, "oi_accel_low"),
+    (0.3, 0.7, "oi_accel_mid"),
+    (0.7, 0.9, "oi_accel_high"),
+    (0.9, 1.01, "oi_accel_extreme"),
+]
+BASIS_SPEC = [
+    (0.0, 0.1, "basis_discount_extreme"),
+    (0.1, 0.3, "basis_discount"),
+    (0.3, 0.7, "basis_neutral"),
+    (0.7, 0.9, "basis_premium"),
+    (0.9, 1.01, "basis_premium_extreme"),
+]
+
 
 def _metrics(df: pd.DataFrame, bucket_name: str, key: str, min_trades: int) -> pd.DataFrame:
     def _series(part: pd.DataFrame, candidates: list[str]) -> pd.Series:
@@ -105,6 +126,25 @@ def analyze_structural_buckets(trades_df: pd.DataFrame, min_trades: int = 10) ->
     else:
         missing["displacement"] = ["entry_state_tr_over_atr"]
 
+    funding_col = "entry_state_funding_pctile" if "entry_state_funding_pctile" in df.columns else None
+    if funding_col:
+        df["_funding_bucket"] = assign_bucket(df[funding_col], FUNDING_SPEC)
+        outputs["ev_by_bucket_funding"] = _metrics(df.dropna(subset=["_funding_bucket"]), "funding", "_funding_bucket", min_trades)
+    else:
+        missing["funding"] = ["entry_state_funding_pctile"]
+
+    if "entry_state_oi_accel_pctile" in df.columns:
+        df["_oi_accel_bucket"] = assign_bucket(df["entry_state_oi_accel_pctile"], OI_ACCEL_SPEC)
+        outputs["ev_by_bucket_oi_accel"] = _metrics(df.dropna(subset=["_oi_accel_bucket"]), "oi_accel", "_oi_accel_bucket", min_trades)
+    else:
+        missing["oi_accel"] = ["entry_state_oi_accel_pctile"]
+
+    if "entry_state_basis_pctile" in df.columns:
+        df["_basis_bucket"] = assign_bucket(df["entry_state_basis_pctile"], BASIS_SPEC)
+        outputs["ev_by_bucket_basis"] = _metrics(df.dropna(subset=["_basis_bucket"]), "basis", "_basis_bucket", min_trades)
+    else:
+        missing["basis"] = ["entry_state_basis_pctile"]
+
     setup_col = "entry_decision_setup_class" if "entry_decision_setup_class" in df.columns else ("label_structure_class" if "label_structure_class" in df.columns else None)
     if setup_col:
         outputs["ev_by_bucket_setup_class"] = _metrics(df.dropna(subset=[setup_col]), "setup_class", setup_col, min_trades)
@@ -122,6 +162,19 @@ def analyze_structural_buckets(trades_df: pd.DataFrame, min_trades: int = 10) ->
     if {"_vol_bucket", "_liquidity_bucket"}.issubset(df.columns):
         df["_joint_vol_liq"] = df["_vol_bucket"].astype(str) + "__" + df["_liquidity_bucket"].astype(str)
         outputs["ev_by_bucket_joint_vol_liquidity"] = _metrics(df.dropna(subset=["_joint_vol_liq"]), "joint_vol_liquidity", "_joint_vol_liq", min_trades)
+
+    for left, right, name in (
+        ("_csi_bucket", "_funding_bucket", "joint_csi_funding"),
+        ("_csi_bucket", "_oi_accel_bucket", "joint_csi_oi_accel"),
+        ("_csi_bucket", "_basis_bucket", "joint_csi_basis"),
+        ("_funding_bucket", "_oi_accel_bucket", "joint_funding_oi_accel"),
+        ("_vol_bucket", "_funding_bucket", "joint_vol_funding"),
+        ("_disp_bucket", "_oi_accel_bucket", "joint_displacement_oi_accel"),
+    ):
+        if {left, right}.issubset(df.columns):
+            key = f"_{name}"
+            df[key] = df[left].astype(str) + "__" + df[right].astype(str)
+            outputs[f"ev_by_bucket_{name}"] = _metrics(df.dropna(subset=[key]), name, key, min_trades)
 
     outputs["ev_by_bucket"] = pd.DataFrame([{"bucket": "all", "bucket_key": "overall_all_trades", "n_trades": len(df), "ev_r_net": pd.to_numeric(df.get("r_net", df.get("realized_r_net", df.get("r_multiple_net"))), errors="coerce").mean()}])
     outputs["tail_by_bucket"] = pd.DataFrame([{"bucket": "all", "n_trades": len(df)}])

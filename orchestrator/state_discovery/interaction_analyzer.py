@@ -14,6 +14,13 @@ JOINT_STATE_PAIRS = [
     ("entry_decision_setup_class", "entry_state_csi_bucket", "setup_x_csi"),
     ("entry_state_trend_state", "entry_state_vol_regime", "trend_x_vol"),
     ("entry_state_trend_state", "entry_state_liquidity_regime", "trend_x_liquidity"),
+    ("entry_state_funding_pctile", "entry_state_oi_accel_pctile", "funding_x_oi"),
+    ("entry_state_funding_pctile", "entry_state_basis_pctile", "funding_x_basis"),
+    ("entry_state_csi_pctile", "entry_state_funding_pctile", "csi_x_funding"),
+    ("entry_state_csi_pctile", "entry_state_oi_accel_pctile", "csi_x_oi"),
+    ("entry_state_csi_pctile", "entry_state_basis_pctile", "csi_x_basis"),
+    ("entry_state_tr_over_atr", "entry_state_oi_accel_pctile", "displacement_x_oi"),
+    ("entry_state_spread_proxy_pctile", "entry_state_funding_pctile", "liquidity_x_funding"),
 ]
 
 
