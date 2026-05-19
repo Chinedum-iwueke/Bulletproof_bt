@@ -44,6 +44,15 @@ def _state_feature_options(config: dict[str, Any]) -> tuple[bool, str]:
     return bool(enabled), str(profile or "full")
 
 
+def _is_missing_metadata_value(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(value != value)
+    except Exception:
+        return False
+
+
 class BacktestEngine:
     """Event-driven backtest engine."""
 
@@ -605,7 +614,7 @@ class BacktestEngine:
         metadata = dict(signal.metadata) if isinstance(signal.metadata, dict) else {}
         state_snapshot = self._state_layer.snapshot(symbol=signal.symbol)
         for key, value in state_snapshot.items():
-            if key.startswith("entry_state_") and key not in metadata:
+            if key.startswith("entry_state_") and (key not in metadata or _is_missing_metadata_value(metadata.get(key))):
                 metadata[key] = value
         metadata.setdefault("signal_ts", ts)
         if "decision_trace" not in metadata:

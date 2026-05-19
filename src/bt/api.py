@@ -28,8 +28,14 @@ def _resolve_timeframe_mode(config: dict[str, Any]) -> tuple[str, str | None, st
     engine_timeframe_raw = data_cfg.get("engine_timeframe")
     entry_timeframe_raw = data_cfg.get("entry_timeframe")
     legacy_timeframe_raw = data_cfg.get("timeframe")
+    dataset_kind = data_cfg.get("dataset_kind")
 
-    if engine_timeframe_raw is None and entry_timeframe_raw is None and legacy_timeframe_raw is not None:
+    if (
+        dataset_kind != "research_panel"
+        and engine_timeframe_raw is None
+        and entry_timeframe_raw is None
+        and legacy_timeframe_raw is not None
+    ):
         engine_timeframe_raw = legacy_timeframe_raw
 
     if engine_timeframe_raw is not None and entry_timeframe_raw is not None:

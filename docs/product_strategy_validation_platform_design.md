@@ -53,6 +53,134 @@ The status quo is not just another dashboard. The status quo is:
 
 The immediate product should not ask users to adopt a whole research OS. It should ask them for an artifact they already have and return a report they would actually share.
 
+## Bloomberg Terminal Lessons For This Product
+
+The Bloomberg Terminal is world-class because it is not a single feature. It is a connected institutional work surface: market data, news, analytics, research, alerts, messaging, trading workflow, risk tools, Excel/API extraction, support, and shared professional context live behind one trusted interface. Bloomberg's own product catalog groups the Terminal with Research, Portfolio & Risk Analytics, Charts, Monitors & Alerts, Collaboration, News, Data Connectivity, Trading, Risk, and Compliance. That is the lesson to adapt, not the exact product.
+
+Pricing is high because the value is not just "data access." Public 2026 budgeting estimates commonly place a standard annual Terminal subscription in roughly the $24,000-$32,000/user range, with hardware, premium data, API, analytics, support, and enterprise modules increasing total cost. Treat those numbers as market estimates, not Bloomberg list-price gospel. The durable point is that institutions pay when a product becomes a trusted daily operating system with data, workflow, network effects, auditability, and extraction into existing processes.
+
+Source note: Bloomberg's public product pages describe the Terminal as an integrated data, news, research, analytics, collaboration, trading, portfolio analytics, risk, compliance, alerting, and data-connectivity environment. Bloomberg does not publish a simple public list price; the pricing numbers here are third-party 2026 budgeting estimates and should be used directionally.
+
+For this product, the translation is:
+
+> Bloomberg sells market command plus institutional workflow.
+> Invariance Research should sell strategy truth command plus institutional validation workflow.
+
+### Bloomberg Pattern Translation
+
+| Bloomberg capability | Why users pay | Strategy Truth Room adaptation |
+| --- | --- | --- |
+| Trusted cross-asset data | one source of truth for decisions | evidence lake: uploaded trades, broker exports, OHLCV, benchmark, funding/OI/liquidations where available |
+| Analytics functions | fast answers to hard questions | validation functions: execution drag, rare-trade dependence, regime dependency, Monte Carlo survival, ruin, parameter fragility |
+| News and research context | explains market state and why results changed | research memory and market-state notes explaining when a strategy works, fails, or becomes unsupported |
+| Terminal commands | expert speed and repeat workflows | command palette and saved questions: compare runs, show missing evidence, explain verdict, find similar failures |
+| Excel/API extraction | fits institutional workflows | PDF/Markdown/JSON exports, future API, report snapshots, parquet/CSV evidence appendices for teams |
+| Messaging/network | coordination and professional trust | Share Room, Research Desk handoff, reviewer addenda, report comments, client-safe validation packets |
+| Alerts | users act when conditions change | evidence alerts: report superseded, share viewed, diagnostic unlocked, edge killed by costs, regime dependency found |
+| Audit trail | defensible records for committees | immutable snapshots, hashes, manifests, assumption ledger, unsupported-claim ledger, access logs |
+| Support/help | power users can understand the machine | "Why this verdict?", "What unlocks this?", "What changed?", "What should I upload next?" explanations |
+
+### Office-Hours Demand Decision
+
+Do not turn Approach A into a Bloomberg clone. That is how the wedge dies.
+
+Approach A should absorb only the Terminal patterns that make a single uploaded strategy report more valuable this month:
+
+- connected evidence objects, not isolated pages
+- reusable validation functions, not generic charts
+- report snapshot as the durable demand object
+- command-palette speed for serious users
+- export parity into existing workflows
+- recipient-safe sharing with access state
+- alerts around evidence changes and report trust
+- help/explain affordances that tell the user why a diagnostic is limited
+
+Everything else belongs in full ambition until demand justifies it.
+
+### Approach A Additions From Bloomberg
+
+The following additions are now in scope for the sellable Approach A product because they strengthen the upload-validation wedge without exposing the full research terminal:
+
+1. **Validation Command Palette**
+   - A keyboard-accessible app command surface for completed analyses.
+   - Initial commands:
+     - explain verdict
+     - show missing evidence
+     - compare to previous run
+     - open report snapshot
+     - create share link
+     - request Research Desk review
+     - show unsupported claims
+     - show diagnostics blocked by artifact vs plan
+   - This is the Bloomberg command-function pattern adapted to strategy validation. It is not a public terminal UI.
+
+2. **Evidence Alert Center**
+   - Alerts for events that change report trust:
+     - snapshot generated
+     - snapshot superseded
+     - share viewed
+     - share expired/revoked
+     - export completed/failed
+     - diagnostic newly unlocked by richer artifact
+     - high-materiality assumption emitted
+     - unsupported claim blocks report confidence
+   - Alerts should be evidence-state events, not marketing notifications.
+
+3. **Connected Case File**
+   - Every analysis should expose a left-to-right evidence chain:
+     - artifact files
+     - accepted facts
+     - assumptions
+     - diagnostics
+     - verdict
+     - proof report
+     - share room
+     - Research Desk packet
+   - Users should never wonder where a report statement came from.
+
+4. **Explain Layer**
+   - Each verdict and limitation should have a "why" path:
+     - why this verdict?
+     - why this diagnostic is limited?
+     - what input unlocks it?
+     - what changed since the previous snapshot?
+     - what evidence would rescue the claim?
+   - This makes honesty usable rather than merely cautious.
+
+5. **Workflow Exports**
+   - Keep PDF/Markdown/JSON exports.
+   - Add future-ready export slots for CSV/parquet evidence appendices and report API.
+   - Do not export raw trade files in public Share Room by default.
+
+### Full-Ambition Bloomberg Adaptations
+
+These are valuable, but they should not ship in first-launch Approach A:
+
+- multi-run strategy workspace with terminal-style command functions
+- tenant-scoped research memory search
+- cross-run failure clustering
+- cross-strategy regime intelligence
+- watchlists for strategies, claims, regimes, and evidence states
+- portfolio of strategy reports
+- team chat/comments attached to report snapshots
+- API access for institutional report ingestion
+- data terminal for market-state panels, funding/OI/liquidations, benchmark libraries, and instrument master
+- full research graph: claim to hypothesis to run to state bucket to verdict to next experiment
+- enterprise compliance archive for validation work
+
+### Internal Research Loop Additions
+
+The `bulletproof_bt` research daemon and memory layer are already the internal intelligence substrate. Keep improving it, but do not make users adopt it before the upload-validation wedge works.
+
+Useful internal additions:
+
+- **Research Command Layer**: status, queue, latest verdict, compare experiments, explain failure, find similar state buckets, promote/scrap recommendation.
+- **Terminal-Grade Intelligence Cards**: Hypothesis, Run Quality, Regime Dependency, Execution Drag, Failure Cause, Verdict, Similar Runs, Next Experiment.
+- **Data Provenance Board**: panel version, exchange/source coverage, funding/OI/liquidations availability, gaps, and known bad intervals.
+- **Failure Memory Index**: query prior strategies killed by costs, rare-trade dependence, parameter cliffs, adverse regimes, or insufficient evidence.
+- **Research HELP Equivalent**: explain any daemon verdict, what artifact drove it, what data was missing, and what next experiment has the highest information value.
+- **Moat Discipline**: every internal research card should eventually be convertible into a share-safe product object, but internal alpha notes must never leak into tenant/customer reports.
+
 ## Current Repo Reality
 
 ### `invariance_research` Exists And Is The Product App
@@ -2109,6 +2237,7 @@ The product is still not first-client ready because the foundations are not yet 
 | Engine diagnostics | `bulletproof_bt` supports core Approach A diagnostics with degradation behavior. | Diagnostics need stronger artifact-aware realism: broker fills, richer cost/slippage schedules, regime-aware Monte Carlo, stronger parameter topology, asset-class capability statements, and proof-report payloads. | `bulletproof_bt` |
 | Report export | Report page has export actions; export queue can render JSON/Markdown/PDF from snapshots. | Export must become a polished validation memo contract with evidence coverage, assumption ledger, unsupported claims, hashes, schema versions, redaction state, and share-room projection. | Both |
 | Share Room | Report snapshots, share tokens, share routes, and access events exist. | Needs productized Share Room: privacy controls, revoked/expired states, recipient-safe memo view, access log, redaction policy, and threat-model enforcement. | `invariance_research` |
+| Command and alert workflow | Report, share, export, and analysis actions exist as separate UI surfaces. | Needs a validation command palette, evidence alert center, explain layer, and connected case-file timeline so serious users can move through validation at terminal speed. | `invariance_research`, minor `bulletproof_bt` |
 | Subscription model | Entitlements exist for `explorer`, `professional`, `research_lab`, and `advisory`; diagnostic locks exist. | Needs launch tiers aligned to the new Free/Individual/Pro/Team/Research Desk matrix, pricing, copy, Stripe mapping, and per-diagnostic unlock states. | `invariance_research` |
 | Research Desk | Request records, admin page, addenda, and report-page CTA exist. | Needs full handoff packet, human/agent review workflow, addendum approval policy, pricing path, and first-client operating procedure. | `invariance_research` |
 | Reliability | Workers, retries, export queue, admin ops, and Postgres schema initialization exist. | Needs end-to-end first-client readiness harness across local SQLite, production Postgres, worker startup, artifact storage, email, exports, and share links. | Both |
@@ -2177,6 +2306,7 @@ App gaps to close:
 | Analysis Library | Exists as run list. | Upgrade to case library with artifact richness, verdict, report status, share status, Research Desk status, and next-evidence filter. | Phase 4 |
 | Report artifact | Export exists but is still mostly renderer-driven. | Build proof report model and visual report surface around verdict, coverage, assumptions, unsupported claims, diagnostic confidence, limitations, appendices, and share policy. | Phase 5 |
 | Share Room | Share routes and tokens exist. | Build recipient-facing Share Room with report summary, redaction boundary, token status, expiration, access events, and revoke controls. | Phase 5 |
+| Command/explain layer | Actions exist as scattered buttons and page links. | Add validation command palette, evidence alert center, explain drawer, saved validation questions, and case-file event timeline. | Phase 5.5 |
 | Subscription tiers | Entitlements exist but names and gates do not yet match launch packaging. | Update tier model, pricing copy, Stripe mapping, upgrade page, pricing page, billing page, and diagnostic lock messaging. | Phase 6 |
 | Research Desk handoff | Requests and addenda exist. | Add request wizard, packet generation, admin triage states, reviewer checklist, client-facing addenda, and status timeline. | Phase 7 |
 | Production readiness | Admin ops and schema auto-init exist. | Add migration discipline, startup checks, email deliverability, worker launch docs, storage checks, share security checks, and first-client smoke tests. | Phase 8 |
@@ -2637,6 +2767,104 @@ Definition of done:
 - revoked/expired shares cannot be accessed
 - report snapshots are immutable enough for client trust
 
+### Phase 5.5: Validation Command Layer, Explainability, And Evidence Alerts
+
+Repo ownership:
+
+- `invariance_research`: primary owner for command palette, alert center, explain UI, case-file timeline, saved validation questions, and report/workbench actions
+- `bulletproof_bt`: stable reason codes, diagnostic explanation payloads, next-evidence labels, and report-safe wording where the app cannot infer them safely
+
+Purpose:
+
+Add the Bloomberg-inspired workflow layer that makes the first product feel like a serious validation terminal without exposing the full research operating system. Users should be able to ask the product direct questions, jump to the right evidence object, understand why the verdict moved, and see which report events affect trust.
+
+This phase is intentionally after Phase 5 because commands, alerts, and explanations need stable report snapshots, share events, exports, assumptions, limitations, and unsupported claims. It is before Phase 6 because this command layer also becomes the cleanest place to explain plan locks versus evidence locks.
+
+Implementation tasks in `invariance_research`:
+
+- add a keyboard-accessible validation command palette available on every analysis workspace page
+- define an explicit command registry with permission-aware and artifact-aware actions:
+  - explain verdict
+  - show missing evidence
+  - open Assumption Ledger
+  - open unsupported claims
+  - open report snapshot
+  - export PDF
+  - export Markdown
+  - export JSON
+  - create share link
+  - revoke share link
+  - compare previous run when a strategy lineage exists
+  - request Research Desk review
+  - show diagnostics blocked by artifact
+  - show diagnostics blocked by subscription
+- add saved validation questions as first-class shortcuts:
+  - what assumptions produced this result?
+  - what happens if fills get worse?
+  - what happens if fees change?
+  - where does this strategy fail by regime?
+  - how much edge comes from rare trades?
+  - what evidence is missing?
+  - what does this report not prove?
+- add an Evidence Alert Center backed by persisted evidence events:
+  - snapshot generated
+  - snapshot superseded
+  - export completed
+  - export failed
+  - share created
+  - share viewed
+  - share expired
+  - share revoked
+  - diagnostic unlocked by richer artifact
+  - diagnostic unavailable because evidence is insufficient
+  - diagnostic unavailable because plan is insufficient
+  - high-materiality assumption emitted
+  - unsupported claim blocks confidence
+  - Research Desk packet created
+- add a per-analysis connected case-file timeline:
+  - upload accepted
+  - artifact classified
+  - evidence ledger snapshot created
+  - analysis queued
+  - diagnostics completed or skipped
+  - verdict generated
+  - report snapshot generated
+  - export/share events
+  - Research Desk request and addendum events
+- add an explain drawer or panel that answers:
+  - why this verdict?
+  - why this diagnostic is limited?
+  - what input would unlock the missing diagnostic?
+  - what changed since the previous snapshot?
+  - what evidence would rescue a weak or unsupported claim?
+- make every command produce a product-safe empty state when the action is blocked by missing evidence, missing plan rights, missing lineage, or missing snapshot
+- make the Report page, Overview page, Library, Share Room owner controls, and Assumption Ledger link into the same command/event model instead of each inventing separate action logic
+- add tests for command availability, permission gating, evidence gating, alert persistence, event ordering, and redaction-safe explanation payloads
+
+Implementation tasks in `bulletproof_bt`:
+
+- emit stable explanation reason codes for verdicts, skipped diagnostics, warnings, material assumptions, and unsupported claims where missing
+- emit `next_evidence` labels that the app can display without rewriting engine meaning
+- ensure diagnostic outputs distinguish:
+  - artifact limitation
+  - model limitation
+  - execution assumption limitation
+  - sample-size limitation
+  - unavailable context data
+  - unsupported asset-class detail
+- keep every reason code deterministic and schema-versioned
+- do not change backtest, execution, no-lookahead, fill, cost, or simulation semantics in this phase
+
+Definition of done:
+
+- a user can open the command palette from any completed-analysis workspace page
+- command results route to the correct workspace, drawer, export, share, or Research Desk action
+- every command is artifact-aware, plan-aware, and redaction-aware
+- the alert center shows report, share, export, diagnostic, assumption, and claim events
+- the case-file timeline makes the full evidence chain navigable from artifact to report
+- the explain layer can answer verdict, limitation, unlock, changed-snapshot, and rescue-evidence questions without exposing raw private files
+- no internal research daemon memory, alpha notes, or cross-tenant patterns leak into customer reports
+
 ### Phase 6: Launch Subscription And Entitlement Model
 
 Repo ownership:
@@ -2872,10 +3100,11 @@ The next implementation slices should follow this order:
 4. Phase 3 engine diagnostic hardening, starting with execution realism and distribution concentration.
 5. Phase 4 workbench redesign page-by-page, starting with Overview and Execution.
 6. Phase 5 proof report, export, and Share Room.
-7. Phase 6 subscription and entitlement alignment.
-8. Phase 7 Research Desk handoff.
-9. Phase 8 reliability hardening.
-10. Phase 9 first-client beta protocol.
+7. Phase 5.5 validation command layer, explainability, evidence alerts, and connected case-file timeline.
+8. Phase 6 subscription and entitlement alignment.
+9. Phase 7 Research Desk handoff.
+10. Phase 8 reliability hardening.
+11. Phase 9 first-client beta protocol.
 
 This order matters. The app should not spend another pass polishing workbench pages before the artifact contract, evidence ledger, assumption ledger, and claim inventory are stable enough to power the product truthfully.
 
@@ -2898,6 +3127,29 @@ Product object:
 - report
 
 This is the current Strategy Robustness Lab path.
+
+### Stage 1.5: Validation Command Layer
+
+User action:
+
+- ask why the verdict changed
+- jump to missing evidence
+- open unsupported claims
+- create a report snapshot
+- export or share the memo
+- request Research Desk review from a specific limitation
+
+Product object:
+
+- command
+- saved validation question
+- evidence event
+- explanation
+- case-file timeline
+
+Why this belongs before the full research OS:
+
+It gives serious users Bloomberg-style speed and connected workflow without asking them to adopt a multi-run institutional terminal. This is the bridge between a useful dashboard and a product people trust during a real buying, allocation, education, or strategy-sale decision.
 
 ### Stage 2: Strategy Workspace
 
@@ -3023,6 +3275,7 @@ invariance_research Next.js App
   |-- upload inspection
   |-- diagnostic pages
   |-- report/export pages
+  |-- command palette / explain layer / evidence alert center
   |-- billing/entitlements
   |-- admin/research desk
   |
@@ -3034,6 +3287,7 @@ TypeScript API + Services
   |-- queue records
   |-- export records
   |-- report renderer
+  |-- evidence events and case-file timeline
   |-- product contracts
   |
   v

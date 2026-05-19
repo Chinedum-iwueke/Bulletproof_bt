@@ -189,6 +189,8 @@ ENGINE_ADAPTER_VERSION = "1.0.0"
 ENGINE_PARSER_VERSION = "1.0.0"
 CAPABILITY_PROFILE_VERSION = "1.0.0"
 DIAGNOSTIC_CONTRACT_VERSION = "1.0.0"
+STRATEGY_RESEARCH_TERMINAL_CARD_SCHEMA_VERSION = "strategy_research_terminal.card.v1"
+STRATEGY_RESEARCH_TERMINAL_BUNDLE_SCHEMA_VERSION = "strategy_research_terminal.bundle.v1"
 
 
 @dataclass(frozen=True)
@@ -231,3 +233,30 @@ class EngineAnalysisResult:
     assumption_ledger: list[dict[str, Any]] = field(default_factory=list)
     claim_inventory: list[dict[str, Any]] = field(default_factory=list)
     proof_report: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class StrategyTerminalCard:
+    """Stable SaaS-facing contract for Strategy Research Terminal cards."""
+
+    schema_version: str
+    card_type: str
+    card_id: str
+    name: str
+    phase: str
+    hypothesis_name: str
+    pipeline_run_id: str | None
+    created_at: str
+    source_artifacts: dict[str, Any]
+    data: dict[str, Any]
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class StrategyTerminalBundle:
+    """Bundle contract consumed by future robustness and invariance desks."""
+
+    schema_version: str
+    card_schema_version: str
+    created_at: str
+    cards: list[StrategyTerminalCard]

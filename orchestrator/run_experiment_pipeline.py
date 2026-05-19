@@ -36,6 +36,10 @@ if str(SRC_ROOT) not in sys.path:
 
 from orchestrator.db import ResearchDB
 from orchestrator.process_logging import CommandRunResult, PipelineCommandError, run_pipeline_command
+from orchestrator.research_terminal.cards import (
+    build_and_write_failure_cards,
+    build_and_write_intelligence_cards,
+)
 from bt.paths import (
     resolve_command_log_dir,
     resolve_experiment_root,
@@ -479,6 +483,10 @@ Prefer passing paths from `manifest.json` instead of copying large parquet files
     readme_path.write_text(readme, encoding="utf-8")
 
     return bundle_dir
+
+
+def strategy_terminal_cards_dir(*, outputs_root: Path, phase: str, name: str) -> Path:
+    return outputs_root / phase / f"{name}_strategy_terminal_cards"
 
 
 def verify_cleanup_prerequisites(stable_root: Path, volatile_root: Path) -> None:
@@ -962,6 +970,26 @@ def main() -> int:
                 pipeline_run_id=pipeline_run_id,
             )
 
+        try:
+            cards_result = build_and_write_intelligence_cards(
+                name=args.name,
+                phase=args.phase,
+                hypothesis_path=hypothesis,
+                stable_root=stable_root,
+                volatile_root=volatile_root,
+                output_dir=strategy_terminal_cards_dir(outputs_root=outputs_root, phase=args.phase, name=args.name),
+                project_root=project_root,
+                pipeline_run_id=pipeline_run_id,
+                verdict_bundle_dir=bundle_dir,
+                command_log_dir=command_log_dir,
+                pipeline_log_path=log_path,
+                db=db,
+                hypothesis_id=hypothesis_id,
+            )
+            print(f"[terminal] Strategy Research Terminal cards: {cards_result.bundle_json}")
+        except Exception as card_exc:
+            print(f"[terminal] WARNING: failed to write Strategy Research Terminal cards: {card_exc}", file=sys.stderr)
+
         print(f"Done. Verdict bundle: {bundle_dir}")
         return 0
     except Exception as exc:
@@ -997,6 +1025,26 @@ def main() -> int:
             if volatile_experiment_id:
                 db.update_experiment_status(volatile_experiment_id, "FAILED")
             print("[db] Updated status: FAILED")
+        try:
+            error_message = exc.compact_message() if isinstance(exc, PipelineCommandError) else str(exc)
+            cards_result = build_and_write_failure_cards(
+                name=args.name,
+                phase=args.phase,
+                hypothesis_path=hypothesis,
+                stable_root=stable_root,
+                volatile_root=volatile_root,
+                output_dir=strategy_terminal_cards_dir(outputs_root=outputs_root, phase=args.phase, name=args.name),
+                project_root=project_root,
+                pipeline_run_id=pipeline_run_id,
+                command_log_dir=command_log_dir,
+                pipeline_log_path=log_path,
+                error_message=error_message,
+                db=db,
+                hypothesis_id=hypothesis_id,
+            )
+            print(f"[terminal] Strategy Research Terminal failure cards: {cards_result.bundle_json}")
+        except Exception as card_exc:
+            print(f"[terminal] WARNING: failed to write Strategy Research Terminal failure cards: {card_exc}", file=sys.stderr)
         raise
     finally:
         if commands_log:

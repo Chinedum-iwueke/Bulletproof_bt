@@ -33,6 +33,10 @@ from bt.saas.models import (
     ScorePayload,
     STRATEGY_TRUTH_ROOM_CONTRACT_VERSION,
     STRATEGY_TRUTH_ROOM_VERDICTS,
+    STRATEGY_RESEARCH_TERMINAL_BUNDLE_SCHEMA_VERSION,
+    STRATEGY_RESEARCH_TERMINAL_CARD_SCHEMA_VERSION,
+    StrategyTerminalBundle,
+    StrategyTerminalCard,
 )
 
 
@@ -47,6 +51,51 @@ class IngestionError(ValueError):
 
 class StrategyRobustnessLabService:
     """Builds deterministic, UI-ready robustness diagnostics payloads."""
+
+    def load_strategy_terminal_bundle(self, cards_json_path: str | Path) -> StrategyTerminalBundle:
+        """Load Strategy Research Terminal cards through a stable SaaS contract."""
+        path = Path(cards_json_path)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        schema_version = str(payload.get("schema_version", ""))
+        card_schema_version = str(payload.get("card_schema_version", ""))
+        if schema_version != STRATEGY_RESEARCH_TERMINAL_BUNDLE_SCHEMA_VERSION:
+            raise IngestionError(
+                f"Unsupported terminal card bundle schema {schema_version!r}; "
+                f"expected {STRATEGY_RESEARCH_TERMINAL_BUNDLE_SCHEMA_VERSION!r}."
+            )
+        if card_schema_version != STRATEGY_RESEARCH_TERMINAL_CARD_SCHEMA_VERSION:
+            raise IngestionError(
+                f"Unsupported terminal card schema {card_schema_version!r}; "
+                f"expected {STRATEGY_RESEARCH_TERMINAL_CARD_SCHEMA_VERSION!r}."
+            )
+
+        cards: list[StrategyTerminalCard] = []
+        for raw in payload.get("cards", []):
+            if not isinstance(raw, dict):
+                raise IngestionError("Terminal card bundle contains a non-object card.")
+            if raw.get("schema_version") != STRATEGY_RESEARCH_TERMINAL_CARD_SCHEMA_VERSION:
+                raise IngestionError(f"Unsupported terminal card schema in card {raw.get('card_type')!r}.")
+            cards.append(
+                StrategyTerminalCard(
+                    schema_version=str(raw["schema_version"]),
+                    card_type=str(raw["card_type"]),
+                    card_id=str(raw["card_id"]),
+                    name=str(raw["name"]),
+                    phase=str(raw["phase"]),
+                    hypothesis_name=str(raw["hypothesis_name"]),
+                    pipeline_run_id=raw.get("pipeline_run_id"),
+                    created_at=str(raw["created_at"]),
+                    source_artifacts=dict(raw.get("source_artifacts") or {}),
+                    data=dict(raw.get("data") or {}),
+                    warnings=list(raw.get("warnings") or []),
+                )
+            )
+        return StrategyTerminalBundle(
+            schema_version=schema_version,
+            card_schema_version=card_schema_version,
+            created_at=str(payload.get("created_at", "")),
+            cards=cards,
+        )
 
     def ingest_trade_log(
         self,
@@ -943,6 +992,8 @@ class StrategyRobustnessLabService:
                     else "low"
                 ),
                 "limitations": payload.get("limitations", [])[:5],
+                "reason_codes": payload.get("reason_codes", []),
+                "next_evidence": payload.get("next_evidence", []),
             }
             for name, payload in diagnostics.items()
         }
@@ -1214,6 +1265,8 @@ class StrategyRobustnessLabService:
                 "available": False,
                 "limited": False,
                 "reason_unavailable": reason,
+                "reason_codes": [self._diagnostic_reason_code(name, reason=reason, status="skipped")],
+                "next_evidence": self._next_evidence_for_diagnostic(name, reason=reason),
                 "summary_metrics": {},
                 "figures": [],
                 "interpretation": None,
@@ -1255,11 +1308,14 @@ class StrategyRobustnessLabService:
         capability: DiagnosticCapability,
     ) -> dict[str, Any]:
         if payload.get("status") == "skipped":
+            reason = str(payload.get("reason_unavailable") or capability.reason or "diagnostic skipped")
             return {
                 "status": "skipped",
                 "available": False,
                 "limited": False,
-                "reason_unavailable": payload.get("reason_unavailable"),
+                "reason_unavailable": reason,
+                "reason_codes": payload.get("reason_codes") or [self._diagnostic_reason_code(name, reason=reason, status="skipped")],
+                "next_evidence": payload.get("next_evidence") or self._next_evidence_for_diagnostic(name, reason=reason),
                 "summary_metrics": payload.get("summary_metrics", {}),
                 "figures": payload.get("figures", []),
                 "interpretation": self._normalize_interpretation(payload.get("interpretation"), name=name),
@@ -1291,6 +1347,8 @@ class StrategyRobustnessLabService:
             "available": available,
             "limited": limited,
             "reason_unavailable": reason_unavailable,
+            "reason_codes": [self._diagnostic_reason_code(name, reason=capability.reason, status=status)],
+            "next_evidence": self._next_evidence_for_diagnostic(name, reason=capability.reason),
             "limitations": limitations,
             "summary_metrics": payload.get("summary_metrics", {}),
             "figures": payload.get("figures", []),
@@ -1312,6 +1370,38 @@ class StrategyRobustnessLabService:
                 continue
             decorated[key] = value
         return decorated
+
+    def _diagnostic_reason_code(self, diagnostic: str, *, reason: str, status: str) -> str:
+        lowered = str(reason or "").lower()
+        if status == "available":
+            return f"{diagnostic}.available"
+        if "broker" in lowered or "fill" in lowered or "execution" in lowered or "slippage" in lowered:
+            suffix = "execution_context_missing"
+        elif "ohlcv" in lowered or "regime" in lowered or "market context" in lowered:
+            suffix = "market_context_missing"
+        elif "parameter" in lowered or "sweep" in lowered:
+            suffix = "parameter_sweep_missing"
+        elif "account" in lowered or "risk" in lowered or "sizing" in lowered:
+            suffix = "risk_config_missing"
+        elif "eligibility" in lowered or "skipped" in lowered:
+            suffix = "artifact_policy_skipped"
+        else:
+            suffix = "evidence_limited" if status == "limited" else "evidence_unavailable"
+        return f"{diagnostic}.{suffix}"
+
+    def _next_evidence_for_diagnostic(self, diagnostic: str, *, reason: str) -> list[str]:
+        lowered = str(reason or "").lower()
+        if diagnostic == "execution" or "broker" in lowered or "fill" in lowered:
+            return ["Attach broker/fill exports with timestamps, venue, fees, order ids, and realized fill prices."]
+        if diagnostic == "regimes" or "ohlcv" in lowered or "market context" in lowered:
+            return ["Attach OHLCV or regime-labeled context aligned to trade timestamps."]
+        if diagnostic == "stability" or "parameter" in lowered or "sweep" in lowered:
+            return ["Attach a parameter sweep bundle with objective, parameter names, and run-level results."]
+        if diagnostic == "ruin" or "account" in lowered or "risk" in lowered:
+            return ["Provide account size, risk-per-trade, sizing assumptions, and capital constraints."]
+        if diagnostic == "report":
+            return ["Generate a report snapshot after diagnostics complete and evidence limits are reviewed."]
+        return ["Attach richer source artifacts or declared assumptions for this diagnostic."]
 
     def _normalize_interpretation(self, interpretation: Any, *, name: str) -> dict[str, Any] | None:
         if interpretation is None:
