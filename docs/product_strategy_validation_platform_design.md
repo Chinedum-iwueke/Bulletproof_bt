@@ -1233,6 +1233,7 @@ The product should optimize for falsification:
 - what happens when fills get worse?
 - what happens when fees change?
 - what happens outside the cherry-picked regime?
+- would this strategy survive the rules of the prop firm evaluation the user is trying to pass?
 - how much of the edge comes from rare trades?
 - how quickly does the thesis die under perturbation?
 - what evidence is missing?
@@ -1258,6 +1259,7 @@ The wedge is strongest when the user already has evidence and a claim they need 
 First customer profiles:
 
 - serious independent systematic trader validating a live or near-live system
+- prop firm challenge participant trying not to breach daily-loss, total-drawdown, or profit-target rules
 - strategy seller or educator who needs a buyer-ready validation memo
 - allocator, prop evaluator, or partner screening a claimed edge
 - crypto, FX, index, or equity researcher stress-testing regime-dependent results
@@ -1278,6 +1280,7 @@ Keep Approach A focused on artifact-first validation. Cherry-pick only the expan
 - stronger artifact schema and bundle contract
 - falsification-first analyst workbench
 - explicit unsupported-claims inventory
+- prop evaluation readiness as a rules-based account-survival diagnostic
 - proof report snapshots and share controls
 - Research Desk upgrade path
 - tiering that turns missing evidence and advanced diagnostics into natural upgrades
@@ -1304,6 +1307,7 @@ Approach A is sellable only when every completed analysis produces:
 - an unsupported-claims inventory
 - an assumptions ledger
 - at least one concrete falsification result
+- a rules-based prop evaluation readiness result when the user provides evaluation constraints or chooses the fallback profile
 - a diagnostic availability matrix
 - a "next evidence to upload" path
 - an exportable proof report
@@ -1346,6 +1350,7 @@ Required workspaces for sellable Approach A:
 - Distribution And Edge Concentration
 - Monte Carlo Survival
 - Ruin And Capital Survival
+- Prop Evaluation Readiness
 - Regime Dependence
 - Parameter Stability
 - Proof Report
@@ -1571,6 +1576,72 @@ Language rule:
 
 The app must not give investment advice. It can say "this sizing assumption creates a high probability of breaching a 30% drawdown threshold under this model."
 
+### Prop Evaluation Readiness
+
+Falsification question:
+
+> Would this strategy pass the user's funded-account evaluation rules without breaching the contract?
+
+This workspace should be named for the user's job, not for the internal model. Recommended product label:
+
+> Prop Evaluation Readiness
+
+The diagnostic should be rules-based and non-advisory. It does not say "take this challenge" or "trade this size." It says whether the uploaded strategy path, under stated assumptions, would have breached the evaluation rules and what would need to change for the result to become feasible.
+
+Must show:
+
+- selected rule profile: fallback profile, user-entered runtime rules, saved firm profile, or post-run edited rules
+- starting account size
+- profit target to pass
+- maximum total drawdown
+- total drawdown basis: static starting balance, trailing balance, trailing equity, or end-of-day trailing high-water mark
+- maximum daily loss
+- daily-loss basis: intraday equity, closed balance, or end-of-day balance
+- rule reset timezone
+- minimum and maximum trading days when provided
+- consistency rule when provided, such as max single-day profit contribution
+- lot, leverage, max position, or exposure limits when provided
+- news/weekend/holding restrictions as declared constraints when provided
+- first breach date, breach type, and margin to breach
+- probability of breach under Monte Carlo path perturbation where trade-level data supports it
+- probability of reaching the profit target before breaching drawdown rules
+- rule-by-rule pass/fail/unknown table
+- suggested non-advisory improvement levers:
+  - reduce risk per trade
+  - cap daily loss before the firm limit
+  - avoid concentration in one day or one outlier trade
+  - reduce trade frequency during weak regimes
+  - require richer intraday equity or broker fills for stronger daily-loss conclusions
+
+Runtime and post-run behavior:
+
+- During analysis setup, users may optionally enter evaluation rules for the prop firm or challenge they are testing against.
+- If they do not enter rules, the run uses a clearly labeled fallback evaluation profile for preview purposes only.
+- After a run completes, the Prop Evaluation Readiness tab must show which rules were used and whether they were fallback or user-provided.
+- The user can edit the evaluation rules after the run and recompute the readiness analysis against the saved trade/equity path without rerunning unrelated diagnostics.
+- Each recomputation creates a versioned rule snapshot and readiness result so the report can say exactly which contract assumptions produced the conclusion.
+- If the uploaded artifact lacks intraday equity, timestamps, sizing, or closed/open PnL detail, daily-loss conclusions degrade to limited or unknown rather than pretending precision.
+
+Primary user decision:
+
+- reduce risk or sizing assumptions
+- upload richer broker/equity data
+- edit rules to match the real prop firm contract
+- reject the strategy for that evaluation
+- request Research Desk review for ambiguous rules or missing execution evidence
+
+Tier strategy:
+
+- Explorer should see a locked or watermarked preview using the fallback profile so the value is obvious.
+- Individual should get one active custom evaluation profile per analysis and post-run recomputation.
+- Pro should get multiple saved firm profiles, rule-profile comparison, report inclusion, and share-safe readiness summaries.
+- Team should get shared firm-rule templates, admin-managed profiles, and bulk comparison across strategies.
+- Research Desk can review ambiguous rule interpretation, broker evidence, and challenge-specific risk controls.
+
+Report rule:
+
+Prop Evaluation Readiness should appear in the proof report only with the exact rule snapshot used. Reports must avoid implying affiliation with, endorsement by, or guaranteed acceptance from any prop firm.
+
 ### Regime Dependence
 
 Falsification question:
@@ -1794,6 +1865,7 @@ Unlocks:
 - Distribution: Full
 - Monte Carlo: Full
 - Ruin: Limited to Full depending on sizing fields
+- Prop Evaluation Readiness: Limited to Full depending on account size, timestamps, and sizing fields
 - Execution: Limited unless costs and fills are included
 - Regime: Limited unless OHLCV/context is included
 - Parameter Stability: No
@@ -1822,6 +1894,7 @@ Unlocks:
 - Overview: Limited
 - Monte Carlo: Limited path analysis
 - Ruin: Limited drawdown breach analysis
+- Prop Evaluation Readiness: Limited path/drawdown analysis when account sizing and rule profile are supplied
 - Distribution: No trade-level concentration
 - Execution: No
 - Regime: Limited only with aligned OHLCV/context
@@ -1859,6 +1932,7 @@ Unlocks:
 - Execution: Full when matched to strategy trades
 - Assumption Ledger: Full for execution assumptions
 - Distribution: Limited unless complete trade lifecycle exists
+- Prop Evaluation Readiness: Fuller daily-loss evidence when fills, timestamps, commissions, and account currency are present
 - Proof Report: Full execution appendix
 
 ### `backtest_report_v1`
@@ -1996,7 +2070,48 @@ Unlocks:
 - Assumption Ledger: Full
 - Unsupported Claims Inventory: Full when paired with declared claims
 - Ruin: Full when sizing fields exist
+- Prop Evaluation Readiness: Fuller rule simulation when sizing, risk limits, account size, and firm constraints exist
 - Proof Report: assumptions appendix
+
+### `prop_evaluation_rules_v1`
+
+Purpose:
+
+- define the funded-account evaluation rules the user wants to test the strategy against
+
+Accepted formats:
+
+- runtime form input
+- saved profile
+- JSON/YAML bundle file
+- Research Desk-entered profile
+
+Recommended fields:
+
+- firm or challenge label
+- account size
+- profit target
+- maximum total drawdown
+- total drawdown basis: static, trailing balance, trailing equity, or end-of-day trailing
+- maximum daily loss
+- daily-loss basis: intraday equity, closed balance, or end-of-day balance
+- rule reset timezone
+- minimum trading days
+- maximum evaluation days
+- consistency rule
+- max lot, max exposure, or leverage cap
+- weekend, news, or holding restrictions
+- payout or phase label where relevant
+
+Unlocks:
+
+- Prop Evaluation Readiness: Full when paired with trade or equity path data
+- Assumption Ledger: Full for evaluation assumptions
+- Proof Report: prop-readiness appendix with exact rule snapshot
+
+Rule:
+
+The product can include fallback rules only as a clearly labeled preview. User-entered or saved rules are required before the report can claim readiness against a specific prop firm evaluation.
 
 ### `benchmark_series_v1`
 
@@ -2075,6 +2190,7 @@ Full bundle unlocks:
 - Distribution And Edge Concentration: Full
 - Monte Carlo Survival: Full
 - Ruin And Capital Survival: Full
+- Prop Evaluation Readiness: Full when rules are provided
 - Regime Dependence: Full
 - Parameter Stability: Full
 - Proof Report: Full
@@ -2083,20 +2199,21 @@ Full bundle unlocks:
 
 ### Diagnostic Unlock Matrix
 
-| Workspace | Trade log | Equity curve | Broker export | Backtest report | OHLCV/context | Parameter sweep | Strategy config | Full bundle |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Evidence Intake | Full | Full | Full | Full | Full | Full | Full | Full |
-| Truth Room Overview | Full | Limited | Limited | Limited | Limited | Limited | Limited | Full |
-| Assumption Ledger | Limited | Limited | Full for execution | Limited to Full | Limited | Limited | Full | Full |
-| Execution Reality | Limited | No | Full | Limited claims audit | Limited proxy | No | Limited to Full | Full |
-| Distribution | Full | No | Limited | No | No | Limited by run metrics | No | Full |
-| Monte Carlo | Full | Limited | Limited | No | No | No | Limited sizing context | Full |
-| Ruin | Limited to Full | Limited | Limited | No | No | No | Full if sizing exists | Full |
-| Regime Dependence | Limited | Limited | No | No | Full when aligned | Limited by run metrics | Limited | Full |
-| Parameter Stability | No | No | No | No | No | Full | Limited assumptions only | Full |
-| Proof Report | Full with limitations | Limited | Full execution appendix | Limited claim audit | Regime appendix | Parameter appendix | Assumptions appendix | Full |
-| Share Room | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Full subject to plan |
-| Research Desk Review | Full packet component | Packet component | Packet component | Packet component | Packet component | Packet component | Packet component | Full |
+| Workspace | Trade log | Equity curve | Broker export | Backtest report | OHLCV/context | Parameter sweep | Strategy config | Prop rules | Full bundle |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Evidence Intake | Full | Full | Full | Full | Full | Full | Full | Full | Full |
+| Truth Room Overview | Full | Limited | Limited | Limited | Limited | Limited | Limited | Limited context | Full |
+| Assumption Ledger | Limited | Limited | Full for execution | Limited to Full | Limited | Limited | Full | Full for evaluation rules | Full |
+| Execution Reality | Limited | No | Full | Limited claims audit | Limited proxy | No | Limited to Full | Limited constraints only | Full |
+| Distribution | Full | No | Limited | No | No | Limited by run metrics | No | No | Full |
+| Monte Carlo | Full | Limited | Limited | No | No | No | Limited sizing context | Rule thresholds only | Full |
+| Ruin | Limited to Full | Limited | Limited | No | No | No | Full if sizing exists | Rule thresholds only | Full |
+| Prop Evaluation Readiness | Limited to Full with sizing and timestamps | Limited path analysis | Fuller daily-loss evidence | Limited rule extraction only | No | Scenario comparison only | Sizing/risk assumptions | Full rules | Full |
+| Regime Dependence | Limited | Limited | No | No | Full when aligned | Limited by run metrics | Limited | No | Full |
+| Parameter Stability | No | No | No | No | No | Full | Limited assumptions only | No | Full |
+| Proof Report | Full with limitations | Limited | Full execution appendix | Limited claim audit | Regime appendix | Parameter appendix | Assumptions appendix | Prop-readiness appendix | Full |
+| Share Room | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Full subject to plan |
+| Research Desk Review | Full packet component | Packet component | Packet component | Packet component | Packet component | Packet component | Packet component | Rule interpretation packet | Full |
 
 ## Launch Subscription Model For Approach A
 
@@ -2135,6 +2252,7 @@ Principles:
 | Distribution | Limited | Full | Full | Full | Full |
 | Monte Carlo | Limited | Full | Full | Full | Full |
 | Ruin | Preview | Full | Full | Full | Reviewer-enhanced |
+| Prop Evaluation Readiness | Fallback preview | 1 custom profile per analysis | saved profiles + report inclusion | shared firm profiles + comparisons | Reviewer-enhanced |
 | Regime Dependence | Locked preview | Locked or add-on | Full | Full | Reviewer-enhanced |
 | Parameter Stability | Locked preview | Locked or add-on | Full | Full | Reviewer-enhanced |
 | Proof Report export | Watermarked preview | PDF/Markdown | PDF/Markdown/JSON | PDF/Markdown/JSON | Addendum included |
@@ -2151,6 +2269,7 @@ Explorer:
 
 - must make the user feel the product is hostile and useful
 - should show unsupported claims and missing evidence
+- should show Prop Evaluation Readiness as a fallback-profile preview, not as a specific firm pass/fail claim
 - should not allow polished proof export
 - should show locked Regime and Parameter pages with upload requirements
 
@@ -2158,24 +2277,27 @@ Individual:
 
 - should be enough for a serious trader validating personal systems
 - includes export because the report is the product
+- includes custom prop evaluation rules per analysis and post-run recomputation because this is a high-intent individual use case
 - can gate Regime and Parameter Stability if pricing pressure requires it, but the pages must remain visible
 
 Pro:
 
 - should be the default recommended paid tier for strategy sellers, educators, and advanced researchers
 - unlocks the full automated suite when artifacts support it
+- includes saved prop firm profiles, profile comparison, and prop-readiness inclusion in proof reports
 - includes share links because external trust is a major buying reason
 
 Team:
 
 - should support multiple analysts and repeat due diligence
+- includes shared prop firm rule templates and team-level comparison across strategies
 - requires admin history, seat control, and stronger retention controls before being aggressively sold
 
 Research Desk:
 
 - should be sold as deep validation review, not investment advice
 - should produce reviewer-approved report addenda tied to immutable report snapshots
-- should focus on execution audit, data QA, benchmark construction, claim formalization, and parameter/regime review
+- should focus on execution audit, data QA, benchmark construction, claim formalization, prop-rule interpretation, and parameter/regime review
 
 ### Commercial Packaging Rules
 
@@ -2201,6 +2323,7 @@ Highest-priority implementation gaps:
 
 - create the Assumption Ledger workspace
 - make Regime and Parameter Stability visible in the sidebar even when gated or evidence-limited
+- add Prop Evaluation Readiness as a visible workspace with fallback rules, custom runtime rules, post-run recomputation, and exact rule snapshots
 - replace old card language with verdict-led evidence instruments
 - add unsupported-claims inventory across Overview and Report
 - make export/report generation a primary CTA on completed analyses
@@ -2307,6 +2430,7 @@ App gaps to close:
 | Report artifact | Export exists but is still mostly renderer-driven. | Build proof report model and visual report surface around verdict, coverage, assumptions, unsupported claims, diagnostic confidence, limitations, appendices, and share policy. | Phase 5 |
 | Share Room | Share routes and tokens exist. | Build recipient-facing Share Room with report summary, redaction boundary, token status, expiration, access events, and revoke controls. | Phase 5 |
 | Command/explain layer | Actions exist as scattered buttons and page links. | Add validation command palette, evidence alert center, explain drawer, saved validation questions, and case-file event timeline. | Phase 5.5 |
+| Prop Evaluation Readiness | No dedicated prop-evaluation workspace or rule profile model. | Add runtime rule capture, fallback profiles, post-run recomputation, versioned rule snapshots, breach/profit-target simulation, report appendix, and tier-aware profile limits. | Phase 5.6 |
 | Subscription tiers | Entitlements exist but names and gates do not yet match launch packaging. | Update tier model, pricing copy, Stripe mapping, upgrade page, pricing page, billing page, and diagnostic lock messaging. | Phase 6 |
 | Research Desk handoff | Requests and addenda exist. | Add request wizard, packet generation, admin triage states, reviewer checklist, client-facing addenda, and status timeline. | Phase 7 |
 | Production readiness | Admin ops and schema auto-init exist. | Add migration discipline, startup checks, email deliverability, worker launch docs, storage checks, share security checks, and first-client smoke tests. | Phase 8 |
@@ -2336,6 +2460,7 @@ Implementation tasks:
   - distribution
   - monte_carlo
   - ruin
+  - prop_evaluation_readiness
   - regimes
   - stability
   - assumptions
@@ -2349,6 +2474,7 @@ Implementation tasks:
   - `broker_export_v1`
   - `backtest_report_v1`
   - `strategy_config_v1`
+  - `prop_evaluation_rules_v1`
   - `ohlcv_context_v1`
   - `benchmark_series_v1`
   - `parameter_sweep_v1`
@@ -2379,6 +2505,7 @@ Implementation tasks:
   - bundle missing parameter sweep
   - broker export with fills
   - equity-curve-only artifact
+  - prop evaluation rules profile
   - malformed bundle
 - add cross-repo contract tests:
   - app fixture parses into engine-accepted payload
@@ -2798,12 +2925,16 @@ Implementation tasks in `invariance_research`:
   - request Research Desk review
   - show diagnostics blocked by artifact
   - show diagnostics blocked by subscription
+  - open Prop Evaluation Readiness
+  - edit prop evaluation rules
+  - recompute prop evaluation readiness
 - add saved validation questions as first-class shortcuts:
   - what assumptions produced this result?
   - what happens if fills get worse?
   - what happens if fees change?
   - where does this strategy fail by regime?
   - how much edge comes from rare trades?
+  - would this strategy breach my prop evaluation rules?
   - what evidence is missing?
   - what does this report not prove?
 - add an Evidence Alert Center backed by persisted evidence events:
@@ -2865,6 +2996,147 @@ Definition of done:
 - the explain layer can answer verdict, limitation, unlock, changed-snapshot, and rescue-evidence questions without exposing raw private files
 - no internal research daemon memory, alpha notes, or cross-tenant patterns leak into customer reports
 
+### Phase 5.6: Prop Evaluation Readiness
+
+Repo ownership:
+
+- `bulletproof_bt`: prop evaluation rule schema, feasibility engine, breach simulation, Monte Carlo breach/profit-target estimates, explanation reason codes, and deterministic fixtures
+- `invariance_research`: runtime rule capture, post-run rule editing, Prop Evaluation Readiness workspace, saved rule profiles, entitlement gates, report/share projections, and recomputation workflow
+
+Purpose:
+
+Add a commercially sharp diagnostic for funded-account and prop-firm evaluation users: can this strategy pass the user's actual challenge rules without breaching daily-loss, total-drawdown, consistency, or time constraints?
+
+This belongs after Phase 5.5 because it reuses stable snapshots, command actions, explain panels, alerts, and case-file events. It should land before Phase 6 subscription alignment because it materially improves the value of Individual, Pro, Team, and Research Desk tiers.
+
+Product rules:
+
+- Use the product name **Prop Evaluation Readiness**.
+- Treat all outputs as validation diagnostics, not trading or financial advice.
+- Never say the user is guaranteed to pass a prop firm challenge.
+- Never imply affiliation with or endorsement by any prop firm unless a real partnership exists.
+- Always show the exact rule snapshot used for the conclusion.
+- Clearly label fallback rules as preview assumptions.
+- Specific firm readiness requires user-entered, saved, or reviewer-confirmed rules.
+- Missing intraday equity, open PnL, timestamps, sizing, or broker fill data must degrade daily-loss conclusions to limited or unknown.
+
+Implementation tasks in `bulletproof_bt`:
+
+- add `PropEvaluationRulesV1` model with:
+  - profile id and label
+  - account size
+  - profit target
+  - maximum total drawdown
+  - total drawdown basis: static, trailing balance, trailing equity, end-of-day trailing
+  - maximum daily loss
+  - daily-loss basis: intraday equity, closed balance, end-of-day balance
+  - reset timezone
+  - minimum trading days
+  - maximum evaluation days
+  - consistency rule
+  - max lot, exposure, leverage, or position limits where provided
+  - weekend, news, or holding restrictions as declared constraints
+- add `PropEvaluationReadinessResultV1` with:
+  - result id
+  - rule snapshot hash
+  - data sufficiency status
+  - pass/fail/limited/unknown verdict
+  - first breach event
+  - max daily loss observed versus allowed
+  - max total drawdown observed versus allowed
+  - profit target progress and target-hit date if reached
+  - rule-by-rule status table
+  - breach margin and safety buffer
+  - estimated breach probability under eligible Monte Carlo paths
+  - estimated target-before-breach probability where supported
+  - improvement levers as non-advisory diagnostics
+  - explanation reason codes
+- implement deterministic feasibility simulation from trade log and/or equity curve artifacts
+- support account path reconstruction from:
+  - trade PnL
+  - trade R-multiples with risk/account assumptions
+  - equity curve
+  - broker/export fills when available
+- implement daily reset and timezone handling with tests
+- implement total-drawdown modes with tests for static and trailing drawdown rules
+- implement consistency-rule checks such as single-day profit concentration where configured
+- emit clear limitations for restrictions the engine cannot verify from uploaded data, such as news trading or weekend holding
+- add fixture payloads for:
+  - strategy passes fallback profile
+  - strategy hits profit target but breaches daily loss
+  - strategy breaches trailing drawdown
+  - strategy fails consistency rule
+  - artifact lacks intraday path and daily-loss result is limited
+  - user-entered custom rules recompute against the same run
+- expose the readiness result through the SaaS analysis seam without changing unrelated diagnostic semantics
+
+Implementation tasks in `invariance_research`:
+
+- add runtime optional rule capture to the analysis setup flow:
+  - fallback profile selected by default
+  - manual custom rules
+  - saved profile selection for eligible tiers
+  - clear "preview only" label when fallback rules are used
+- add persistence for:
+  - prop evaluation rule profiles
+  - per-analysis rule snapshots
+  - readiness result snapshots
+  - recomputation jobs/events
+- add `/app/analyses/[id]/prop-evaluation` workspace with:
+  - readiness verdict strip
+  - rule profile summary
+  - rule-by-rule pass/fail/limited table
+  - first breach timeline
+  - profit-target progress
+  - daily-loss and total-drawdown buffers
+  - target-before-breach estimate where supported
+  - missing-evidence prompts
+  - non-advisory improvement levers
+  - edit-rules and recompute controls
+- add post-run rule editing:
+  - user can replace fallback rules with actual firm rules
+  - user can edit previously entered rules
+  - recomputation uses saved analysis artifacts and does not rerun unrelated diagnostics
+  - each recomputation creates a new rule snapshot and result snapshot
+  - previous results remain visible or auditable with timestamps and rule hashes
+- add commands and alerts:
+  - open Prop Evaluation Readiness
+  - edit prop rules
+  - recompute prop readiness
+  - prop readiness recomputed
+  - prop readiness changed after rule edit
+  - fallback rules replaced by user rules
+- add proof-report integration:
+  - include readiness appendix only when plan and artifact rights allow it
+  - include exact rule snapshot and limitations
+  - include fallback-profile warning if applicable
+  - include share-safe prop readiness summary for eligible share links
+- add entitlement rules:
+  - Explorer: fallback preview only, no specific firm claim, no export appendix
+  - Individual: one custom profile per analysis, post-run recomputation, report summary
+  - Pro: saved profiles, profile comparison, report appendix, share-safe summary
+  - Team: shared firm templates, team profile library, cross-strategy comparison
+  - Research Desk: reviewer-confirmed rule interpretation and addendum
+- add tests for:
+  - runtime rule submission
+  - fallback-rule labeling
+  - post-run recomputation
+  - snapshot immutability
+  - entitlement gates
+  - report/share redaction
+  - missing-evidence degraded states
+  - command and alert wiring
+
+Definition of done:
+
+- a user can run an analysis with fallback rules or custom prop evaluation rules
+- a completed analysis exposes a Prop Evaluation Readiness workspace
+- a user can edit the rules after the run and recompute readiness without rerunning unrelated diagnostics
+- every readiness result is tied to a versioned rule snapshot
+- reports and share rooms include prop readiness only with correct tier, redaction, and limitation handling
+- missing data produces limited/unknown states rather than fake precision
+- the feature has deterministic cross-repo fixtures for pass, breach, limited, and recompute scenarios
+
 ### Phase 6: Launch Subscription And Entitlement Model
 
 Repo ownership:
@@ -2906,10 +3178,10 @@ Launch-tier target:
 | Tier | Target Buyer | Price | Core Rights |
 | --- | --- | --- | --- |
 | Free | Curious trader or first-time evaluator | $0 | limited trade CSV runs, Overview/Distribution/Monte Carlo/Ruin preview, no export, short retention |
-| Individual | Serious self-directed trader | $49-$79/month | trade CSV and basic bundles, full report export, core diagnostics, limited shares |
-| Pro | strategy seller, educator, researcher | $149-$249/month | full automated suite when artifacts support it, parameter/regime access, share links, longer retention |
-| Team | prop desk, small fund, research group | $499-$999/month | seats, team library, shared reports, admin controls, higher limits, priority processing |
-| Research Desk | deep validation buyer | project-based, from $1,500 | human/agent-assisted review, addenda, execution/data QA, benchmark construction, claim formalization |
+| Individual | Serious self-directed trader | $49-$79/month | trade CSV and basic bundles, full report export, core diagnostics, one custom prop evaluation profile per analysis, limited shares |
+| Pro | strategy seller, educator, researcher | $149-$249/month | full automated suite when artifacts support it, parameter/regime access, saved prop evaluation profiles, report appendix, share links, longer retention |
+| Team | prop desk, small fund, research group | $499-$999/month | seats, team library, shared prop firm profiles, profile comparisons, shared reports, admin controls, higher limits, priority processing |
+| Research Desk | deep validation buyer | project-based, from $1,500 | human/agent-assisted review, addenda, execution/data QA, benchmark construction, prop-rule interpretation, claim formalization |
 
 Definition of done:
 
@@ -3045,6 +3317,7 @@ Beta scope:
 - at least 3 full validation bundles
 - at least 2 broker/export files
 - at least 2 parameter sweeps
+- at least 3 prop evaluation rule profiles tested against completed runs
 - at least 2 Research Desk request simulations
 - at least 2 external share recipients
 
@@ -3062,6 +3335,7 @@ First-client acceptance checklist:
 - Distribution explains rare-trade dependence
 - Monte Carlo explains survival under path stress
 - Ruin explains capital/risk assumptions
+- Prop Evaluation Readiness can be recomputed from fallback rules to actual firm rules after the run
 - Regime explains context dependence or missing context
 - Parameter Stability explains sweep support or missing sweep
 - Assumption Ledger shows assumptions and rescue evidence
@@ -3080,6 +3354,7 @@ Readiness metrics:
 - 0 hidden failed diagnostics on completed analyses
 - 0 share links expose raw private artifacts by default
 - 0 report exports omit limitations when diagnostics are limited
+- 0 prop readiness reports omit the rule snapshot or fallback-profile warning
 - median analysis runtime acceptable for first-client use
 - all first-client failures produce a rescue path or admin-visible error
 
@@ -3101,10 +3376,11 @@ The next implementation slices should follow this order:
 5. Phase 4 workbench redesign page-by-page, starting with Overview and Execution.
 6. Phase 5 proof report, export, and Share Room.
 7. Phase 5.5 validation command layer, explainability, evidence alerts, and connected case-file timeline.
-8. Phase 6 subscription and entitlement alignment.
-9. Phase 7 Research Desk handoff.
-10. Phase 8 reliability hardening.
-11. Phase 9 first-client beta protocol.
+8. Phase 5.6 Prop Evaluation Readiness.
+9. Phase 6 subscription and entitlement alignment.
+10. Phase 7 Research Desk handoff.
+11. Phase 8 reliability hardening.
+12. Phase 9 first-client beta protocol.
 
 This order matters. The app should not spend another pass polishing workbench pages before the artifact contract, evidence ledger, assumption ledger, and claim inventory are stable enough to power the product truthfully.
 
@@ -3276,6 +3552,7 @@ invariance_research Next.js App
   |-- diagnostic pages
   |-- report/export pages
   |-- command palette / explain layer / evidence alert center
+  |-- prop evaluation readiness workspace
   |-- billing/entitlements
   |-- admin/research desk
   |
@@ -3288,6 +3565,7 @@ TypeScript API + Services
   |-- export records
   |-- report renderer
   |-- evidence events and case-file timeline
+  |-- prop evaluation profiles and result snapshots
   |-- product contracts
   |
   v
@@ -3307,6 +3585,7 @@ bulletproof_bt
   |-- bt.run_analysis_from_parsed_artifact
   |-- StrategyRobustnessLabService
   |-- diagnostics
+  |-- prop evaluation feasibility
   |-- artifact contracts
   |-- benchmarks
   |-- hypothesis contracts
@@ -3490,6 +3769,8 @@ Persistence performance requirements:
 - index `evidence_ledger_snapshots(analysis_id, created_at DESC)`
 - index share token lookup by token hash, never plaintext token
 - index share access events by `share_id, created_at DESC`
+- index prop evaluation rule profiles by `account_id, created_at DESC`
+- index prop evaluation rule snapshots and result snapshots by `analysis_id, created_at DESC`
 - index expired share/report cleanup by `expires_at` and status
 - retention jobs delete or archive expired share access events without deleting immutable report snapshots needed for owner audit history
 - Postgres and SQLite migrations stay schema-compatible until production provider is chosen
@@ -3524,6 +3805,41 @@ report_snapshots
   rendered_json_key
   rendered_md_key
   rendered_pdf_key
+  created_at
+
+prop_evaluation_rule_profiles
+  profile_id
+  account_id
+  owner_user_id
+  label
+  firm_label
+  rules_json
+  rules_hash
+  visibility
+  created_at
+  updated_at
+
+prop_evaluation_rule_snapshots
+  rule_snapshot_id
+  analysis_id
+  profile_id nullable
+  source
+  label
+  rules_json
+  rules_hash
+  created_at
+
+prop_evaluation_results
+  result_id
+  analysis_id
+  rule_snapshot_id
+  status
+  verdict
+  first_breach_json
+  rule_status_json
+  target_progress_json
+  limitation_codes
+  engine_payload_hash
   created_at
 ```
 
@@ -3564,6 +3880,9 @@ Add or preserve:
 - incomplete artifact tests
 - non-finite artifact payload tests
 - benchmark availability tests
+- prop evaluation rule schema tests
+- prop evaluation breach/target simulation tests
+- prop evaluation recomputation fixture tests
 - deterministic report payload snapshots
 
 ### `invariance_research`
@@ -3577,6 +3896,9 @@ Add or preserve:
 - engine bridge failure classification tests
 - `map-engine-analysis-record.ts` fixture tests
 - report/export snapshot tests
+- prop evaluation runtime rule capture tests
+- prop evaluation post-run recomputation tests
+- prop evaluation entitlement and fallback-label tests
 - admin retry tests
 - Postgres repository parity tests where production depends on Postgres
 - public page smoke tests for `/robustness-lab`, `/strategy-validation`, `/pricing`, and `/research-desk`
@@ -3591,6 +3913,11 @@ fixtures/engine-seam/
   trade_csv_limited.json
   structured_bundle_full.json
   parameter_sweep_full.json
+  prop_eval_pass.json
+  prop_eval_daily_loss_breach.json
+  prop_eval_trailing_drawdown_breach.json
+  prop_eval_limited_intraday_path.json
+  prop_eval_recompute_same_run.json
   malformed_engine_payload.json
 ```
 

@@ -13,6 +13,7 @@ DiagnosticName = Literal[
     "execution",
     "regimes",
     "ruin",
+    "prop_evaluation_readiness",
     "report",
 ]
 
@@ -25,6 +26,7 @@ STRATEGY_TRUTH_ROOM_ARTIFACT_FAMILIES = (
     "broker_export_v1",
     "backtest_report_v1",
     "strategy_config_v1",
+    "prop_evaluation_rules_v1",
     "ohlcv_context_v1",
     "benchmark_series_v1",
     "parameter_sweep_v1",
@@ -62,6 +64,7 @@ ArtifactKind = Literal[
     "broker_export_v1",
     "backtest_report_v1",
     "strategy_config_v1",
+    "prop_evaluation_rules_v1",
     "ohlcv_context_v1",
     "benchmark_series_v1",
     "parameter_sweep_v1",
@@ -167,6 +170,7 @@ class AnalysisRunConfig:
     account_size: float | None = None
     risk_per_trade_pct: float | None = None
     benchmark: dict[str, Any] | None = None
+    prop_evaluation_rules: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

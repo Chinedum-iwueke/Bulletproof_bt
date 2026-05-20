@@ -98,6 +98,28 @@ def test_timeframe_15m_alias_is_not_used_for_htf_context_when_driving_engine_tim
     assert emitted and all(item[1] == "5m" for item in emitted)
 
 
+def test_research_panel_timeframe_does_not_override_signal_htf_resampler(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    bars_df = _bars_df(list(range(0, 16)))
+    cfg = _base_config()
+    cfg["data"] = {
+        "mode": "dataframe",
+        "dataset_kind": "research_panel",
+        "timeframe": "1m",
+        "engine_timeframe": None,
+        "entry_timeframe": None,
+        "exit_timeframe": "1m",
+    }
+    cfg["htf_resampler"] = {"timeframes": ["15m"], "strict": True}
+
+    emitted = _run_with_config(monkeypatch, tmp_path / "research_panel", cfg, bars_df)
+
+    assert emitted
+    assert all(item[1] == "15m" for item in emitted)
+
+
 def test_invalid_timeframe_raises_valueerror(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     bars_df = _bars_df(list(range(0, 6)))
     cfg = _base_config()

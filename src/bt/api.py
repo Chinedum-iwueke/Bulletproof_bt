@@ -120,8 +120,9 @@ def _build_engine(
     mode, engine_timeframe, entry_timeframe, _ = _resolve_timeframe_mode(config)
 
     data_cfg = config.get("data") if isinstance(config.get("data"), dict) else {}
+    dataset_kind = data_cfg.get("dataset_kind") if isinstance(data_cfg, dict) else None
     timeframe_override = data_cfg.get("timeframe") if isinstance(data_cfg, dict) else None
-    if timeframe_override is not None and mode == "default":
+    if timeframe_override is not None and mode == "default" and dataset_kind != "research_panel":
         from bt.data.resample import normalize_timeframe
 
         parsed_timeframe = normalize_timeframe(timeframe_override, key_path="data.timeframe")

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from bt.experiments.hypothesis_runner import run_hypothesis_contract
+from pathlib import Path
+
+from bt.experiments.hypothesis_runner import build_runtime_override, run_hypothesis_contract
 from bt.hypotheses.contract import HypothesisContract
 
 
@@ -44,3 +46,43 @@ def test_runner_emits_variant_times_tier_rows() -> None:
         phase="validate",
     )
     assert len(rows) == 4
+
+
+def test_all_hypothesis_signal_timeframe_grid_values_materialize_strictly() -> None:
+    for path in sorted(Path("research/hypotheses").glob("*.yaml")):
+        contract = HypothesisContract.from_yaml(path)
+        expected = {str(item).lower() for item in contract.schema.parameter_grid.get("signal_timeframe", ())}
+        if not expected:
+            continue
+
+        observed = {
+            str(spec["params"]["signal_timeframe"]).lower()
+            for spec in contract.to_run_specs()
+            if "signal_timeframe" in spec["params"]
+        }
+
+        assert observed == expected, path
+
+
+def test_runtime_override_uses_each_grid_signal_timeframe_as_only_htf_resampler() -> None:
+    for path in sorted(Path("research/hypotheses").glob("*.yaml")):
+        contract = HypothesisContract.from_yaml(path)
+        expected = {str(item).lower() for item in contract.schema.parameter_grid.get("signal_timeframe", ())}
+        if not expected:
+            continue
+
+        for signal_timeframe in expected:
+            spec = next(
+                spec
+                for spec in contract.to_run_specs()
+                if str(spec["params"].get("signal_timeframe", "")).lower() == signal_timeframe
+            )
+            override = build_runtime_override(contract, spec, "Tier2")
+            strategy_name = str(override["strategy"]["name"]).lower()
+            timeframes = [str(item).lower() for item in override["htf_resampler"]["timeframes"]]
+
+            if strategy_name == "l1_h3c_regime_switch_trend":
+                assert signal_timeframe in timeframes, path
+            else:
+                assert timeframes == [signal_timeframe], path
+                assert str(override["strategy"]["timeframe"]).lower() == signal_timeframe, path

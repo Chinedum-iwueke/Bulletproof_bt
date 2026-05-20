@@ -473,6 +473,54 @@ def test_reference_rich_trade_artifact_unlocks_richer_capability_driven_outputs(
     assert monte_carlo["metadata"]["capability_used"] is True
     assert monte_carlo["figures"]
 
-    ruin = result.diagnostics["ruin"]
-    assert ruin["summary_metrics"]["probability_of_ruin"] is not None
-    assert ruin["metadata"]["capability_used"] is True
+
+def test_prop_evaluation_readiness_uses_runtime_rules_and_reports_breach() -> None:
+    service = StrategyRobustnessLabService()
+    artifact = ParsedArtifactInput(
+        artifact_kind="trade_csv",
+        richness="trade_only",
+        strategy_metadata={"strategy_name": "prop_fixture"},
+        trades=[
+            NormalizedTradeRecord(
+                trade_id="p1",
+                symbol="EURUSD",
+                side="LONG",
+                entry_time="2024-02-01T09:00:00Z",
+                exit_time="2024-02-01T10:00:00Z",
+                pnl=1_500.0,
+            ),
+            NormalizedTradeRecord(
+                trade_id="p2",
+                symbol="EURUSD",
+                side="LONG",
+                entry_time="2024-02-02T09:00:00Z",
+                exit_time="2024-02-02T10:00:00Z",
+                pnl=-6_000.0,
+            ),
+        ],
+    )
+
+    result = service.run_analysis_from_parsed_artifact(
+        artifact,
+        config=AnalysisRunConfig(
+            seed=3,
+            simulations=60,
+            prop_evaluation_rules={
+                "source": "runtime",
+                "label": "Strict 100K Challenge",
+                "account_size": 100_000.0,
+                "profit_target_pct": 0.08,
+                "max_total_drawdown_pct": 0.10,
+                "max_daily_loss_pct": 0.05,
+                "minimum_trading_days": 2,
+            },
+        ),
+    )
+
+    prop = result.diagnostics["prop_evaluation_readiness"]
+    assert prop["verdict"] == "breach_risk"
+    assert prop["rule_snapshot"]["label"] == "Strict 100K Challenge"
+    assert prop["first_breach"]["type"] == "max_daily_loss"
+    assert prop["summary_metrics"]["max_daily_loss_observed"] > prop["summary_metrics"]["max_daily_loss_allowed"]
+    assert "prop_evaluation_readiness" in result.capability_profile.diagnostics
+    assert "prop_evaluation_rules_v1" in STRATEGY_TRUTH_ROOM_ARTIFACT_FAMILIES

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -369,6 +370,8 @@ class StrategyRobustnessLabService:
             runtime_metadata["account_size"] = config.account_size
         if config.risk_per_trade_pct is not None:
             runtime_metadata["risk_per_trade_pct"] = config.risk_per_trade_pct
+        prop_rules = self._normalize_prop_evaluation_rules(config.prop_evaluation_rules, account_size=config.account_size)
+        runtime_metadata["prop_evaluation_rules"] = prop_rules
 
         benchmark_cfg = getattr(config, "benchmark", None)
         if isinstance(benchmark_cfg, dict):
@@ -389,6 +392,11 @@ class StrategyRobustnessLabService:
             payload["parameter_stability"] = self._parameter_stability_from_parameter_sweep(
                 parsed_artifact.parameter_sweep
             )
+        payload["prop_evaluation_readiness"] = self._prop_evaluation_readiness(
+            run=run,
+            rules=prop_rules,
+            config=config,
+        )
 
         diagnostics = {
             "overview": payload["overview"],
@@ -398,6 +406,7 @@ class StrategyRobustnessLabService:
             "execution": payload["execution_sensitivity"],
             "regimes": payload["regime_analysis"],
             "ruin": payload["risk_of_ruin"],
+            "prop_evaluation_readiness": payload["prop_evaluation_readiness"],
             "report": payload["validation_report"],
         }
 
@@ -856,6 +865,19 @@ class StrategyRobustnessLabService:
                 affected_metrics=["probability_of_ruin", "max_tolerable_risk_per_trade"],
                 rescue_evidence="Provide risk_per_trade_pct in runtime configuration or bundle assumptions.",
             )
+        add(
+            source="runtime_config",
+            diagnostic="prop_evaluation_readiness",
+            statement=(
+                "Prop evaluation readiness used fallback preview rules."
+                if not (config.prop_evaluation_rules or {}).get("source")
+                else f"Prop evaluation readiness used {config.prop_evaluation_rules.get('source')} rules."
+            ),
+            materiality="high",
+            confidence="runtime_config",
+            affected_metrics=["prop_evaluation_verdict", "first_breach", "target_before_breach_probability"],
+            rescue_evidence="Enter the exact prop firm evaluation rules and rerun the readiness analysis.",
+        )
         if not (parsed_artifact.broker_export_present or parsed_artifact.broker_exports):
             add(
                 source="missing_input",
@@ -1002,6 +1024,13 @@ class StrategyRobustnessLabService:
             "rare_trade_dependence": diagnostics.get("distribution", {}).get("summary_metrics", {}).get("rare_trade_dependence"),
             "monte_carlo": diagnostics.get("monte_carlo", {}).get("summary_metrics", {}),
             "ruin": diagnostics.get("ruin", {}).get("summary_metrics", {}),
+            "prop_evaluation_readiness": {
+                "verdict": diagnostics.get("prop_evaluation_readiness", {}).get("verdict"),
+                "summary_metrics": diagnostics.get("prop_evaluation_readiness", {}).get("summary_metrics", {}),
+                "rule_snapshot": diagnostics.get("prop_evaluation_readiness", {}).get("rule_snapshot", {}),
+                "first_breach": diagnostics.get("prop_evaluation_readiness", {}).get("first_breach"),
+                "limitations": diagnostics.get("prop_evaluation_readiness", {}).get("limitations", []),
+            },
             "regime": diagnostics.get("regimes", {}).get("classification"),
             "stability": diagnostics.get("stability", {}).get("summary_metrics", {}),
         }
@@ -1229,6 +1258,16 @@ class StrategyRobustnessLabService:
             ),
             "regimes": regimes,
             "ruin": ruin_capability,
+            "prop_evaluation_readiness": DiagnosticCapability(
+                status="limited" if has_trades else "unavailable",
+                reason=(
+                    "Prop evaluation readiness can run from trade/equity path, but daily-loss precision depends on intraday equity, account sizing, and exact firm rules."
+                    if has_trades
+                    else "No trades supplied in parsed artifact."
+                ),
+                required_inputs=["trades", "prop_evaluation_rules"],
+                optional_enrichments=["equity_curve", "broker_export", "intraday_equity", "account_size", "risk_per_trade_pct"],
+            ),
             "report": DiagnosticCapability(
                 status=report_status,
                 reason=report_reason,
@@ -3960,6 +3999,284 @@ class StrategyRobustnessLabService:
             "risk_per_trade_pct": float(risk_per_trade_pct),
             "projected_risk_capital_per_trade": risk_capital_per_trade,
         }
+
+    def _normalize_prop_evaluation_rules(
+        self,
+        raw_rules: dict[str, Any] | None,
+        *,
+        account_size: float | None,
+    ) -> dict[str, Any]:
+        source = str((raw_rules or {}).get("source") or "fallback")
+        label = str((raw_rules or {}).get("label") or (raw_rules or {}).get("firm_label") or "Fallback evaluation profile")
+
+        def number(name: str, default: float) -> float:
+            value = (raw_rules or {}).get(name)
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                parsed = default
+            return parsed if np.isfinite(parsed) else default
+
+        def pct(name: str, default: float) -> float:
+            value = number(name, default)
+            return value / 100.0 if abs(value) > 1.0 else value
+
+        normalized = {
+            "schema_version": "prop_evaluation_rules_v1",
+            "source": source,
+            "label": label,
+            "firm_label": str((raw_rules or {}).get("firm_label") or label),
+            "account_size": number("account_size", float(account_size or 100_000.0)),
+            "profit_target_pct": pct("profit_target_pct", 0.10),
+            "max_total_drawdown_pct": pct("max_total_drawdown_pct", 0.10),
+            "total_drawdown_basis": str((raw_rules or {}).get("total_drawdown_basis") or "static"),
+            "max_daily_loss_pct": pct("max_daily_loss_pct", 0.05),
+            "daily_loss_basis": str((raw_rules or {}).get("daily_loss_basis") or "closed_balance"),
+            "reset_timezone": str((raw_rules or {}).get("reset_timezone") or "UTC"),
+            "minimum_trading_days": int(number("minimum_trading_days", 0.0)),
+            "maximum_evaluation_days": int(number("maximum_evaluation_days", 0.0)),
+            "consistency_max_day_profit_pct": pct("consistency_max_day_profit_pct", 0.0),
+            "max_leverage": number("max_leverage", 0.0),
+        }
+        encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+        normalized["rules_hash"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        normalized["fallback"] = source == "fallback"
+        return normalized
+
+    def _prop_evaluation_readiness(
+        self,
+        *,
+        run: IngestedRun,
+        rules: dict[str, Any],
+        config: AnalysisRunConfig,
+    ) -> dict[str, Any]:
+        trades = run.trades.copy()
+        account_size = float(rules.get("account_size") or config.account_size or 100_000.0)
+        profit_target = account_size * float(rules.get("profit_target_pct") or 0.10)
+        max_total_drawdown = account_size * float(rules.get("max_total_drawdown_pct") or 0.10)
+        max_daily_loss = account_size * float(rules.get("max_daily_loss_pct") or 0.05)
+        fallback = bool(rules.get("fallback", False))
+
+        if trades.empty or "pnl_net" not in trades.columns:
+            return {
+                "status": "unavailable",
+                "available": False,
+                "limited": True,
+                "verdict": "unknown",
+                "summary_metrics": {},
+                "rule_snapshot": rules,
+                "rule_status": [],
+                "limitations": ["Prop Evaluation Readiness requires trade PnL or an equity path."],
+                "recommendations": ["Upload trade PnL, account sizing, and exact firm rules."],
+                "assumptions": ["Fallback prop evaluation rules are preview assumptions unless user-entered rules were supplied."],
+                "figures": [],
+                "interpretation": {"summary": "Prop evaluation readiness is unavailable without path data."},
+                "metadata": {"result_mode": "unavailable", "rules_hash": rules.get("rules_hash")},
+            }
+
+        pnl = trades["pnl_net"].fillna(0.0).to_numpy(dtype=float)
+        equity = account_size + np.cumsum(pnl)
+        dates = self._prop_trade_dates(trades, fallback_count=len(pnl))
+        daily_pnl: dict[str, float] = {}
+        trading_days: list[str] = []
+        for date, value in zip(dates, pnl.tolist(), strict=False):
+            if date not in daily_pnl:
+                trading_days.append(date)
+            daily_pnl[date] = daily_pnl.get(date, 0.0) + float(value)
+
+        first_breach: dict[str, Any] | None = None
+        peak = account_size
+        max_total_drawdown_observed = 0.0
+        for idx, current_equity in enumerate(equity.tolist()):
+            peak = max(peak, float(current_equity))
+            basis = str(rules.get("total_drawdown_basis") or "static")
+            reference = peak if "trailing" in basis else account_size
+            drawdown = max(0.0, reference - float(current_equity))
+            max_total_drawdown_observed = max(max_total_drawdown_observed, drawdown)
+            if first_breach is None and drawdown > max_total_drawdown:
+                first_breach = {
+                    "type": "max_total_drawdown",
+                    "index": idx + 1,
+                    "date": dates[idx],
+                    "observed": drawdown,
+                    "allowed": max_total_drawdown,
+                    "margin": drawdown - max_total_drawdown,
+                }
+
+        max_daily_loss_observed = max((abs(min(0.0, value)) for value in daily_pnl.values()), default=0.0)
+        if first_breach is None:
+            for day in trading_days:
+                loss = abs(min(0.0, daily_pnl[day]))
+                if loss > max_daily_loss:
+                    first_breach = {
+                        "type": "max_daily_loss",
+                        "date": day,
+                        "observed": loss,
+                        "allowed": max_daily_loss,
+                        "margin": loss - max_daily_loss,
+                    }
+                    break
+
+        final_profit = float(equity[-1] - account_size) if len(equity) else 0.0
+        hit_index = next((idx for idx, value in enumerate(equity.tolist()) if value - account_size >= profit_target), None)
+        target_hit = hit_index is not None
+        target_hit_date = dates[hit_index] if hit_index is not None else None
+        consistency_limit = float(rules.get("consistency_max_day_profit_pct") or 0.0)
+        consistency_allowed = profit_target * consistency_limit if consistency_limit > 0 else None
+        largest_day_profit = max((max(0.0, value) for value in daily_pnl.values()), default=0.0)
+        consistency_breach = consistency_allowed is not None and largest_day_profit > consistency_allowed
+        if first_breach is None and consistency_breach:
+            first_breach = {
+                "type": "consistency_rule",
+                "observed": largest_day_profit,
+                "allowed": consistency_allowed,
+                "margin": largest_day_profit - float(consistency_allowed),
+            }
+
+        min_days = int(rules.get("minimum_trading_days") or 0)
+        max_days = int(rules.get("maximum_evaluation_days") or 0)
+        trading_day_count = len(trading_days)
+        min_days_met = trading_day_count >= min_days if min_days > 0 else True
+        max_days_met = trading_day_count <= max_days if max_days > 0 else True
+
+        passed = bool(target_hit and first_breach is None and min_days_met and max_days_met)
+        verdict = "pass_ready" if passed else ("breach_risk" if first_breach else "target_not_reached")
+        status = "limited" if fallback or not min_days_met or not max_days_met else "available"
+        target_probability, breach_probability = self._prop_bootstrap_probabilities(
+            pnl=pnl,
+            account_size=account_size,
+            profit_target=profit_target,
+            max_total_drawdown=max_total_drawdown,
+            max_daily_loss=max_daily_loss,
+            seed=config.seed,
+            simulations=min(max(config.simulations, 0), 1000),
+        )
+
+        rule_status = [
+            self._prop_rule_status("profit_target", target_hit, final_profit, profit_target),
+            self._prop_rule_status("max_total_drawdown", max_total_drawdown_observed <= max_total_drawdown, max_total_drawdown_observed, max_total_drawdown),
+            self._prop_rule_status("max_daily_loss", max_daily_loss_observed <= max_daily_loss, max_daily_loss_observed, max_daily_loss),
+            self._prop_rule_status("minimum_trading_days", min_days_met, trading_day_count, min_days if min_days > 0 else None),
+            self._prop_rule_status("maximum_evaluation_days", max_days_met, trading_day_count, max_days if max_days > 0 else None),
+        ]
+        if consistency_allowed is not None:
+            rule_status.append(self._prop_rule_status("consistency_rule", not consistency_breach, largest_day_profit, consistency_allowed))
+
+        limitations = []
+        if fallback:
+            limitations.append("Fallback prop evaluation rules were used; replace them with the actual firm rules before relying on this report.")
+        if not bool(run.metadata.get("equity_curve_provenance") == "engine_emitted"):
+            limitations.append("Daily loss is estimated from closed trade PnL; intraday equity/open PnL was not supplied.")
+        recommendations = [
+            "Enter the exact prop firm rules and recompute readiness.",
+            "Reduce risk per trade or add a daily stop below the firm limit if breach risk is high.",
+            "Upload broker/equity path evidence to strengthen daily-loss conclusions.",
+        ]
+        summary = (
+            "Prop evaluation rules were passed on the supplied path."
+            if passed
+            else f"Prop evaluation readiness is {verdict.replace('_', ' ')} under the selected rules."
+        )
+        return {
+            "status": status,
+            "available": True,
+            "limited": status == "limited",
+            "verdict": verdict,
+            "rule_snapshot": rules,
+            "rule_status": rule_status,
+            "first_breach": first_breach,
+            "target_progress": {
+                "profit_target": profit_target,
+                "final_profit": final_profit,
+                "target_hit": target_hit,
+                "target_hit_date": target_hit_date,
+                "target_progress_pct": (final_profit / profit_target * 100.0) if profit_target else None,
+            },
+            "summary_metrics": {
+                "target_before_breach_probability": target_probability,
+                "breach_probability": breach_probability,
+                "max_daily_loss_observed": max_daily_loss_observed,
+                "max_daily_loss_allowed": max_daily_loss,
+                "max_total_drawdown_observed": max_total_drawdown_observed,
+                "max_total_drawdown_allowed": max_total_drawdown,
+                "trading_days": trading_day_count,
+            },
+            "figures": [],
+            "interpretation": {
+                "summary": summary,
+                "positives": ["Profit target was reached before a breach."] if passed else [],
+                "cautions": limitations,
+            },
+            "warnings": limitations,
+            "assumptions": [
+                f"Account size: {account_size:.2f}.",
+                f"Profit target: {float(rules.get('profit_target_pct') or 0.0):.2%}.",
+                f"Maximum daily loss: {float(rules.get('max_daily_loss_pct') or 0.0):.2%}.",
+                f"Maximum total drawdown: {float(rules.get('max_total_drawdown_pct') or 0.0):.2%}.",
+            ],
+            "limitations": limitations,
+            "recommendations": recommendations,
+            "metadata": {
+                "result_mode": "fallback_preview" if fallback else "user_rules",
+                "rules_hash": rules.get("rules_hash"),
+                "non_advisory": True,
+                "target_hit_index": hit_index,
+            },
+        }
+
+    def _prop_trade_dates(self, trades: pd.DataFrame, *, fallback_count: int) -> list[str]:
+        source = trades.get("exit_ts", trades.get("entry_ts"))
+        if source is None:
+            return [f"trade_day_{idx + 1}" for idx in range(fallback_count)]
+        dates: list[str] = []
+        for idx, value in enumerate(source.tolist()):
+            try:
+                parsed = pd.to_datetime(value, utc=True)
+                dates.append(parsed.strftime("%Y-%m-%d"))
+            except Exception:  # noqa: BLE001
+                dates.append(f"trade_day_{idx + 1}")
+        return dates
+
+    def _prop_rule_status(self, rule: str, passed: bool, observed: float | int, allowed: float | int | None) -> dict[str, Any]:
+        status = "pass" if passed else "fail"
+        if allowed is None:
+            status = "not_configured"
+        return {"rule": rule, "status": status, "observed": observed, "allowed": allowed}
+
+    def _prop_bootstrap_probabilities(
+        self,
+        *,
+        pnl: np.ndarray,
+        account_size: float,
+        profit_target: float,
+        max_total_drawdown: float,
+        max_daily_loss: float,
+        seed: int,
+        simulations: int,
+    ) -> tuple[float | None, float | None]:
+        if pnl.size == 0 or simulations <= 0:
+            return None, None
+        rng = np.random.default_rng(seed + 917)
+        target_hits = 0
+        breaches = 0
+        for _ in range(simulations):
+            sampled = rng.choice(pnl, size=pnl.size, replace=True)
+            equity = account_size
+            peak = account_size
+            hit = False
+            breach = False
+            for value in sampled.tolist():
+                equity += float(value)
+                peak = max(peak, equity)
+                if float(value) < -max_daily_loss or account_size - equity > max_total_drawdown or peak - equity > max_total_drawdown:
+                    breach = True
+                    break
+                if equity - account_size >= profit_target:
+                    hit = True
+                    break
+            target_hits += int(hit and not breach)
+            breaches += int(breach)
+        return float(target_hits / simulations), float(breaches / simulations)
 
     def _score(
         self,
