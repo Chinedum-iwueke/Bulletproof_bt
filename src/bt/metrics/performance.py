@@ -748,12 +748,19 @@ def _validate_performance_metrics(performance_payload: dict[str, Any], trades_df
     gross_pnl = float(performance_payload.get("gross_pnl", 0.0) or 0.0)
 
     equity_delta = final_equity - initial_equity
-    total_costs = float(performance_payload.get("fee_total", 0.0) or 0.0) + float(performance_payload.get("slippage_total", 0.0) or 0.0) + float(performance_payload.get("spread_total", 0.0) or 0.0)
+    fee_total = float(performance_payload.get("fee_total", 0.0) or 0.0)
+    costs_payload = performance_payload.get("costs") if isinstance(performance_payload.get("costs"), dict) else {}
+    commission_total = float(costs_payload.get("commission_total", 0.0) or 0.0)
+    slippage_total = float(performance_payload.get("slippage_total", 0.0) or 0.0)
+    spread_total = float(performance_payload.get("spread_total", 0.0) or 0.0)
+    cash_costs = fee_total + commission_total
 
     if abs(net_pnl - equity_delta) > 1e-6:
         errors.append(f"net_pnl_mismatch_with_equity_delta: net_pnl={net_pnl} equity_delta={equity_delta}")
-    if abs(net_pnl - (gross_pnl - total_costs)) > 1e-6:
-        errors.append(f"net_pnl_mismatch_with_gross_minus_costs: net_pnl={net_pnl} gross_minus_costs={gross_pnl-total_costs}")
+    if abs(net_pnl - (gross_pnl - cash_costs)) > 1e-6:
+        errors.append(f"net_pnl_mismatch_with_gross_minus_cash_costs: net_pnl={net_pnl} gross_minus_cash_costs={gross_pnl-cash_costs}")
+    if slippage_total or spread_total:
+        warnings.append("slippage_and_spread_are_diagnostic_when_execution_prices_embed_costs")
 
     r_net = pd.to_numeric(trades_df.get("r_net", trades_df.get("r_multiple_net", pd.Series(index=trades_df.index))), errors="coerce")
     if "risk_amount" in trades_df.columns:
@@ -798,8 +805,10 @@ def _validate_performance_metrics(performance_payload: dict[str, Any], trades_df
             "final_equity_minus_initial": equity_delta,
             "net_pnl": net_pnl,
             "gross_pnl": gross_pnl,
-            "total_costs": total_costs,
-            "gross_minus_costs": gross_pnl - total_costs,
+            "cash_costs": cash_costs,
+            "diagnostic_slippage_total": slippage_total,
+            "diagnostic_spread_total": spread_total,
+            "gross_minus_cash_costs": gross_pnl - cash_costs,
         },
     }
 

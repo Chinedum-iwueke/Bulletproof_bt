@@ -124,6 +124,12 @@ def build_runtime_override(contract: HypothesisContract, spec: dict[str, Any], t
             raise ValueError("L1-H1 runner requires canonical 1m base data and 1m exit monitoring.")
 
     return {
+        "identity": {
+            "hypothesis_id": str(spec["hypothesis_id"]),
+            "grid_id": str(spec["grid_id"]),
+            "tier": tier,
+            "strategy_id": str(entry.get("strategy", "l1_h1_vol_floor_trend")),
+        },
         "data": {
             "engine_timeframe": None,
             "entry_timeframe": None,
@@ -162,7 +168,10 @@ def _postprocess_run_artifacts(run_dir: Path, *, data_path: str) -> None:
 
     config: dict[str, Any] = loaded_config
     hypothesis_id = None
-    if isinstance(config.get("strategy"), dict):
+    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    if isinstance(identity.get("hypothesis_id"), str):
+        hypothesis_id = identity["hypothesis_id"]
+    elif isinstance(config.get("strategy"), dict):
         strategy_name = config["strategy"].get("name")
         if isinstance(strategy_name, str):
             hypothesis_id = strategy_name

@@ -496,6 +496,9 @@ class RiskEngine:
         close_only = bool(signal.metadata.get("close_only")) or is_exit_signal
         if close_only and cur_qty == 0:
             return None, CLOSE_ONLY_NO_POSITION
+        universe_active = bar.extra.get("universe_active", bar.extra.get("volatile_active", True))
+        if cur_qty == 0 and not bool(universe_active):
+            return None, "risk_rejected:universe_inactive"
         cur_side = None
         if cur_qty > 0:
             cur_side = Side.BUY

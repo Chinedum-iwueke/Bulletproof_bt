@@ -48,3 +48,5 @@ configs/data/
 /.codex/
 /.agents/
 .DS_Store
+examples/reference_artifacts/full_research_bundle_reference.zip
+examples/reference_artifacts/full_research_bundle_reference/

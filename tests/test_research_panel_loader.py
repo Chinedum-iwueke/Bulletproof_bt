@@ -131,8 +131,9 @@ def test_volatile_loader_changes_active_universe_by_timestamp(tmp_path) -> None:
 
     loaded = load_volatile_research_panel(root, "binance", membership_path, "1m")
 
-    assert loaded.loc[loaded["ts"].eq(pd.Timestamp("2021-01-01 00:00", tz="UTC")), "symbol"].tolist() == ["BTCUSDT"]
-    assert loaded.loc[loaded["ts"].eq(pd.Timestamp("2021-01-01 00:01", tz="UTC")), "symbol"].tolist() == ["ETHUSDT"]
+    active = loaded[loaded["volatile_active"].astype(bool)]
+    assert active.loc[active["ts"].eq(pd.Timestamp("2021-01-01 00:00", tz="UTC")), "symbol"].tolist() == ["BTCUSDT"]
+    assert active.loc[active["ts"].eq(pd.Timestamp("2021-01-01 00:01", tz="UTC")), "symbol"].tolist() == ["ETHUSDT"]
 
 
 def test_strategy_cannot_access_inactive_symbols(tmp_path) -> None:
@@ -167,6 +168,7 @@ def test_strategy_cannot_access_inactive_symbols(tmp_path) -> None:
     first = feed.next()
 
     assert set(active["symbol"]) == {"BTCUSDT"}
+    assert active.loc[active["symbol"].eq("BTCUSDT"), "volatile_active"].all()
     assert first is not None
     assert [bar.symbol for bar in first] == ["BTCUSDT"]
     assert "funding_rate" in first[0].extra

@@ -680,7 +680,7 @@ The first implementation should pass end-to-end tests that prove the wedge, not 
 | Scenario | Expected result |
 |---|---|
 | Trade CSV only | Overview, distribution, and Monte Carlo available; execution limited; stability/regime unavailable |
-| Structured bundle full | Full diagnostics available, report ready, share room can be created |
+| Structured bundle full | Strongest upload eligibility, evidence-gated diagnostics, report ready, share room can be created |
 | Incomplete bundle | Ledger marks unsupported claims and points to missing files |
 | Plan-locked diagnostic | Locked is distinct from unavailable |
 | Engine skipped diagnostic | Ledger preserves skipped reason and report cannot overclaim |
@@ -1998,7 +1998,7 @@ Recommended fields:
 
 Unlocks:
 
-- Regime: Full when aligned to trades or equity curve
+- Regime: Conditional when aligned to trades or equity curve
 - Benchmark Context: Limited to Full
 - Execution: Limited spread/liquidity proxies where available
 - Proof Report: regime appendix
@@ -2029,7 +2029,7 @@ Recommended fields:
 
 Unlocks:
 
-- Parameter Stability: Full
+- Parameter Stability: Conditional when the sweep is real, mapped, and sufficiently populated
 - Overfit Warnings: Full
 - Proof Report: parameter appendix
 
@@ -2191,11 +2191,13 @@ Full bundle unlocks:
 - Monte Carlo Survival: Full
 - Ruin And Capital Survival: Full
 - Prop Evaluation Readiness: Full when rules are provided
-- Regime Dependence: Full
-- Parameter Stability: Full
+- Regime Dependence: Conditional. Full upload confidence requires aligned OHLCV/context, explicit symbol coverage, timestamp alignment, and auditable regime definitions; portfolio-level multi-asset attribution should route to Research Desk when any of those are ambiguous.
+- Parameter Stability: Conditional. A single parameter file is context only; true stability requires a multi-run parameter sweep with run-to-parameter mapping, per-run outcomes, and neighborhood topology. Otherwise route to Research Desk.
 - Proof Report: Full
 - Share Room: Full subject to plan
 - Research Desk Review: Full packet
+
+Honesty rule: `research_complete` means strongest upload eligibility, not automatic proof. Upload automation must always offer Research Desk when evidence is insufficient for true parameter stability, multi-asset regime attribution, broker-level execution realism, strategy reconstruction from config/report, portfolio-level exposure analysis, or an independent validation memo.
 
 ### Diagnostic Unlock Matrix
 
@@ -2209,8 +2211,8 @@ Full bundle unlocks:
 | Monte Carlo | Full | Limited | Limited | No | No | No | Limited sizing context | Rule thresholds only | Full |
 | Ruin | Limited to Full | Limited | Limited | No | No | No | Full if sizing exists | Rule thresholds only | Full |
 | Prop Evaluation Readiness | Limited to Full with sizing and timestamps | Limited path analysis | Fuller daily-loss evidence | Limited rule extraction only | No | Scenario comparison only | Sizing/risk assumptions | Full rules | Full |
-| Regime Dependence | Limited | Limited | No | No | Full when aligned | Limited by run metrics | Limited | No | Full |
-| Parameter Stability | No | No | No | No | No | Full | Limited assumptions only | No | Full |
+| Regime Dependence | Limited | Limited | No | No | Conditional when aligned | Limited by run metrics | Limited | No | Conditional; Research Desk for attribution |
+| Parameter Stability | No | No | No | No | No | Conditional with real sweep | Limited assumptions only | No | Conditional; Research Desk if no sweep |
 | Proof Report | Full with limitations | Limited | Full execution appendix | Limited claim audit | Regime appendix | Parameter appendix | Assumptions appendix | Prop-readiness appendix | Full |
 | Share Room | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Plan-dependent | Full subject to plan |
 | Research Desk Review | Full packet component | Packet component | Packet component | Packet component | Packet component | Packet component | Packet component | Rule interpretation packet | Full |
@@ -2223,7 +2225,7 @@ Principles:
 
 - Free should demonstrate the falsification experience, not give away a full proof report.
 - Paid individual should be attractive to serious solo traders.
-- Pro should unlock the full automated due diligence loop.
+- Pro should unlock the strongest automated due diligence loop when artifacts support it, while preserving evidence-gated limits.
 - Team should support commercial evaluation, education businesses, and small research groups.
 - Research Desk should monetize high-stakes ambiguity without turning the automated product into consulting.
 
@@ -2231,11 +2233,11 @@ Principles:
 
 | Tier | Price | Best for | Core limit |
 | --- | ---: | --- | --- |
-| Explorer | $0/month | curious traders testing one artifact | 2 analyses/month |
-| Truth Room Individual | $49/month | serious individual traders | 25 analyses/month |
-| Truth Room Pro | $149/month | strategy sellers, educators, advanced researchers | 100 analyses/month |
-| Research Lab Team | $399/month | small teams, prop evaluators, research desks | 500 analyses/month, 5 seats |
-| Research Desk Review | $750-$2,500/review | high-stakes diligence or ambiguous evidence | scoped manual/agent-assisted review |
+| Free | $0/month | curious traders testing one artifact | 3 analyses/month |
+| Truth Room Individual | $39/month | serious individual traders | 25 analyses/month |
+| Truth Room Pro | $99/month | strategy sellers, educators, advanced researchers | 100 analyses/month |
+| Research Lab Team | $399/month | small teams, prop evaluators, research desks | 250 analyses/month, 5 seats |
+| Research Desk Review | from $1,000/review | high-stakes diligence or ambiguous evidence | scoped manual/agent-assisted validation memo |
 
 ### Permission Matrix
 
@@ -2253,10 +2255,10 @@ Principles:
 | Monte Carlo | Limited | Full | Full | Full | Full |
 | Ruin | Preview | Full | Full | Full | Reviewer-enhanced |
 | Prop Evaluation Readiness | Fallback preview | 1 custom profile per analysis | saved profiles + report inclusion | shared firm profiles + comparisons | Reviewer-enhanced |
-| Regime Dependence | Locked preview | Locked or add-on | Full | Full | Reviewer-enhanced |
-| Parameter Stability | Locked preview | Locked or add-on | Full | Full | Reviewer-enhanced |
+| Regime Dependence | Locked preview | Locked or add-on | Evidence-gated with aligned OHLCV/context | Evidence-gated with aligned OHLCV/context | Reviewer-enhanced attribution |
+| Parameter Stability | Locked preview | Locked or add-on | Sweep-required and evidence-gated | Sweep-required and evidence-gated | Reviewer-designed/reviewed sweep |
 | Proof Report export | Watermarked preview | PDF/Markdown | PDF/Markdown/JSON | PDF/Markdown/JSON | Addendum included |
-| Controlled share links | No | 5 active links | 25 active links | 100 active links | Diligence packet |
+| Controlled share links | No | 5 active links | 25 active links | 75 active links | Scoped to engagement |
 | Report snapshots | Latest only | 30-day history | 1-year history | 2-year history | Included in packet |
 | Analysis library | Latest 5 | Full personal | Full | Team-wide | Included |
 | Research Desk request | Waitlist/contact | Paid add-on | Discounted add-on | Priority add-on | Included |
@@ -2283,7 +2285,7 @@ Individual:
 Pro:
 
 - should be the default recommended paid tier for strategy sellers, educators, and advanced researchers
-- unlocks the full automated suite when artifacts support it
+- unlocks the strongest automated suite when artifacts support it; it must not turn unsupported parameter, regime, broker, or portfolio claims into supported conclusions
 - includes saved prop firm profiles, profile comparison, and prop-readiness inclusion in proof reports
 - includes share links because external trust is a major buying reason
 
@@ -2298,6 +2300,7 @@ Research Desk:
 - should be sold as deep validation review, not investment advice
 - should produce reviewer-approved report addenda tied to immutable report snapshots
 - should focus on execution audit, data QA, benchmark construction, claim formalization, prop-rule interpretation, and parameter/regime review
+- should always be offered when upload evidence is insufficient for true parameter stability, multi-asset regime attribution, broker-level execution realism, strategy reconstruction from config/report, portfolio-level exposure analysis, or an independent validation memo
 
 ### Commercial Packaging Rules
 
@@ -3161,7 +3164,7 @@ Implementation tasks:
   - uploads per month
   - file size
   - bundle support
-  - full diagnostic access
+  - evidence-gated diagnostic access
   - export access
   - share links
   - retention
@@ -3178,10 +3181,10 @@ Launch-tier target:
 | Tier | Target Buyer | Price | Core Rights |
 | --- | --- | --- | --- |
 | Free | Curious trader or first-time evaluator | $0 | limited trade CSV runs, Overview/Distribution/Monte Carlo/Ruin preview, no export, short retention |
-| Individual | Serious self-directed trader | $49-$79/month | trade CSV and basic bundles, full report export, core diagnostics, one custom prop evaluation profile per analysis, limited shares |
-| Pro | strategy seller, educator, researcher | $149-$249/month | full automated suite when artifacts support it, parameter/regime access, saved prop evaluation profiles, report appendix, share links, longer retention |
-| Team | prop desk, small fund, research group | $499-$999/month | seats, team library, shared prop firm profiles, profile comparisons, shared reports, admin controls, higher limits, priority processing |
-| Research Desk | deep validation buyer | project-based, from $1,500 | human/agent-assisted review, addenda, execution/data QA, benchmark construction, prop-rule interpretation, claim formalization |
+| Individual | Serious self-directed trader | $39/month | trade CSV and basic bundles, full report export, core diagnostics, one custom prop evaluation profile per analysis, limited shares |
+| Pro | strategy seller, educator, researcher | $99/month | strongest automated suite when artifacts support it, evidence-gated parameter/regime access, saved prop evaluation profiles, report appendix, share links, longer retention |
+| Team | prop desk, small fund, research group | $399/month | seats, team library, shared prop firm profiles, profile comparisons, shared reports, admin controls, higher limits, priority processing |
+| Research Desk | deep validation buyer | project-based, from $1,000 | human/agent-assisted validation memo, addenda, execution/data QA, benchmark construction, prop-rule interpretation, claim formalization |
 
 Definition of done:
 
@@ -3189,6 +3192,8 @@ Definition of done:
 - checkout works for all paid tiers in test mode
 - first-client accounts can be provisioned without manual database edits
 - pricing matches the product promises in this doc
+
+Pricing decision after the launch-pricing pass: use opening wedge pricing, not mature-category pricing. The product should buy adoption, uploads, shared reports, and Research Desk demand evidence before it prices like a finished institutional terminal. Keep the long-term premium ambition, but launch with Individual at $39/month, Pro at $99/month, Team at $399/month, and Research Desk from $1,000 so the market can experience the category before being asked to pay mature due-diligence prices.
 
 ### Phase 7: Research Desk Handoff And First-Client Ops
 

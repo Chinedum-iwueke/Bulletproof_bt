@@ -196,3 +196,67 @@ def test_trades_csv_writer_maps_l1_entry_context_metadata(tmp_path: Path) -> Non
     assert row["path_bars_held"] == "48"
     assert float(row["vwap_t"]) == 101.5
     assert float(row["custom_quality_score"]) == 0.77
+
+
+def test_trades_csv_writer_uses_contract_identity_and_tier_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "trades.csv"
+    writer = TradesCsvWriter(path, run_id="run_1", hypothesis_id="L1-H1C", tier="Tier2")
+    writer.write_trade(
+        Trade(
+            symbol="BTCUSDT",
+            side=Side.BUY,
+            entry_ts=pd.Timestamp("2024-01-01T00:00:00Z"),
+            exit_ts=pd.Timestamp("2024-01-01T01:00:00Z"),
+            entry_price=100.0,
+            exit_price=101.0,
+            qty=1.0,
+            pnl=1.0,
+            fees=0.1,
+            slippage=0.0,
+            mae_price=99.0,
+            mfe_price=102.0,
+            metadata={"strategy": "volfloor_ema_pullback"},
+        )
+    )
+    writer.close()
+
+    with path.open(encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert row["hypothesis_id"] == "L1-H1C"
+    assert row["identity_hypothesis_id"] == "L1-H1C"
+    assert row["identity_strategy_id"] == "volfloor_ema_pullback"
+    assert row["identity_tier"] == "Tier2"
+
+
+def test_trades_csv_writer_derives_exit_reason_for_close_only_signal(tmp_path: Path) -> None:
+    path = tmp_path / "trades.csv"
+    writer = TradesCsvWriter(path)
+    writer.write_trade(
+        Trade(
+            symbol="BTCUSDT",
+            side=Side.BUY,
+            entry_ts=pd.Timestamp("2024-01-01T00:00:00Z"),
+            exit_ts=pd.Timestamp("2024-01-01T01:00:00Z"),
+            entry_price=100.0,
+            exit_price=101.0,
+            qty=1.0,
+            pnl=1.0,
+            fees=0.1,
+            slippage=0.0,
+            mae_price=99.0,
+            mfe_price=102.0,
+            metadata={
+                "close_only": True,
+                "stop_resolution_skipped": True,
+                "stop_resolution_skip_reason": "exit_signal",
+                "exit_type": "ema_trend_end",
+            },
+        )
+    )
+    writer.close()
+
+    with path.open(encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert row["exit_reason"] == "ema_trend_end"

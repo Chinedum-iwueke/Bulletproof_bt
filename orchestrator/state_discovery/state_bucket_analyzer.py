@@ -62,9 +62,26 @@ def _bucket_numeric(col: pd.Series, name: str) -> pd.Series:
     elif name.endswith("_z"):
         bins = [-float("inf"), -1.0, 1.0, 2.5, float("inf")]
     else:
+        if vals.dropna().nunique() < 2:
+            return pd.Series(
+                [f"{name}_flat" if pd.notna(value) else pd.NA for value in vals],
+                index=vals.index,
+                dtype="object",
+            )
         bins = vals.quantile([0.0, 0.25, 0.5, 0.75, 1.0]).tolist()
         bins[0] = -float("inf")
         bins[-1] = float("inf")
+        deduped_bins = []
+        for edge in bins:
+            if not deduped_bins or edge != deduped_bins[-1]:
+                deduped_bins.append(edge)
+        bins = deduped_bins
+        if len(bins) < 3:
+            return pd.Series(
+                [f"{name}_flat" if pd.notna(value) else pd.NA for value in vals],
+                index=vals.index,
+                dtype="object",
+            )
     labels = [f"{name}_b{i}" for i in range(len(bins) - 1)]
     return pd.cut(vals, bins=bins, labels=labels, include_lowest=True, right=False).astype("object")
 

@@ -68,6 +68,8 @@ def _build_engine(
     datafeed: Any,
     run_dir: Path,
     run_id: str | None = None,
+    hypothesis_id: str | None = None,
+    tier: str | None = None,
     sanity_counters: SanityCounters | None = None,
     audit_manager: AuditManager | None = None,
 ):
@@ -102,6 +104,15 @@ def _build_engine(
 
     strategy_cfg = config.get("strategy") if isinstance(config.get("strategy"), dict) else {}
     strategy_name = strategy_cfg.get("name", "coinflip")
+    identity_cfg = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    resolved_hypothesis_id = str(
+        hypothesis_id
+        or identity_cfg.get("hypothesis_id")
+        or config.get("hypothesis_id")
+        or strategy_name
+    )
+    resolved_tier = tier or identity_cfg.get("tier") or config.get("tier")
+    resolved_tier = str(resolved_tier) if resolved_tier is not None else None
     strategy_kwargs = {k: v for k, v in strategy_cfg.items() if k != "name"}
     if strategy_name == "volfloor_donchian":
         if "entry_lookback" in strategy_kwargs and "donchian_entry_lookback" not in strategy_kwargs:
@@ -243,7 +254,12 @@ def _build_engine(
         portfolio=portfolio,
         decisions_writer=JsonlWriter(run_dir / "decisions.jsonl"),
         fills_writer=JsonlWriter(run_dir / "fills.jsonl"),
-        trades_writer=TradesCsvWriter(run_dir / "trades.csv", run_id=run_id, hypothesis_id=str(strategy_name)),
+        trades_writer=TradesCsvWriter(
+            run_dir / "trades.csv",
+            run_id=run_id,
+            hypothesis_id=resolved_hypothesis_id,
+            tier=resolved_tier,
+        ),
         equity_path=run_dir / "equity.csv",
         config=config,
         sanity_counters=sanity_counters,
@@ -391,6 +407,8 @@ def run_backtest(
                 datafeed,
                 run_dir,
                 run_id=resolved_run_name,
+                hypothesis_id=(config.get("identity") or {}).get("hypothesis_id") if isinstance(config.get("identity"), dict) else None,
+                tier=(config.get("identity") or {}).get("tier") if isinstance(config.get("identity"), dict) else None,
                 sanity_counters=sanity_counters,
                 audit_manager=audit_manager,
             )
@@ -400,6 +418,8 @@ def run_backtest(
                 datafeed,
                 run_dir,
                 run_id=resolved_run_name,
+                hypothesis_id=(config.get("identity") or {}).get("hypothesis_id") if isinstance(config.get("identity"), dict) else None,
+                tier=(config.get("identity") or {}).get("tier") if isinstance(config.get("identity"), dict) else None,
                 sanity_counters=sanity_counters,
             )
         engine.run()
@@ -449,6 +469,8 @@ def run_backtest(
                     datafeed2,
                     rerun_dir,
                     run_id=f"{resolved_run_name}_determinism",
+                    hypothesis_id=(config.get("identity") or {}).get("hypothesis_id") if isinstance(config.get("identity"), dict) else None,
+                    tier=(config.get("identity") or {}).get("tier") if isinstance(config.get("identity"), dict) else None,
                     sanity_counters=SanityCounters(run_id=f"{resolved_run_name}_determinism"),
                     audit_manager=None,
                 )
@@ -458,6 +480,8 @@ def run_backtest(
                     datafeed2,
                     rerun_dir,
                     run_id=f"{resolved_run_name}_determinism",
+                    hypothesis_id=(config.get("identity") or {}).get("hypothesis_id") if isinstance(config.get("identity"), dict) else None,
+                    tier=(config.get("identity") or {}).get("tier") if isinstance(config.get("identity"), dict) else None,
                     sanity_counters=SanityCounters(run_id=f"{resolved_run_name}_determinism"),
                 )
             engine2.run()

@@ -63,6 +63,24 @@ def _volatile_manifest(root: Path) -> Path:
     return path
 
 
+def _volatile_manifest_with_duplicate_rank_rows(root: Path) -> Path:
+    path = root / "manifests" / "volatile_universe_membership.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ts0 = pd.Timestamp("2021-01-01 00:00", tz="UTC")
+    ts1 = pd.Timestamp("2021-01-01 00:01", tz="UTC")
+    pd.DataFrame(
+        {
+            "ts": [ts0, ts0, ts1],
+            "exchange": ["binance", "binance", "binance"],
+            "symbol": ["BTCUSDT", "BTCUSDT", "ETHUSDT"],
+            "rank_type": ["gainer", "loser", "gainer"],
+            "rank": [1, 1, 1],
+            "score": [-0.5, -0.5, 0.2],
+        }
+    ).to_parquet(path, index=False)
+    return path
+
+
 def test_old_data_path_mode_still_resolves_exact_path(tmp_path: Path) -> None:
     data = tmp_path / "legacy_curated"
     data.mkdir()
@@ -121,8 +139,28 @@ def test_volatile_mode_loads_membership_and_filters_inactive_symbols(tmp_path: P
 
     loaded = load_volatile_research_panel(root, "binance", membership, "1m")
 
-    assert loaded.loc[loaded["ts"].eq(pd.Timestamp("2021-01-01 00:00", tz="UTC")), "symbol"].tolist() == ["BTCUSDT"]
-    assert loaded.loc[loaded["ts"].eq(pd.Timestamp("2021-01-01 00:01", tz="UTC")), "symbol"].tolist() == ["ETHUSDT"]
+    active = loaded[loaded["volatile_active"].astype(bool)]
+    assert active.loc[active["ts"].eq(pd.Timestamp("2021-01-01 00:00", tz="UTC")), "symbol"].tolist() == ["BTCUSDT"]
+    assert active.loc[active["ts"].eq(pd.Timestamp("2021-01-01 00:01", tz="UTC")), "symbol"].tolist() == ["ETHUSDT"]
+
+
+def test_volatile_mode_tolerates_duplicate_legacy_rank_rows(tmp_path: Path) -> None:
+    root = tmp_path / "research_data"
+    _panel(root, "BTCUSDT", rows=3)
+    _panel(root, "ETHUSDT", rows=3)
+    membership = _volatile_manifest_with_duplicate_rank_rows(root)
+    profile = resolve_data_profile(
+        universe="volatile",
+        data_root=root,
+        membership_path=membership,
+    )
+
+    preflight_research_data_profile(profile)
+    loaded = load_volatile_research_panel(root, "binance", membership, "1m")
+
+    active = loaded[loaded["volatile_active"].astype(bool)]
+    assert active.loc[active["ts"].eq(pd.Timestamp("2021-01-01 00:00", tz="UTC")), "symbol"].tolist() == ["BTCUSDT"]
+    assert active.loc[active["ts"].eq(pd.Timestamp("2021-01-01 00:01", tz="UTC")), "symbol"].tolist() == ["ETHUSDT"]
 
 
 def test_missing_research_data_files_fail_loudly(tmp_path: Path) -> None:
@@ -132,6 +170,15 @@ def test_missing_research_data_files_fail_loudly(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError, match="research panel missing"):
         preflight_research_data_profile(profile)
+
+
+def test_preflight_honors_symbol_scope_for_research_panels(tmp_path: Path) -> None:
+    root = tmp_path / "research_data"
+    _panel(root, "BTCUSDT")
+    stable_manifest = _stable_manifest(root, ["BTCUSDT", "MISSINGUSDT"])
+    profile = resolve_data_profile(universe="stable", data_root=root, stable_manifest=stable_manifest)
+
+    preflight_research_data_profile(profile, max_symbols=1)
 
 
 def test_no_lookahead_preflight_rejects_future_source_ts(tmp_path: Path) -> None:
@@ -170,6 +217,18 @@ def test_daemon_builds_research_data_profile_pipeline_command(tmp_path: Path) ->
     assert "--stable-data" not in cmd
     assert "--membership-path" in cmd
     assert "research_data/manifests/volatile_universe_membership.parquet" in cmd
+
+
+def test_daemon_can_enable_parallel_dataset_backtests(tmp_path: Path) -> None:
+    payload = {
+        "hypothesis": "research/hypotheses/example.yaml",
+        "name": "sample_pipeline_smoke",
+        "parallel_datasets": True,
+    }
+    merged = merge_payload_with_defaults(payload, {}, cli_max_workers=6)
+    cmd = build_pipeline_command(tmp_path / "research.sqlite", merged)
+
+    assert "--parallel-datasets" in cmd
 
 
 def test_daemon_builds_research_memory_command_after_pipeline(tmp_path: Path) -> None:

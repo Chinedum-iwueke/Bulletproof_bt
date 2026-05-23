@@ -8,7 +8,7 @@ from bt.research_data.instruments import reconcile_stable_symbols
 from bt.research_data.schemas import OHLCV_COLUMNS
 from bt.research_data.storage import ResearchDataStore
 from bt.research_data.time import utc_series, utc_ts
-from bt.research_data.universe import build_volatile_universe_from_ohlcv
+from bt.research_data.universe import build_volatile_universe_from_ohlcv, rank_volatile_scores
 from bt.research_data.validation import assert_causal_sources, assert_utc_monotonic_unique
 
 
@@ -123,6 +123,22 @@ def test_volatile_universe_ranking_uses_only_prior_data() -> None:
     assert membership.loc[membership["rank_type"].eq("gainer"), "symbol"].tolist() == ["AAAUSDT"]
     assert membership.loc[membership["rank_type"].eq("gainer"), "score"].item() == pytest.approx(1.0)
     assert membership.loc[membership["rank_type"].eq("loser"), "symbol"].tolist() == ["BBBUSDT"]
+
+
+def test_volatile_ranker_emits_single_active_row_per_symbol_timestamp() -> None:
+    scores = pd.DataFrame(
+        {
+            "ts": [pd.Timestamp("2021-01-01 00:00", tz="UTC")] * 2,
+            "rebalance_id": [0, 0],
+            "symbol": ["AAAUSDT", "BBBUSDT"],
+            "score": [-0.1, -0.2],
+        }
+    )
+
+    membership = rank_volatile_scores(scores, exchange="binance", top_gainers=2, top_losers=2)
+
+    assert not membership.duplicated(["ts", "symbol"]).any()
+    assert membership.loc[membership["symbol"].eq("AAAUSDT"), "rank_type"].item() == "loser"
 
 
 def test_stable_universe_symbols_do_not_fail_when_listing_starts_after_2021() -> None:

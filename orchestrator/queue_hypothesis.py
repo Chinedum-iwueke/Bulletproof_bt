@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retain-top-n", type=int, default=2)
     parser.add_argument("--retain-median", type=int, default=1)
     parser.add_argument("--retain-worst", type=int, default=1)
+    parser.add_argument("--parallel-datasets", action="store_true", default=False)
     parser.add_argument("--no-cleanup-delete-logs", action="store_true", default=False)
     parser.add_argument("--no-cleanup-delete-nonretained-runs", action="store_true", default=False)
     return parser.parse_args()
@@ -83,6 +84,7 @@ def main() -> int:
         "retain_top_n": args.retain_top_n,
         "retain_median": args.retain_median,
         "retain_worst": args.retain_worst,
+        "parallel_datasets": args.parallel_datasets,
         "cleanup_delete_logs": not args.no_cleanup_delete_logs,
         "cleanup_delete_nonretained_runs": not args.no_cleanup_delete_nonretained_runs,
     }

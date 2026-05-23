@@ -125,8 +125,30 @@ def rank_volatile_scores(
     membership["universe"] = "volatile_data_1m_canonical"
     membership["lookback"] = lookback
     membership["rebalance_freq"] = rebalance_freq
-    membership = membership.drop_duplicates(["ts", "symbol", "rank_type"], keep="last")
+    membership = _dedupe_active_volatile_membership(membership)
     return normalize_frame(membership, VOLATILE_UNIVERSE_COLUMNS)
+
+
+def _dedupe_active_volatile_membership(membership: pd.DataFrame) -> pd.DataFrame:
+    """Keep one active membership row per symbol at each rebalance timestamp."""
+    if membership.empty:
+        return membership
+    out = membership.copy()
+    out["_score"] = pd.to_numeric(out.get("score"), errors="coerce")
+    out["_abs_score"] = out["_score"].abs().fillna(-1.0)
+    rank_type = out.get("rank_type", pd.Series("", index=out.index)).astype(str)
+    out["_side_priority"] = 1
+    out.loc[out["_score"].gt(0) & rank_type.eq("gainer"), "_side_priority"] = 0
+    out.loc[out["_score"].lt(0) & rank_type.eq("loser"), "_side_priority"] = 0
+    out.loc[out["_score"].eq(0) & rank_type.eq("gainer"), "_side_priority"] = 0
+    out["_rank"] = pd.to_numeric(out.get("rank"), errors="coerce").fillna(1_000_000)
+    out = out.sort_values(
+        ["ts", "symbol", "_abs_score", "_side_priority", "_rank"],
+        ascending=[True, True, False, True, True],
+        kind="mergesort",
+    )
+    out = out.drop_duplicates(["ts", "symbol"], keep="first")
+    return out.drop(columns=["_score", "_abs_score", "_side_priority", "_rank"])
 
 
 def build_volatile_universe_from_ohlcv(

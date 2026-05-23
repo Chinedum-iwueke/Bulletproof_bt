@@ -398,6 +398,8 @@ def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
             htf_resampler_cfg.setdefault("strict", resolved.get("htf_strict"))
         htf_resampler_cfg.setdefault("strict", True)
         resolved["htf_resampler"] = htf_resampler_cfg
+        resolved.pop("htf_timeframes", None)
+        resolved.pop("htf_strict", None)
 
     _resolve_risk_value(
         resolved=resolved,

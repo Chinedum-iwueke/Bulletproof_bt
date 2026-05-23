@@ -166,3 +166,39 @@ def test_performance_writes_validation_and_marks_invalid_when_reconciliation_fai
     assert perf["metrics_valid"] is False
     assert validation["passed"] is False
     assert validation["errors"]
+
+
+def test_performance_validation_treats_slippage_and_spread_as_embedded_diagnostics(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_embedded_costs"
+    run_dir.mkdir()
+
+    _write_equity(run_dir / "equity.csv", [100000.0, 99940.0])
+    _write_trades(
+        run_dir / "trades.csv",
+        [
+            {
+                "pnl_price": -50.0,
+                "pnl_net": -60.0,
+                "fees_paid": 10.0,
+                "slippage": 7.0,
+                "spread_cost": 3.0,
+                "risk_amount": 100.0,
+                "r_net": -0.6,
+            }
+        ],
+    )
+    (run_dir / "fills.jsonl").write_text(
+        '{"fee": 10.0, "slippage": 7.0, "spread_cost": 3.0}\n',
+        encoding="utf-8",
+    )
+
+    report = compute_performance(run_dir)
+    write_performance_artifacts(report, run_dir)
+
+    perf = json.loads((run_dir / "performance.json").read_text(encoding="utf-8"))
+    validation = json.loads((run_dir / "performance_validation.json").read_text(encoding="utf-8"))
+    assert perf["metrics_valid"] is True
+    assert validation["passed"] is True
+    assert validation["reconciliation"]["gross_minus_cash_costs"] == pytest.approx(-60.0)
+    assert validation["reconciliation"]["diagnostic_slippage_total"] == pytest.approx(7.0)
+    assert validation["reconciliation"]["diagnostic_spread_total"] == pytest.approx(3.0)

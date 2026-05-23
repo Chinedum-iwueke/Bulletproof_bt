@@ -343,11 +343,19 @@ class TradesCsvWriter:
         "cost_drag_r",
     ]
 
-    def __init__(self, path: Path, *, run_id: str | None = None, hypothesis_id: str | None = None):
+    def __init__(
+        self,
+        path: Path,
+        *,
+        run_id: str | None = None,
+        hypothesis_id: str | None = None,
+        tier: str | None = None,
+    ):
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
         self._run_id = run_id
         self._hypothesis_id = hypothesis_id
+        self._tier = tier
         self._columns = list(type(self)._columns)
         file_exists = path.exists()
         self._file = path.open("a", encoding="utf-8", newline="")
@@ -378,6 +386,31 @@ class TradesCsvWriter:
 
     def _is_exportable_metadata_value(self, value: Any) -> bool:
         return isinstance(value, (str, int, float, bool, pd.Timestamp, Enum))
+
+    def _resolve_exit_reason(self, metadata: dict[str, Any]) -> str:
+        raw_reason = metadata.get("exit_reason")
+        if raw_reason is not None and str(raw_reason).strip():
+            return str(raw_reason).strip()
+
+        reason = metadata.get("reason")
+        if reason in {"end_of_run_flatten", "forced_liquidation"}:
+            return str(reason)
+        if metadata.get("forced_liquidation"):
+            return "forced_liquidation"
+
+        is_close = bool(metadata.get("close_only") or metadata.get("reduce_only") or metadata.get("is_exit"))
+        skip_reason = metadata.get("stop_resolution_skip_reason")
+        if is_close or skip_reason == "exit_signal":
+            exit_type = metadata.get("exit_type")
+            if exit_type is not None and str(exit_type).strip():
+                return str(exit_type).strip()
+            if skip_reason is not None and str(skip_reason).strip():
+                return str(skip_reason).strip()
+            if reason is not None and str(reason).strip():
+                return str(reason).strip()
+            return "close_only_exit"
+
+        return "unknown_exit"
 
     def _ensure_columns(self, columns: list[str]) -> None:
         new_columns = [column for column in columns if column not in self._columns]
@@ -420,6 +453,7 @@ class TradesCsvWriter:
         pnl_net = pnl_price - fees_paid
         realized_r_gross = compute_r_multiple(pnl_price, risk_amount)
         realized_r_net = compute_r_multiple(pnl_net, risk_amount)
+        exit_reason = self._resolve_exit_reason(metadata)
 
         mfe_r = None
         mae_r = None
@@ -459,7 +493,7 @@ class TradesCsvWriter:
             "identity_parameter_set_id": metadata.get("parameter_set_id"),
             "identity_symbol": trade.symbol,
             "identity_dataset_id": metadata.get("dataset_id"),
-            "identity_tier": metadata.get("tier"),
+            "identity_tier": metadata.get("tier", self._tier),
             "identity_ts_signal": metadata.get("signal_ts", trade.entry_ts),
             "identity_ts_entry_fill": trade.entry_ts,
             "identity_ts_exit_fill": trade.exit_ts,
@@ -494,7 +528,7 @@ class TradesCsvWriter:
             "path_bars_held": metadata.get("holding_period_bars_signal", metadata.get("signal_bars_held")),
             "path_holding_time_minutes": holding_period_minutes,
             "time_to_mfe_bars_signal": metadata.get("time_to_mfe_bars_signal"),
-            "exit_reason": metadata.get("exit_reason"),
+            "exit_reason": exit_reason,
             "whether_trail_activated": metadata.get("trail_activated"),
             "trail_activation_mode": metadata.get("trail_activation_mode"),
             "bars_until_trail_activation": metadata.get("bars_until_trail_activation"),

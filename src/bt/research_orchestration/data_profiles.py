@@ -71,13 +71,19 @@ def write_data_profile_config(profile: ResearchDataProfile, output_path: Path) -
     return output_path
 
 
-def preflight_research_data_profile(profile: ResearchDataProfile) -> None:
+def preflight_research_data_profile(
+    profile: ResearchDataProfile,
+    *,
+    symbols_subset: list[str] | None = None,
+    max_symbols: int | None = None,
+) -> None:
     if not profile.root.exists():
         raise FileNotFoundError(f"research_data root does not exist: {profile.root}")
     if profile.universe == "stable":
         symbols = _stable_symbols(profile)
     else:
         symbols = _volatile_symbols(profile)
+    symbols = _apply_symbol_scope(symbols, symbols_subset=symbols_subset, max_symbols=max_symbols)
     if not symbols:
         raise ValueError(f"No symbols resolved for research data profile: {profile.universe}")
     for symbol in symbols:
@@ -107,8 +113,7 @@ def _volatile_symbols(profile: ResearchDataProfile) -> list[str]:
         raise ValueError(f"volatile membership is empty: {profile.membership_path}")
     membership["ts"] = pd.to_datetime(membership["ts"], utc=True, errors="raise")
     filtered = membership[membership["exchange"].eq(profile.exchange)] if "exchange" in membership.columns else membership
-    if filtered.duplicated(["ts", "symbol"]).any():
-        raise ValueError("volatile membership contains duplicate ts/symbol rows")
+    filtered = _dedupe_volatile_membership(filtered)
     return filtered["symbol"].astype(str).drop_duplicates().tolist()
 
 
@@ -129,5 +134,46 @@ def _validate_panel_file(profile: ResearchDataProfile, symbol: str) -> None:
         if source_col in df.columns:
             source = pd.to_datetime(df[source_col], utc=True, errors="coerce")
             mask = source.notna()
-            if (source[mask] > ts[mask]).any():
-                raise ValueError(f"{source_col} exceeds bar ts in {path}")
+        if (source[mask] > ts[mask]).any():
+            raise ValueError(f"{source_col} exceeds bar ts in {path}")
+
+
+def _dedupe_volatile_membership(membership: pd.DataFrame) -> pd.DataFrame:
+    if membership.empty:
+        return membership
+    out = membership.copy()
+    out["symbol"] = out["symbol"].astype(str)
+    if "score" in out.columns:
+        out["_score"] = pd.to_numeric(out["score"], errors="coerce")
+    else:
+        out["_score"] = pd.Series(float("nan"), index=out.index, dtype="float64")
+    out["_abs_score"] = out["_score"].abs().fillna(-1.0)
+    rank_type = out["rank_type"].astype(str) if "rank_type" in out.columns else pd.Series("", index=out.index)
+    out["_side_priority"] = 1
+    out.loc[out["_score"].gt(0) & rank_type.eq("gainer"), "_side_priority"] = 0
+    out.loc[out["_score"].lt(0) & rank_type.eq("loser"), "_side_priority"] = 0
+    out.loc[out["_score"].eq(0) & rank_type.eq("gainer"), "_side_priority"] = 0
+    out["_rank"] = pd.to_numeric(out["rank"], errors="coerce").fillna(1_000_000) if "rank" in out.columns else 1_000_000
+    out = out.sort_values(
+        ["ts", "symbol", "_abs_score", "_side_priority", "_rank"],
+        ascending=[True, True, False, True, True],
+        kind="mergesort",
+    )
+    return out.drop_duplicates(["ts", "symbol"], keep="first").drop(
+        columns=["_score", "_abs_score", "_side_priority", "_rank"]
+    )
+
+
+def _apply_symbol_scope(
+    symbols: list[str],
+    *,
+    symbols_subset: list[str] | None = None,
+    max_symbols: int | None = None,
+) -> list[str]:
+    out = list(dict.fromkeys(symbols))
+    if symbols_subset is not None:
+        allowed = set(symbols_subset)
+        out = [symbol for symbol in out if symbol in allowed]
+    if max_symbols is not None and max_symbols > 0:
+        out = out[:max_symbols]
+    return out

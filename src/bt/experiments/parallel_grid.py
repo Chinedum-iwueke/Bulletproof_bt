@@ -15,6 +15,8 @@ from pathlib import Path
 from time import monotonic
 from typing import Any
 
+import yaml
+
 from bt.experiments.hypothesis_runner import execute_hypothesis_variant, resolve_phase_tiers
 from bt.experiments.manifest import decode_params, encode_params, read_manifest_csv, write_manifest_csv
 from bt.experiments.precompute_cache import PrecomputeRegistry, build_registry, stable_cache_key
@@ -707,12 +709,34 @@ def resolve_parallel_grid_data_args(args: argparse.Namespace, experiment_root: P
         stable_manifest=args.stable_manifest,
         membership_path=args.membership_path,
     )
-    preflight_research_data_profile(profile)
+    local_config_arg = getattr(args, "local_config", None)
+    symbols_subset, max_symbols = _preflight_scope_from_local_config(Path(local_config_arg) if local_config_arg else None)
+    preflight_research_data_profile(profile, symbols_subset=symbols_subset, max_symbols=max_symbols)
     override_path = write_data_profile_config(
         profile,
         (experiment_root / "summaries" / f"data_profile_{profile.universe}.yaml").resolve(),
     )
     return profile.root, [override_path]
+
+
+def _preflight_scope_from_local_config(local_config: Path | None) -> tuple[list[str] | None, int | None]:
+    if local_config is None or not local_config.exists():
+        return None, None
+    with local_config.open("r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle) or {}
+    if not isinstance(payload, dict):
+        return None, None
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None, None
+    raw_symbols = data.get("symbols_subset", data.get("symbols"))
+    symbols_subset = None
+    if isinstance(raw_symbols, str):
+        symbols_subset = [item.strip() for item in raw_symbols.split(",") if item.strip()]
+    elif isinstance(raw_symbols, list):
+        symbols_subset = [str(item).strip() for item in raw_symbols if str(item).strip()]
+    max_symbols = data.get("max_symbols")
+    return symbols_subset or None, int(max_symbols) if max_symbols else None
 
 
 def cli_build_hypothesis_manifest(argv: list[str] | None = None) -> int:

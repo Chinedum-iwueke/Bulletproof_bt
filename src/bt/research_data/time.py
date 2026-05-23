@@ -21,7 +21,10 @@ def utc_ts(value: Any) -> pd.Timestamp:
 
 def utc_series(values: Any) -> pd.Series:
     """Normalize a scalar/list/Series of timestamps to datetime64[ns, UTC]."""
-    return pd.to_datetime(values, utc=True)
+    parsed = pd.to_datetime(values, utc=True, format="mixed")
+    if isinstance(parsed, pd.Series):
+        return parsed
+    return pd.Series(parsed)
 
 
 def ms(ts: Any) -> int:

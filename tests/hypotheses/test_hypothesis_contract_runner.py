@@ -86,3 +86,15 @@ def test_runtime_override_uses_each_grid_signal_timeframe_as_only_htf_resampler(
             else:
                 assert timeframes == [signal_timeframe], path
                 assert str(override["strategy"]["timeframe"]).lower() == signal_timeframe, path
+
+
+def test_runtime_override_carries_contract_identity_for_trade_truth() -> None:
+    contract = HypothesisContract.from_yaml(Path("research/hypotheses/l1_h1c_volfloor_ema_pullback.yaml"))
+    spec = contract.to_run_specs()[0]
+
+    override = build_runtime_override(contract, spec, "Tier2")
+
+    assert override["identity"]["hypothesis_id"] == "L1-H1C"
+    assert override["identity"]["grid_id"] == spec["grid_id"]
+    assert override["identity"]["tier"] == "Tier2"
+    assert override["identity"]["strategy_id"] == "volfloor_ema_pullback"

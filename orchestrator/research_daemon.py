@@ -143,6 +143,7 @@ def merge_payload_with_defaults(payload: dict[str, Any], config: dict[str, Any],
         "run_timeout_seconds": payload.get("run_timeout_seconds", config.get("runner_run_timeout_seconds")),
         "fail_fast": payload.get("fail_fast", config.get("runner_fail_fast", False)),
         "resume_strict": payload.get("resume_strict", config.get("runner_resume_strict", True)),
+        "parallel_datasets": payload.get("parallel_datasets", config.get("runner_parallel_datasets", False)),
         "outputs_root": payload.get("outputs_root", config.get("outputs_root", "outputs")),
         "retain_top_n": payload.get("retain_top_n", config.get("retain_top_n", 2)),
         "retain_median": payload.get("retain_median", config.get("retain_median", 1)),
@@ -213,6 +214,8 @@ def build_pipeline_command(db_path: Path, merged_payload: dict[str, Any]) -> lis
         cmd.append("--fail-fast")
     if not bool(merged_payload.get("resume_strict", True)):
         cmd.append("--no-resume-strict")
+    if bool(merged_payload.get("parallel_datasets")):
+        cmd.append("--parallel-datasets")
     if merged_payload.get("stable_data"):
         cmd.extend(["--stable-data", str(merged_payload["stable_data"])])
     if merged_payload.get("vol_data"):

@@ -120,6 +120,19 @@ def test_research_panel_timeframe_does_not_override_signal_htf_resampler(
     assert all(item[1] == "15m" for item in emitted)
 
 
+def test_resolved_config_omits_legacy_htf_aliases_when_resampler_is_effective() -> None:
+    cfg = _base_config()
+    cfg["htf_timeframes"] = ["5m", "15m", "1h"]
+    cfg["htf_strict"] = True
+    cfg["htf_resampler"] = {"timeframes": ["1h"], "strict": True}
+
+    resolved = resolve_config(cfg)
+
+    assert resolved["htf_resampler"] == {"timeframes": ["1h"], "strict": True}
+    assert "htf_timeframes" not in resolved
+    assert "htf_strict" not in resolved
+
+
 def test_invalid_timeframe_raises_valueerror(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     bars_df = _bars_df(list(range(0, 6)))
     cfg = _base_config()

@@ -42,3 +42,17 @@ def test_state_discovery_identifies_rich_state_findings() -> None:
     assert "entry_state_funding_pctile" not in missing
     assert ranked["state_variable"].str.contains("funding|oi|basis", regex=True).any()
     assert ranked["finding_type"].str.contains("FUNDING|OI|BASIS", regex=True).any()
+
+
+def test_state_discovery_handles_duplicate_quantile_edges() -> None:
+    trades = pd.DataFrame(
+        {
+            "r_net": [0.1, 0.2, -0.1, 0.3],
+            "entry_state_oi_level": [0.0001, 0.0001, 0.0001, 0.0002],
+        }
+    )
+
+    metrics, missing = analyze_single_state_variables(trades, min_bucket_trades=1)
+
+    assert "entry_state_oi_level" not in missing
+    assert not metrics.empty

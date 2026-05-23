@@ -205,6 +205,7 @@ def _volatile_membership(
     membership = membership[membership["exchange"].eq(exchange)].sort_values(["ts", "symbol"])
     if membership.empty:
         raise DataError(f"No volatile membership found for exchange={exchange}")
+    membership = _dedupe_volatile_membership(membership)
     scoped_membership = _membership_overlapping_range(membership, start_ts=start_ts, end_ts=end_ts)
     symbols = scoped_membership["symbol"].astype(str).drop_duplicates().tolist()
     symbols = _apply_symbol_scope(symbols, symbols_subset=symbols_subset, max_symbols=max_symbols)
@@ -212,7 +213,7 @@ def _volatile_membership(
 
 
 def apply_volatile_membership(panels: pd.DataFrame, membership: pd.DataFrame) -> pd.DataFrame:
-    """Filter panel rows to symbols active at each timestamp."""
+    """Annotate panel rows with volatile membership while preserving exit visibility."""
     if panels.empty:
         return panels
     intervals = _membership_intervals(membership)
@@ -220,14 +221,11 @@ def apply_volatile_membership(panels: pd.DataFrame, membership: pd.DataFrame) ->
         return panels.iloc[0:0].copy()
     frames: list[pd.DataFrame] = []
     panels_by_symbol = {symbol: group for symbol, group in panels.groupby("symbol", sort=False)}
-    for row in intervals.itertuples(index=False):
-        group = panels_by_symbol.get(row.symbol)
+    for symbol, symbol_intervals in intervals.groupby("symbol", sort=False):
+        group = panels_by_symbol.get(symbol)
         if group is None:
             continue
-        mask = group["ts"].ge(row.start_ts)
-        if pd.notna(row.end_ts):
-            mask &= group["ts"].lt(row.end_ts)
-        frames.append(group.loc[mask])
+        frames.append(_annotate_frame_to_membership(group, symbol_intervals))
     if not frames:
         return panels.iloc[0:0].copy()
     filtered = pd.concat(frames, ignore_index=True)
@@ -507,7 +505,7 @@ def _iter_research_panel_bars(
         if end_ts is not None:
             frame = frame[frame["ts"].lt(end_ts)]
         if intervals is not None:
-            frame = _filter_frame_to_membership(frame, intervals)
+            frame = _annotate_frame_to_membership(frame, intervals)
         for row in frame.itertuples(index=False):
             payload = row._asdict()
             bar = _row_to_bar(payload, expected_symbol=expected_symbol, path=path, last_ts=last_ts)
@@ -581,16 +579,24 @@ def _row_to_bar(payload: dict[str, Any], *, expected_symbol: str, path: Path, la
     )
 
 
-def _filter_frame_to_membership(frame: pd.DataFrame, intervals: pd.DataFrame) -> pd.DataFrame:
-    if frame.empty:
-        return frame
+def _membership_active_mask(frame: pd.DataFrame, intervals: pd.DataFrame) -> pd.Series:
     mask = pd.Series(False, index=frame.index)
     for row in intervals.itertuples(index=False):
         interval_mask = frame["ts"].ge(row.start_ts)
         if pd.notna(row.end_ts):
             interval_mask &= frame["ts"].lt(row.end_ts)
         mask |= interval_mask
-    return frame.loc[mask]
+    return mask
+
+
+def _annotate_frame_to_membership(frame: pd.DataFrame, intervals: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    out = frame.copy()
+    active = _membership_active_mask(out, intervals)
+    out["volatile_active"] = active.astype(bool)
+    out["universe_active"] = active.astype(bool)
+    return out
 
 
 def _prepare_panel_frame(frame: pd.DataFrame, path: Path) -> pd.DataFrame:
@@ -672,6 +678,7 @@ def _assert_no_lookahead(df: pd.DataFrame) -> None:
 
 
 def _membership_intervals(membership: pd.DataFrame) -> pd.DataFrame:
+    membership = _dedupe_volatile_membership(membership)
     unique_rebalances = membership["ts"].drop_duplicates().sort_values().reset_index(drop=True)
     next_by_ts = dict(zip(unique_rebalances, unique_rebalances.shift(-1)))
     intervals = membership.copy()
@@ -696,3 +703,30 @@ def _membership_overlapping_range(
         mask &= intervals["end_ts"].isna() | intervals["end_ts"].gt(start_ts)
     active_symbols = set(intervals.loc[mask, "symbol"].astype(str))
     return membership[membership["symbol"].astype(str).isin(active_symbols)]
+
+
+def _dedupe_volatile_membership(membership: pd.DataFrame) -> pd.DataFrame:
+    if membership is None or membership.empty:
+        return membership
+    out = membership.copy()
+    out["ts"] = pd.to_datetime(out["ts"], utc=True)
+    out["symbol"] = out["symbol"].astype(str)
+    if "score" in out.columns:
+        out["_score"] = pd.to_numeric(out["score"], errors="coerce")
+    else:
+        out["_score"] = pd.Series(float("nan"), index=out.index, dtype="float64")
+    out["_abs_score"] = out["_score"].abs().fillna(-1.0)
+    rank_type = out["rank_type"].astype(str) if "rank_type" in out.columns else pd.Series("", index=out.index)
+    out["_side_priority"] = 1
+    out.loc[out["_score"].gt(0) & rank_type.eq("gainer"), "_side_priority"] = 0
+    out.loc[out["_score"].lt(0) & rank_type.eq("loser"), "_side_priority"] = 0
+    out.loc[out["_score"].eq(0) & rank_type.eq("gainer"), "_side_priority"] = 0
+    out["_rank"] = pd.to_numeric(out["rank"], errors="coerce").fillna(1_000_000) if "rank" in out.columns else 1_000_000
+    out = out.sort_values(
+        ["ts", "symbol", "_abs_score", "_side_priority", "_rank"],
+        ascending=[True, True, False, True, True],
+        kind="mergesort",
+    )
+    return out.drop_duplicates(["ts", "symbol"], keep="first").drop(
+        columns=["_score", "_abs_score", "_side_priority", "_rank"]
+    )

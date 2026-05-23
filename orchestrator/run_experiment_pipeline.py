@@ -21,6 +21,7 @@ Minimal smoke run suggestion:
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -82,6 +83,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-timeout-seconds", type=float, default=None)
     parser.add_argument("--fail-fast", action="store_true", default=False)
     parser.add_argument("--no-resume-strict", action="store_true", default=False)
+    parser.add_argument(
+        "--parallel-datasets",
+        action="store_true",
+        default=False,
+        help="Run stable and volatile dataset backtests concurrently, splitting max workers across them.",
+    )
 
     parser.add_argument("--retain-top-n", type=int, default=2)
     parser.add_argument("--retain-median", type=int, default=1)
@@ -277,6 +284,12 @@ def run_backtest(
         if universe == "volatile" and membership_path:
             cmd.extend(["--membership-path", membership_path])
     run_command(cmd, step=step, dry_run=dry_run, log_path=log_path, commands_log=commands_log, command_log_dir=command_log_dir, failure_tail_lines=failure_tail_lines, capture_logs=capture_logs)
+
+
+def split_dataset_workers(max_workers: int) -> tuple[int, int]:
+    stable_workers = max(1, max_workers // 2)
+    volatile_workers = max(1, max_workers - stable_workers)
+    return stable_workers, volatile_workers
 
 
 def run_post_analysis(
@@ -708,71 +721,148 @@ def main() -> int:
 
         db_status_update(db, pipeline_run_id, "RUNNING_BACKTESTS", commands_log)
         if not args.skip_run:
-            print("[3/8] Running stable backtest")
-            run_backtest(
-                experiment_root=stable_root,
-                manifest_path=stable_manifest,
-                config=args.config,
-                local_config=args.local_config,
-                data_path=args.stable_data,
-                data_root=args.data_root,
-                data_kind=args.data_kind,
-                exchange=args.exchange,
-                universe="stable",
-                timeframe=args.timeframe,
-                stable_manifest=args.stable_manifest,
-                membership_path=args.membership_path,
-                max_workers=args.max_workers,
-                max_workers_auto=args.max_workers_auto,
-                reserve_ram_gb=args.reserve_ram_gb,
-                max_ram_per_worker_gb=args.max_ram_per_worker_gb,
-                min_free_ram_gb=args.min_free_ram_gb,
-                run_timeout_seconds=args.run_timeout_seconds,
-                fail_fast=args.fail_fast,
-                resume_strict=not args.no_resume_strict,
-                phase=args.phase,
-                project_root=project_root,
-                dry_run=args.dry_run,
-                log_path=log_path,
-                commands_log=commands_log,
-                step="run_backtest_stable",
-                command_log_dir=command_log_dir,
-                failure_tail_lines=args.failure_tail_lines,
-                capture_logs=capture_command_logs,
-            )
+            if args.parallel_datasets:
+                stable_workers, volatile_workers = split_dataset_workers(args.max_workers)
+                print(
+                    "[3/8] Running stable and volatile backtests concurrently "
+                    f"(stable_workers={stable_workers}, volatile_workers={volatile_workers})"
+                )
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [
+                        executor.submit(
+                            run_backtest,
+                            experiment_root=stable_root,
+                            manifest_path=stable_manifest,
+                            config=args.config,
+                            local_config=args.local_config,
+                            data_path=args.stable_data,
+                            data_root=args.data_root,
+                            data_kind=args.data_kind,
+                            exchange=args.exchange,
+                            universe="stable",
+                            timeframe=args.timeframe,
+                            stable_manifest=args.stable_manifest,
+                            membership_path=args.membership_path,
+                            max_workers=stable_workers,
+                            max_workers_auto=args.max_workers_auto,
+                            reserve_ram_gb=args.reserve_ram_gb,
+                            max_ram_per_worker_gb=args.max_ram_per_worker_gb,
+                            min_free_ram_gb=args.min_free_ram_gb,
+                            run_timeout_seconds=args.run_timeout_seconds,
+                            fail_fast=args.fail_fast,
+                            resume_strict=not args.no_resume_strict,
+                            phase=args.phase,
+                            project_root=project_root,
+                            dry_run=args.dry_run,
+                            log_path=log_path,
+                            commands_log=commands_log,
+                            step="run_backtest_stable",
+                            command_log_dir=command_log_dir / "run_backtest_stable",
+                            failure_tail_lines=args.failure_tail_lines,
+                            capture_logs=capture_command_logs,
+                        ),
+                        executor.submit(
+                            run_backtest,
+                            experiment_root=volatile_root,
+                            manifest_path=volatile_manifest,
+                            config=args.config,
+                            local_config=args.local_config,
+                            data_path=args.vol_data,
+                            data_root=args.data_root,
+                            data_kind=args.data_kind,
+                            exchange=args.exchange,
+                            universe="volatile",
+                            timeframe=args.timeframe,
+                            stable_manifest=args.stable_manifest,
+                            membership_path=args.membership_path,
+                            max_workers=volatile_workers,
+                            max_workers_auto=args.max_workers_auto,
+                            reserve_ram_gb=args.reserve_ram_gb,
+                            max_ram_per_worker_gb=args.max_ram_per_worker_gb,
+                            min_free_ram_gb=args.min_free_ram_gb,
+                            run_timeout_seconds=args.run_timeout_seconds,
+                            fail_fast=args.fail_fast,
+                            resume_strict=not args.no_resume_strict,
+                            phase=args.phase,
+                            project_root=project_root,
+                            dry_run=args.dry_run,
+                            log_path=log_path,
+                            commands_log=commands_log,
+                            step="run_backtest_volatile",
+                            command_log_dir=command_log_dir / "run_backtest_volatile",
+                            failure_tail_lines=args.failure_tail_lines,
+                            capture_logs=capture_command_logs,
+                        ),
+                    ]
+                    for future in futures:
+                        future.result()
+                print("[4/8] Stable and volatile backtests completed")
+            else:
+                print("[3/8] Running stable backtest")
+                run_backtest(
+                    experiment_root=stable_root,
+                    manifest_path=stable_manifest,
+                    config=args.config,
+                    local_config=args.local_config,
+                    data_path=args.stable_data,
+                    data_root=args.data_root,
+                    data_kind=args.data_kind,
+                    exchange=args.exchange,
+                    universe="stable",
+                    timeframe=args.timeframe,
+                    stable_manifest=args.stable_manifest,
+                    membership_path=args.membership_path,
+                    max_workers=args.max_workers,
+                    max_workers_auto=args.max_workers_auto,
+                    reserve_ram_gb=args.reserve_ram_gb,
+                    max_ram_per_worker_gb=args.max_ram_per_worker_gb,
+                    min_free_ram_gb=args.min_free_ram_gb,
+                    run_timeout_seconds=args.run_timeout_seconds,
+                    fail_fast=args.fail_fast,
+                    resume_strict=not args.no_resume_strict,
+                    phase=args.phase,
+                    project_root=project_root,
+                    dry_run=args.dry_run,
+                    log_path=log_path,
+                    commands_log=commands_log,
+                    step="run_backtest_stable",
+                    command_log_dir=command_log_dir,
+                    failure_tail_lines=args.failure_tail_lines,
+                    capture_logs=capture_command_logs,
+                )
 
-            print("[4/8] Running volatile backtest")
-            run_backtest(
-                experiment_root=volatile_root,
-                manifest_path=volatile_manifest,
-                config=args.config,
-                local_config=args.local_config,
-                data_path=args.vol_data,
-                data_root=args.data_root,
-                data_kind=args.data_kind,
-                exchange=args.exchange,
-                universe="volatile",
-                timeframe=args.timeframe,
-                stable_manifest=args.stable_manifest,
-                membership_path=args.membership_path,
-                max_workers=args.max_workers,
-                max_workers_auto=args.max_workers_auto,
-                reserve_ram_gb=args.reserve_ram_gb,
-                max_ram_per_worker_gb=args.max_ram_per_worker_gb,
-                min_free_ram_gb=args.min_free_ram_gb,
-                run_timeout_seconds=args.run_timeout_seconds,
-                fail_fast=args.fail_fast,
-                resume_strict=not args.no_resume_strict,
-                phase=args.phase,
-                project_root=project_root,
-                dry_run=args.dry_run,
-                log_path=log_path,
-                commands_log=commands_log,
-                step="run_backtest_volatile",
-                command_log_dir=command_log_dir,
-                failure_tail_lines=args.failure_tail_lines,
-                capture_logs=capture_command_logs,
-            )
+                print("[4/8] Running volatile backtest")
+                run_backtest(
+                    experiment_root=volatile_root,
+                    manifest_path=volatile_manifest,
+                    config=args.config,
+                    local_config=args.local_config,
+                    data_path=args.vol_data,
+                    data_root=args.data_root,
+                    data_kind=args.data_kind,
+                    exchange=args.exchange,
+                    universe="volatile",
+                    timeframe=args.timeframe,
+                    stable_manifest=args.stable_manifest,
+                    membership_path=args.membership_path,
+                    max_workers=args.max_workers,
+                    max_workers_auto=args.max_workers_auto,
+                    reserve_ram_gb=args.reserve_ram_gb,
+                    max_ram_per_worker_gb=args.max_ram_per_worker_gb,
+                    min_free_ram_gb=args.min_free_ram_gb,
+                    run_timeout_seconds=args.run_timeout_seconds,
+                    fail_fast=args.fail_fast,
+                    resume_strict=not args.no_resume_strict,
+                    phase=args.phase,
+                    project_root=project_root,
+                    dry_run=args.dry_run,
+                    log_path=log_path,
+                    commands_log=commands_log,
+                    step="run_backtest_volatile",
+                    command_log_dir=command_log_dir,
+                    failure_tail_lines=args.failure_tail_lines,
+                    capture_logs=capture_command_logs,
+                )
             if db is not None:
                 if stable_experiment_id:
                     db.update_experiment_status(stable_experiment_id, "RUN_COMPLETE")
