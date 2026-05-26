@@ -1,0 +1,181 @@
+hypothesis_id: "L7-H1"
+title: "CSI-Gated Displacement Trend"
+description: "Large trend outliers occur predominantly when a composite Constraint-forcing Signal Index (CSI) indicates proximity to constraint-forced flow and a first displacement bar appears."
+research_layer: "L7"
+hypothesis_family: "trend_displacement"
+version: "1.0.0"
+author: "bulletproof_bt"
+created_at: "2026-05-26T00:00:00Z"
+
+required_indicators:
+  - atr
+  - true_range
+  - historical_vol
+
+indicator_defaults:
+  atr_period: 14
+  displacement_formula: "D_t = TR_t / ATR_14(t-1)"
+  vol_spread_formula: "S_t = 0.5*(high-low)/close"
+  basis_lookback_days: 30
+  rv_formula: "atr_14 / close"
+
+# Regime and gating
+gates:
+  - field: "D_t"
+    op: ">="
+    param: "d0"
+  - field: "CSI"
+    op: ">="
+    param: "theta"
+
+# CSI composition: computed per-signal bar and normalized to [0,1]
+csi:
+  components:
+    - name: "funding_pct"
+      source: "funding"
+      fallback: "basis_pct"
+      description: "funding percentile in lookback; fallback to perp-spot basis percentile if funding missing"
+    - name: "oi_z"
+      source: "open_interest"
+      fallback: "volume_z"
+      description: "OI z-score acceleration; fallback to perp volume z if OI absent"
+    - name: "D_t"
+      source: "displacement"
+    - name: "S_t"
+      source: "spread_proxy"
+      transform: "rank_desc" # higher S_t -> larger liquidity stress -> lower CSI contribution
+  weights:
+    funding_pct: 0.35
+    oi_z: 0.25
+    D_t: 0.30
+    S_t: 0.10
+  normalization: "minmax"  # normalize composite to [0,1]
+
+parameter_grid:
+  signal_timeframe: ["15m", "1h"]
+  d0: [1.8, 2.2]
+  theta: [0.7, 0.8]
+  theta_low: [0.45, 0.55]
+  k_stop: [3, 4]
+  k_trail: [3, 5]
+  k_atr: [3.0]
+  T_hold: [48]
+  tp_enabled: [false]
+  r_per_trade: [0.01]
+
+entry:
+  strategy: "l7_h1_csi_gated_displacement_trend"
+  signal_timeframe: "15m"
+  timeframe: "15m"
+  base_execution_timeframe: "1m"
+  order_timing: "bar_close_submit_next_bar_execution"
+  disallow_flip: true
+  entry_logic: |
+    - compute D_t using closed bar TR / ATR_14(t-1)
+    - compute CSI from components and normalization
+    - if D_t >= d0 and CSI >= theta then:
+        - if displacement direction > 0 then long else short
+
+exit:
+  stop_kind: "chandelier_trail"
+  stop_model: "atr_multiple_trail"
+  trail_atr_param: "k_trail"
+  fixed_stop_atr_param: "k_stop"
+  stop_update_policy: "trailing"
+  time_stop_param: "T_hold"
+  hold_time_unit: "signal_bars"
+  exhaustion_exit:
+    enabled: true
+    csi_low_param: "theta_low"
+    csi_low_bars: 3
+
+execution_semantics:
+  signal_timeframe: "15m"
+  base_execution_timeframe: "1m"
+  exit_monitoring_timeframe: "1m"
+  base_data_frequency_expected: "1m"
+  stop_model: "chandelier_trail"
+  stop_update_policy: "trailing"
+  tp_update_policy: "frozen_at_entry"
+  hold_time_unit: "signal_bars"
+  atr_source_timeframe: "signal_timeframe"
+
+sizing:
+  mode: "constant_r"
+  formula_lines:
+    - "risk_amount_t = equity_t * r_per_trade"
+    - "stop_distance = k_stop * ATR_14(t-1)"
+    - "qty = risk_amount_t / stop_distance"
+
+risk_controls:
+  max_positions: 5
+  forbid_pyramiding_until_plus_r: 1
+  margin_buffer_tier_min: "Tier2"
+
+logging:
+  schema_version: "1.0"
+  required_fields:
+    - run_id
+    - hypothesis_id
+    - tier
+    - symbol
+    - interval
+    - timestamp
+    - position_side
+    - entry_price
+    - entry_time
+    - exit_price
+    - exit_time
+    - qty
+    - risk_amount
+    - stop_distance
+    - stop_model
+    - trailing_stop
+    - D_t
+    - ATR_14
+    - CSI
+    - funding_pct
+    - basis_pct
+    - oi_z
+    - volume_z
+    - S_t
+    - entry_reason
+    - exit_reason
+    - hold_duration_bars
+    - ev_r_gross
+    - ev_r_net
+    - max_drawdown
+    - state_vector   # compact snapshot of feature vector for ML
+  ml_features:
+    - name: "CSI"
+    - name: "D_t"
+    - name: "ATR_14"
+    - name: "S_t"
+    - name: "oi_z"
+    - name: "funding_pct"
+
+evaluation:
+  required_tiers: ["Tier2", "Tier3"]
+  metrics:
+    - count_over_10R
+    - max_R
+    - right_tail_CCDF_slope
+    - ev_r_tier2
+    - drawdown_duration
+    - capacity_proxy
+  promotion_criteria:
+    - "Tier2 EV_r_net > 0 and count_over_10R >= 3"
+    - "Tier3 preserves max_R shape (stress survivability)"
+
+data_requirements:
+  sources_available: ["ohlcv", "mark", "index", "funding", "oi", "volume"]
+  notes: "No liquidation data currently available; basis requires index (perp-spot)."
+
+notes:
+  falsification_criteria:
+    - "If Tier2 has ~0 trades >=10R, CSI fails to capture forced flow — scrap or rebuild CSI."
+    - "If winners are explained entirely by elevated ATR without CSI improvement, CSI is a volatility proxy only."
+  failure_modes:
+    - "Funding timestamp leakage causing label contamination"
+    - "CSI correlated with volatility but not with constraint flows"
+    - "Insufficient spot/index data for basis calculation on some symbols"

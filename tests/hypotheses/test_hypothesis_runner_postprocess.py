@@ -49,3 +49,34 @@ def test_execute_hypothesis_variant_runs_full_postprocessing(monkeypatch, tmp_pa
         "build_run_segment_rollups:l1_h1_vol_floor_trend",
         "write_artifacts_manifest:l1_h1_vol_floor_trend",
     ]
+
+
+def test_volatile_research_panel_runtime_control_caps_chunksize(tmp_path: Path) -> None:
+    profile = tmp_path / "data_profile_volatile.yaml"
+    profile.write_text(
+        "data:\n"
+        "  dataset_kind: research_panel\n"
+        "  universe: volatile\n"
+        "  chunksize: 5000\n",
+        encoding="utf-8",
+    )
+    runtime_override = {"data": {"exit_timeframe": "1m"}}
+
+    hypothesis_runner.apply_runtime_data_memory_controls(runtime_override, [str(profile)])
+
+    assert runtime_override["data"]["chunksize"] == hypothesis_runner.DEFAULT_VOLATILE_RESEARCH_PANEL_CHUNKSIZE
+
+
+def test_stable_research_panel_runtime_control_leaves_chunksize_unchanged(tmp_path: Path) -> None:
+    profile = tmp_path / "data_profile_stable.yaml"
+    profile.write_text(
+        "data:\n"
+        "  dataset_kind: research_panel\n"
+        "  universe: stable\n",
+        encoding="utf-8",
+    )
+    runtime_override = {"data": {"chunksize": 5000}}
+
+    hypothesis_runner.apply_runtime_data_memory_controls(runtime_override, [str(profile)])
+
+    assert runtime_override["data"]["chunksize"] == 5000

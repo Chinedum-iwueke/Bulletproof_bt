@@ -24,6 +24,7 @@ from bt.research_data.fetching.orchestration import fetch_backfill
 from bt.research_data.instruments import write_instrument_manifest, write_stable_universe
 from bt.research_data.jobs.build_panel import build_panels
 from bt.research_data.jobs.build_universe import build_volatile_universe
+from bt.research_data.jobs.materialize import materialize_volatile_panel
 from bt.research_data.storage import ResearchDataStore
 
 
@@ -94,6 +95,15 @@ def main() -> int:
         panel_symbols = sorted(set(stable_symbols) | set(membership_symbols))
         log(f"{exchange} building canonical panels symbols={len(panel_symbols)}")
         build_panels(exchange, panel_symbols, args.timeframe, store)
+        log(f"{exchange} materializing active volatile panel symbols={len(membership_symbols)}")
+        path = materialize_volatile_panel(
+            exchange,
+            args.timeframe,
+            start=args.volatile_start,
+            end=args.end,
+            store=store,
+        )
+        log(f"{exchange} materialized active volatile panel path={path}")
 
     log(f"{exchange} research_data bootstrap complete")
     return 0

@@ -5,9 +5,11 @@ import argparse
 import csv
 import gc
 import hashlib
+import inspect
 import json
 import multiprocessing
 import os
+import shutil
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timezone
@@ -36,6 +38,9 @@ from bt.research_orchestration.data_profiles import (
     resolve_data_profile,
     write_data_profile_config,
 )
+
+
+_PROCESS_POOL_SUPPORTS_MAX_TASKS = "max_tasks_per_child" in inspect.signature(ProcessPoolExecutor).parameters
 
 
 def _utc_now() -> str:
@@ -272,6 +277,8 @@ def _execute_manifest_row(
     precompute_registry: dict[str, dict[str, Any]],
 ) -> tuple[int, str]:
     run_dir = Path(experiment_root) / row["output_dir"]
+    if run_dir.exists():
+        shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     run_started_at = _utc_now()
     atomic_write_json(
@@ -499,13 +506,28 @@ def run_hypothesis_manifest_in_parallel(
     else:
         ctx = multiprocessing.get_context("spawn")
         wave_size = resolve_wave_size(max_workers=max_workers)
+        if not _PROCESS_POOL_SUPPORTS_MAX_TASKS:
+            # Older Python builds cannot recycle workers within one pool. Keep
+            # each wave to one task per worker so the pool exits between waves
+            # and releases allocator state before the next batch of runs.
+            wave_size = max_workers
         failure_records: list[dict[str, Any]] = []
         completed_count = 0
         skipped_count = len([row for row in status_rows if row["status"] == "SKIPPED"])
         total_count = skipped_count + len(launch_rows)
         for wave_idx, wave_rows in enumerate(iter_waves(launch_rows, wave_size=wave_size), start=1):
             wait_for_memory(min_free_ram_gb=min_free_ram_gb, logger=lambda msg: print(f"[resource] {msg}", flush=True))
-            with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
+            # Recycle workers after each manifest row when the local Python
+            # runtime supports it. Volatile research-panel runs can legitimately
+            # build large per-run state and pandas/pyarrow allocators do not
+            # always return freed memory to the OS inside a long-lived process.
+            # Process recycling is semantics-neutral: each row is already an
+            # isolated deterministic backtest with its own config and artifact
+            # directory.
+            pool_kwargs: dict[str, Any] = {"max_workers": max_workers, "mp_context": ctx}
+            if _PROCESS_POOL_SUPPORTS_MAX_TASKS:
+                pool_kwargs["max_tasks_per_child"] = 1
+            with ProcessPoolExecutor(**pool_kwargs) as executor:
                 future_context: dict[Any, dict[str, Any]] = {}
                 for row in wave_rows:
                     started_at = _utc_now()

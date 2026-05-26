@@ -3305,6 +3305,773 @@ Definition of done:
 - first-client smoke test can run from upload through share link
 - failure states are visible, retryable, or intentionally terminal
 
+## Production Deployment Plan For First 100 Users
+
+This section defines the practical launch architecture for the first real users. The goal is not enterprise scale yet. The goal is a boring, defensible production setup that protects user evidence, runs analyses reliably, charges correctly, and avoids amateur contradictions such as local-only paths in production, missing database tables, unsigned webhooks, broken exports, or diagnostics that depend on unavailable workers.
+
+Target deployment stack:
+
+- **Web app:** `invariance_research` on Vercel.
+- **Database:** Supabase managed Postgres.
+- **Object storage:** Cloudflare R2 through the app's S3-compatible object-storage adapter.
+- **Analysis/export workers:** locally hosted containers controlled by the operator, connected to the same Supabase Postgres and R2 bucket.
+- **Engine:** `bulletproof_bt` packaged inside the worker container and called through the versioned Python bridge.
+- **Billing:** Stripe Checkout, Customer Portal, signed webhooks, and internal entitlement snapshots.
+- **Email:** verified transactional provider for auth, billing events where needed, Research Desk requests, and operational notifications.
+
+### Deployment Principles
+
+1. **The web app is stateless.**
+   Vercel must not rely on local filesystem persistence, workstation paths, long-running workers, or embedded engine state. It owns request handling, auth, upload inspection, analysis creation, report/share views, billing routes, and admin surfaces.
+
+2. **Workers are the only long-running compute surface.**
+   Analysis and export jobs should be processed by explicitly launched containers, not by Vercel request lifetimes. Embedded workers may remain a local development convenience, but production should use external workers with heartbeat records.
+
+3. **Supabase Postgres is production source of truth.**
+   SQLite remains local development and test-only. Production must not call SQLite repositories. Every route reachable in production must go through provider-aware repositories or the shared core repository contract.
+
+4. **R2 is source of truth for uploaded and generated files.**
+   Uploads, report exports, report snapshots where materialized, benchmark manifests, benchmark datasets, and derived artifacts must not depend on local storage. Worker containers may use local scratch space only as cache.
+
+5. **Evidence privacy beats convenience.**
+   Public shares default to no raw trade files, no account ids, no owner ids, no private storage keys, no raw engine payloads, and no PII. Report exports and Research Desk packets can contain more detail only for authenticated owner/admin flows.
+
+6. **Billing never grants trust by implication.**
+   Stripe plan rights control access and limits, but evidence sufficiency controls diagnostic truth. A Pro user with a weak artifact still receives limited diagnostics. A Free user with a strong artifact may see evidence support but not paid export/share rights.
+
+7. **Every operational failure needs a visible state.**
+   Missing worker, failed export, failed engine import, invalid benchmark library, Stripe webhook failure, R2 write failure, email failure, and stale schema state must appear in admin health or job state. Silent failure is unacceptable.
+
+### Production Architecture
+
+```text
+Browser
+  |
+  v
+Vercel / Next.js
+  |-- auth/session routes
+  |-- upload inspection and artifact records
+  |-- analysis creation and queue records
+  |-- report/share/export APIs
+  |-- billing and webhook routes
+  |-- admin ops and health
+  |
+  +--> Supabase Postgres
+  |      |-- users/accounts/subscriptions/entitlements
+  |      |-- artifacts/analyses/jobs/exports/shares
+  |      |-- evidence events/rate limits/audit logs
+  |
+  +--> Cloudflare R2
+         |-- uploads/{account}/{artifact}
+         |-- reports/{account}/{analysis}/{export}
+         |-- benchmarks/manifest.v1.yaml
+         |-- benchmarks/{benchmark_id}/daily.parquet
+
+Local Worker Host
+  |
+  +--> analysis-worker container
+  |      |-- polls Supabase analysis_jobs
+  |      |-- downloads artifacts from R2
+  |      |-- calls Python bridge
+  |      |-- runs bulletproof_bt diagnostics
+  |      |-- writes analysis result to Supabase
+  |      |-- emits evidence events and heartbeat
+  |
+  +--> export-worker container
+         |-- polls Supabase export_jobs
+         |-- renders PDF/Markdown/JSON from report snapshot
+         |-- writes export artifact to R2
+         |-- updates job/export state and heartbeat
+```
+
+### Environment Separation
+
+Production, staging, and local development must be distinct.
+
+| Environment | Web | DB | Storage | Workers | Purpose |
+| --- | --- | --- | --- | --- | --- |
+| Local dev | local Next.js | SQLite by default | local object storage | embedded or local worker | fast iteration |
+| Local prod-like | local Next.js | Supabase staging | R2 staging bucket | local containers | pre-launch smoke test |
+| Staging | Vercel preview/staging | Supabase staging | R2 staging bucket | local/staging containers | release candidate validation |
+| Production | Vercel production | Supabase production | R2 production bucket | production worker containers | first 100 users |
+
+Hard rules:
+
+- production Vercel must set `DATABASE_PROVIDER=postgres`
+- local SQLite must never point at production object storage
+- staging and production must use separate Supabase projects or at minimum separate databases/schemas
+- staging and production must use separate R2 buckets or prefixes
+- Stripe test mode must never write production entitlements
+- Stripe live mode must never run against staging callbacks
+- `APP_URL`, cookie domain, webhook endpoints, and OAuth/email callback URLs must be environment-specific
+
+### Vercel Web App Checklist
+
+Required configuration:
+
+- `DATABASE_PROVIDER=postgres`
+- Supabase connection string for server-side Postgres access
+- R2/S3-compatible object storage credentials
+- Stripe secret key and webhook secret
+- email provider credentials
+- `APP_URL` matching the deployed production origin
+- `ADMIN_EMAILS` for controlled admin bootstrap
+- rate limits enabled
+- embedded workers disabled for production unless explicitly running a tiny temporary single-node pilot
+
+Vercel responsibilities:
+
+- serve public pages, authenticated app pages, report/share pages, and admin pages
+- handle signup, login, verification, password reset, and sessions
+- accept uploads through intake API, validate size/type, store artifacts in R2, and create artifact records
+- create analysis/export jobs in Supabase
+- expose health/admin state without leaking secrets
+- process Stripe webhooks idempotently
+- render share views from immutable snapshots
+
+Vercel must not:
+
+- run long analysis jobs inside request handlers
+- depend on `/home/...`, `/tmp` as durable storage, or local benchmark files
+- import `bulletproof_bt` directly into the web runtime
+- expose raw engine payloads or raw private artifacts through share routes
+- create entitlements directly from client-submitted plan ids
+
+### Supabase Postgres Plan
+
+Production Postgres must be treated as a managed operational dependency, not a convenience database.
+
+Required database practices:
+
+- use a migration discipline before launch; startup schema initialization can remain a safety net but not the only deployment mechanism
+- run migrations against staging first, then production
+- every production table needed by app routes must exist before traffic:
+  - users, accounts, sessions/auth tokens
+  - user roles and admin roles
+  - subscriptions and entitlement snapshots
+  - usage snapshots
+  - artifacts and analyses
+  - analysis jobs and export jobs
+  - exports and report snapshots
+  - share tokens and share access events
+  - evidence events and audit logs
+  - Research Desk requests/addenda/learning events
+  - rate limit buckets
+  - webhook events
+  - worker heartbeats
+- add indexes for owner/account scoped reads, analysis lookup, job polling, share token lookup, webhook idempotency, and rate-limit buckets
+- use SSL-required connections
+- use connection pooling appropriate for Vercel serverless; avoid connection storms
+- set statement timeout for web requests where possible
+- workers can use longer timeouts than web routes, but job leases must prevent duplicate processing
+- enable automated backups and point-in-time recovery
+- define restore drill before first paid user
+
+Supabase security stance:
+
+- do not expose service-role credentials to browser code
+- use server-only environment variables for Postgres
+- if Supabase client/RLS is introduced later, keep raw artifact/report access server mediated
+- audit any direct SQL route for tenant scoping by `account_id`
+- admin routes require both authenticated session and DB/admin allowlist role
+
+### Cloudflare R2 Storage Plan
+
+R2 is the production object store for private evidence and generated deliverables.
+
+Required bucket layout:
+
+```text
+uploads/{account_id}/{artifact_id}/{safe_file_name}
+reports/{account_id}/{analysis_id}/{export_id}/{safe_file_name}
+report-snapshots/{account_id}/{analysis_id}/{snapshot_id}.json   # optional materialized copy
+benchmarks/manifest.v1.yaml
+benchmarks/BTC/daily.parquet
+benchmarks/SPY/daily.parquet
+benchmarks/DXY/daily.parquet
+benchmarks/XAUUSD/daily.parquet
+```
+
+Required storage controls:
+
+- bucket is private
+- public bucket listing disabled
+- no raw upload object is served directly to unauthenticated users
+- all downloads are mediated by authenticated API routes or short-lived signed URLs with account ownership checks
+- object keys include account and artifact/export identifiers
+- object metadata stores content type, size, checksum, and created timestamp where possible
+- app DB records store storage key, checksum, byte size, and content type
+- deletion policy defines tombstone versus hard delete behavior
+- export retention is enforced by cleanup jobs
+- R2 access keys are scoped to the exact bucket where possible
+- rotate R2 credentials before public launch and after any exposure suspicion
+
+Benchmark library controls:
+
+- benchmark manifest cache does not equal dataset availability
+- production benchmark datasets must exist in R2, not on the developer machine
+- weekly benchmark update job writes manifest and dataset files to R2
+- benchmark health checks must validate both manifest and dataset presence
+- if benchmark data is missing, the app must disable benchmark comparison and show a clear limitation rather than fail the analysis
+
+### Local Worker Container Plan
+
+Workers can be locally hosted for launch as long as they are operationally disciplined.
+
+Required containers:
+
+- `analysis-worker`
+- `export-worker`
+
+Both containers must:
+
+- use the same `DATABASE_PROVIDER=postgres` and Supabase production connection as the web app
+- use the same R2 production credentials as the web app
+- set `WORKER_MODE=external`
+- set explicit worker ids
+- emit heartbeat records
+- use job leases and retries
+- fail jobs with structured errors
+- enforce maximum job runtime
+- expose logs to a durable local logging target
+- restart automatically through systemd, Docker Compose restart policy, or another supervisor
+- run under least-privilege host user
+- never mount broad host directories containing unrelated secrets
+
+Analysis worker must:
+
+- include the exact `bulletproof_bt` package version expected by the app contract
+- run the Python bridge probe successfully before accepting jobs
+- have deterministic seeds for stochastic diagnostics where applicable
+- enforce max upload/job size from plan and system config
+- write diagnostic limitations instead of crashing on missing optional context
+- report engine import failure, timeout, malformed artifact, and unsupported artifact as different states
+
+Export worker must:
+
+- render PDF/Markdown/JSON from report snapshots, not mutable live analysis objects
+- write exports to R2
+- update export job progress
+- fail closed if snapshot is missing or account ownership cannot be proven
+- ensure exported PDF includes limitations, evidence coverage, and report identity
+
+Operational minimum for local workers:
+
+- one machine with stable network and power
+- daily restart policy tested
+- disk space alert for logs/cache
+- worker heartbeat visible in admin health
+- manual runbook for restarting workers
+- manual runbook for replaying failed jobs safely
+- no analysis job is considered "lost"; queued, processing, failed, dead-letter, and completed are all visible
+
+### Stripe Billing Hardening
+
+Stripe is a trust boundary. Client-side plan selection is only a request; server-side Stripe events and internal entitlement mapping are the source of truth.
+
+Required launch setup:
+
+- create products/prices for:
+  - Individual: `$39/mo`
+  - Pro: `$99/mo`
+  - Team: `$399/mo` only if Team remains visible at launch; otherwise keep product disabled/deferred
+  - Research Desk: project-based quote path, not self-serve subscription unless later needed
+- map Stripe price ids to internal canonical plan ids on the server
+- never accept arbitrary plan ids or price ids from the browser without server allowlist validation
+- use Stripe Checkout for subscription creation
+- use Stripe Customer Portal for upgrades, cancellation, and payment-method management
+- process webhooks with signature verification using `STRIPE_WEBHOOK_SECRET`
+- persist Stripe event ids and process webhooks idempotently
+- handle at minimum:
+  - `checkout.session.completed`
+  - `customer.subscription.created`
+  - `customer.subscription.updated`
+  - `customer.subscription.deleted`
+  - `invoice.payment_succeeded`
+  - `invoice.payment_failed`
+  - `customer.updated` where needed
+- define grace behavior for failed payment:
+  - keep account active during Stripe grace period if subscription remains active/past_due
+  - restrict export/share creation when subscription is canceled/unpaid beyond grace
+  - never delete user evidence because of payment failure without retention notice
+- admin override must be explicit, audited, and visible on account admin page
+- all admin/test emails can be granted highest-tier rights for testing, but that bypass must be server-side and audited
+
+Stripe launch tests:
+
+- test checkout for Individual and Pro
+- test portal cancellation
+- test plan upgrade/downgrade
+- test failed invoice event
+- test duplicate webhook event
+- test webhook event arriving before user refreshes account page
+- test account entitlement snapshot after each event
+- test that paid plan unlocks billing rights but does not override evidence-limited diagnostics
+
+### Authentication, Email, And Account Safety
+
+Required:
+
+- verified production email sender domain
+- signup verification path works or verification requirement is disabled intentionally for beta
+- password reset works in production
+- auth cookies use secure settings in production
+- session secret is strong and rotated if exposed
+- login/register/forgot-password endpoints are rate-limited
+- user-facing auth errors are clear but do not leak account existence unnecessarily
+- admin accounts are role-gated, not just path-gated
+- admin bootstrap allowlist is removed or kept minimal after first launch
+
+Email deliverability:
+
+- SPF, DKIM, and DMARC configured
+- email provider dashboard monitored during first launch
+- verification and reset emails tested on Gmail and at least one non-Gmail provider
+- Research Desk request emails do not include raw artifact contents
+
+### Security And Privacy Baseline
+
+Threats to control before first users:
+
+| Threat | Control |
+| --- | --- |
+| Oversized upload / memory pressure | content-length guard, per-plan max file size, parser limits, route rate limits |
+| ZIP abuse | JS-based extraction, file count/size limits, reject path traversal, ignore unsupported files visibly |
+| Cross-tenant data leak | account ownership checks on artifacts, analyses, exports, shares, Research Desk packets |
+| Public share leak | redacted report projection, no raw files, no owner ids, no private storage keys, revoked/expired fail closed |
+| Stripe spoofing | webhook signature verification, price allowlist, idempotent webhook event storage |
+| Admin abuse | role checks, audit logs, least privilege, admin event visibility |
+| Worker compromise | separate worker secrets, no public inbound access required, restartable containers, scoped R2 keys |
+| DB credential exposure | server-only env vars, rotation plan, no credentials in client bundle or logs |
+| Object-store credential exposure | scoped R2 keys, no key logging, rotation plan |
+| Engine crash or malformed output | structured error envelopes, job failure states, retry/dead-letter behavior |
+| Benchmark data absence | object-storage materialization, health checks, graceful benchmark-disabled state |
+| Report overclaiming | diagnostic honesty model, limitation ledger, evidence/plan lock separation |
+
+Security launch gates:
+
+- no raw secrets in git history or logs
+- dependency audit reviewed for critical issues
+- all public share routes manually tested for redaction
+- all admin routes manually tested as non-admin
+- all API routes that mutate state require session or signed webhook verification
+- rate limits verified in staging
+- object keys are not guessable download URLs
+- CORS is restricted to intended origins where applicable
+- CSP and security headers are reviewed before launch
+
+### Observability And Admin Operations
+
+Admin health must show:
+
+- database provider and connectivity
+- migration/schema readiness
+- R2 connectivity and write/read probe
+- benchmark manifest and dataset health
+- analysis queue depth and oldest queued job age
+- export queue depth and oldest queued job age
+- analysis worker heartbeat and stale threshold
+- export worker heartbeat and stale threshold
+- engine bridge probe state
+- Stripe config and webhook status
+- email provider config and last send status
+- rate-limit event volume
+- failed jobs, dead-letter jobs, and retry counts
+
+Logs should include:
+
+- request id where available
+- account id and analysis id for authenticated operations
+- no raw uploaded content
+- no full share token
+- no Stripe secret values
+- no R2 secret values
+- no private report payloads except in controlled debug fixtures
+
+Minimum alerts for launch:
+
+- worker heartbeat stale
+- analysis queue oldest job above threshold
+- export queue oldest job above threshold
+- repeated engine failures
+- R2 write/read failure
+- Supabase connection failure
+- Stripe webhook verification failure
+- email send failure
+- high 500 rate on Vercel
+- repeated rate-limit abuse
+
+### Release And Migration Procedure
+
+Every production release should follow this order:
+
+1. Merge code only after typecheck, build, and focused contract tests pass.
+2. Apply database migrations to staging.
+3. Deploy Vercel preview/staging.
+4. Start staging workers against staging Supabase and staging R2.
+5. Run smoke tests:
+   - signup/login
+   - upload trade CSV
+   - upload reference ZIP bundle
+   - create analysis
+   - worker processes analysis
+   - open Overview, Monte Carlo, Prop Evaluation, Report
+   - export PDF
+   - create/revoke share link
+   - submit Research Desk request
+   - verify admin ops pages
+6. Apply migrations to production.
+7. Deploy Vercel production.
+8. Start or restart production workers.
+9. Run production smoke test with an internal admin account.
+10. Check admin health for green/degraded states.
+11. Only then invite external users.
+
+Rollback rule:
+
+- If a release breaks auth, upload, report, share, billing, or tenant isolation, rollback the Vercel deployment immediately.
+- If a migration is irreversible, do not deploy it without backup verification and a forward-fix plan.
+- If workers fail but web app remains stable, pause analysis creation or show maintenance state rather than accepting invisible jobs.
+
+### Data Retention, Deletion, And Backups
+
+Launch retention policy should be explicit in product copy and internal runbooks.
+
+Minimum policy:
+
+- uploaded artifacts retained according to plan unless user deletes account or requests deletion
+- report exports expire after configured retention period
+- share access logs retained for security/audit window
+- Research Desk packets retained as long as needed for service delivery and audit
+- deleted user/account records should remove or tombstone private artifacts according to legal/privacy policy
+- benchmark datasets are product data, not user data
+
+Backup plan:
+
+- Supabase automated backups enabled before first user
+- R2 bucket versioning or lifecycle policy considered for critical generated artifacts
+- monthly restore drill once beta begins
+- manual export of schema and environment inventory before launch
+- backup access limited to operator/admin
+
+### First 100 Users Capacity Assumptions
+
+The first 100 users do not require massive infrastructure, but they do require predictable behavior.
+
+Baseline assumptions:
+
+- 100 registered users
+- 20 to 40 monthly active users initially
+- 2 to 3 analyses/month on Free users
+- 25 analyses/month on Individual users
+- 100 analyses/month on Pro users
+- most files under 10MB; paid users may submit 25MB to 50MB bundles
+- analysis jobs are CPU-bound and should queue gracefully
+- report/export jobs are lower CPU but must not starve analysis jobs
+
+Capacity controls:
+
+- enforce per-plan monthly analysis quotas
+- enforce per-plan upload size
+- enforce route rate limits
+- set analysis worker concurrency conservatively at first
+- separate analysis worker and export worker containers
+- use priority processing by plan only after correctness is proven
+- expose queue wait state to users
+- route oversized, unusual, or ambiguous bundles to Research Desk rather than pretending self-serve can handle everything
+
+Suggested launch worker setup:
+
+- one production `analysis-worker` container with concurrency `1`
+- one production `export-worker` container with concurrency `1`
+- external supervisor with auto-restart
+- manual scale path: add another analysis worker only after duplicate-claim/job-lock behavior is verified
+
+### First-User Launch Checklist
+
+No external user should be invited until all items below are true.
+
+Product:
+
+- homepage, pricing, lab docs, signup, login, new analysis, analysis library, report, export, share, billing, and Research Desk pages render in production
+- public copy does not expose internal design notes
+- upload docs match accepted formats and current self-serve limits
+- reference bundle uploads successfully in production
+- eligibility summary updates when runtime prop rules are entered
+- diagnostics clearly distinguish available, evidence-limited, plan-locked, and Research Desk scope
+- report export is polished enough to be shared
+- share view is recipient-safe
+
+Infrastructure:
+
+- Vercel production build passes
+- Supabase production schema is migrated and verified
+- R2 production bucket has write/read probe passing
+- benchmark manifest and datasets exist in R2
+- weekly benchmark update workflow is configured
+- workers are running externally and heartbeats are fresh
+- engine bridge probe is healthy in worker environment
+- production admin health page is usable
+
+Security:
+
+- rate limits enabled
+- upload size guard enabled
+- Stripe webhooks signed and idempotent
+- admin access tested as admin and non-admin
+- share revoke/expiry tested
+- object storage private by default
+- no raw uploaded artifacts public by default
+- secrets rotated from any local/testing exposure
+
+Billing:
+
+- Stripe live products/prices configured
+- test-mode end-to-end billing already passed
+- live-mode checkout smoke tested with internal account
+- Customer Portal works
+- entitlements update from webhook, not just return URL
+- failed-payment behavior defined
+- admin override visible and audited
+
+Operations:
+
+- runbook exists for worker restart
+- runbook exists for failed analysis/export job
+- runbook exists for production rollback
+- runbook exists for user deletion/export request
+- support email/contact path works
+- first-client onboarding script exists
+
+### Current Infrastructure Gap Analysis Against Phase 8
+
+This audit reflects the current `invariance_research` infrastructure shape: Vercel web app already deployed once, Supabase Postgres connected, Cloudflare R2 connected, local worker Compose files present under `invariance_research/deploy`, and Stripe integration started but not hardened.
+
+#### What Already Exists
+
+| Area | Current state | Production interpretation |
+| --- | --- | --- |
+| Web hosting | Vercel app can build/deploy and connect to Supabase/R2. | Good launch target, but must remain stateless and must not run embedded workers in production. |
+| Persistence | SQLite for local dev and Postgres provider for production both exist. | Correct architecture, but all production health/report paths must be provider-aware; any SQLite call under `DATABASE_PROVIDER=postgres` is a launch blocker. |
+| Queueing | DB-backed analysis/export queues, retry metadata, worker heartbeats, admin job/export views. | Good enough for first 100 users if worker concurrency stays conservative and stale-job recovery is monitored. |
+| Workers | `analysis-worker` and `export-worker` entrypoints and Docker Compose deployment exist. | Viable first-user shape after runbook, env example, heartbeat, health, restart, and logging discipline are enforced. |
+| Engine bridge | Worker image installs `bulletproof_bt` and uses a Python bridge instead of importing the engine into the web runtime. | Correct boundary. Engine changes must remain contract-versioned and tested against the web app payload schema. |
+| Object storage | R2 adapter exists and is used for generated artifacts/exports/benchmark paths. | Correct, but production must prove all benchmark datasets and generated exports live in R2, not local cache. |
+| Admin ops | Admin health/jobs/exports/research-desk surfaces exist. | Good operator base, but health must include provider-aware DB/queue checks, email config, benchmark object-storage health, and worker heartbeat freshness. |
+| Billing | Stripe Checkout, Portal, signed webhook route, event idempotency, and entitlement updates exist. | Started, not finished. Subscription metadata, live price allowlists, failed-payment behavior, and Stripe Dashboard hardening are required before paid launch. |
+| Rate/upload controls | Upload size and rate-limit work has been introduced. | Must be tested in production and documented per plan; rejected uploads should explain the limit without leaking internals. |
+
+#### Must Fix Before The First Paid User
+
+| Gap | Why it matters | Required action | Repo / system |
+| --- | --- | --- | --- |
+| Provider-aware startup/health | Production previously hit SQLite-only code while `DATABASE_PROVIDER=postgres`, causing report/admin failures. | Health, queue, and startup checks must query Postgres through provider contracts in production and SQLite only in local mode. | `invariance_research` |
+| Worker env hygiene | A local `.env.worker` exists and real secrets must never become deployment documentation or screenshots. | Keep real env untracked, add `.env.worker.example`, rotate any exposed key, and document secret handling. | `invariance_research`, Supabase, R2 |
+| Worker Compose portability | Hard-coded local build paths and mandatory Ollama dependency make production fragile. | Use configurable build root, remove hard dependency on Ollama for core analysis, add restart/log/heartbeat guidance. | `invariance_research/deploy` |
+| Stripe subscription metadata | `customer.subscription.*` webhooks need `account_id` and `plan_id`; Checkout session metadata alone is not enough for reliable subscription events. | Add `subscription_data.metadata`, `client_reference_id`, and test checkout/update/cancel webhook sequence. | `invariance_research`, Stripe |
+| Stripe live price allowlist | Fallback placeholder price ids are acceptable in local dev but dangerous in production. | Production startup should fail or admin health should be unhealthy when live price env vars are missing. | `invariance_research`, Vercel |
+| Stripe Dashboard configuration | Products, prices, portal, webhook endpoint, receipts, tax, and live/test separation are not yet production disciplined. | Complete Stripe checklist below before enabling paid CTAs for real users. | Stripe |
+| Benchmark object storage proof | Manifest cache is not dataset availability. | Run first production benchmark sync to R2, verify manifest and each dataset key, add weekly update procedure. | Worker host, R2 |
+| Email deliverability | Signup verification, reset, Research Desk notifications, and operational emails affect trust. | Verify sender domain, SPF/DKIM/DMARC, provider key, and production callback URLs. | Email provider, Vercel |
+| Production smoke path | The system has many moving parts; a single broken report/export path will look amateur. | Run a production internal account smoke test: signup, upload, analysis, report, export, share, billing, admin health. | All |
+
+#### Can Ship For First 100 With Operator Discipline
+
+| Area | Acceptable launch posture | Monitoring requirement |
+| --- | --- | --- |
+| DB-backed queues instead of Redis | Acceptable at low volume if leases, retries, and heartbeats are visible. | Check queue backlog, stale processing jobs, retry counts daily. |
+| Locally hosted workers | Acceptable if machine is stable, containers auto-restart, secrets are scoped, and no public inbound access is needed. | Fresh heartbeat, disk/log usage, engine probe, R2 writes. |
+| Lightweight PDF export | Acceptable if the export is polished, includes report identity, charts, limitations, and evidence coverage. | Export failures and sample downloaded PDF review. |
+| Manual benchmark update | Acceptable briefly if weekly manual run is documented. | Last manifest timestamp and dataset coverage shown in admin health. |
+| Single analysis worker concurrency | Preferred for correctness while proving queue behavior. | Queue wait messaging and oldest queued job threshold. |
+
+#### Defer Until After First 100
+
+| Deferred item | Reason |
+| --- | --- |
+| Redis/BullMQ or managed queue | DB queue is simpler and sufficient for first-user proof; move when load or reliability justifies it. |
+| Full Kubernetes orchestration | Local Docker Compose is enough for launch; Kubernetes adds operational surface before demand proves it. |
+| Multi-region storage/database | Not needed until clear geographic or latency requirements emerge. |
+| Public multi-seat Team workflow | Team can remain deferred until Research Desk and shared report workflows show repeat demand. |
+| Full command-terminal UX | Internal terminal concepts should power contracts, but public wedge remains upload-validation-report. |
+
+### Production Worker Runbook
+
+Worker deployment lives in `invariance_research/deploy`.
+
+Required files:
+
+- `docker-compose.worker.yml`
+- `.env.worker.example`
+- local untracked `.env.worker`
+- `README.worker.md`
+
+Launch commands from the worker host:
+
+```bash
+cd /home/omenka/Projects/invariance_research/deploy
+cp .env.worker.example .env.worker
+# Fill Supabase, R2, email, and optional LLM values.
+docker compose -f docker-compose.worker.yml up -d --build analysis-worker export-worker
+docker logs -f invariance-analysis-worker
+docker logs -f invariance-export-worker
+```
+
+Optional LLM synthesis:
+
+```bash
+docker compose -f docker-compose.worker.yml --profile llm up -d ollama
+docker exec -it invariance-ollama ollama pull qwen2.5:14b
+```
+
+First launch default should keep `LLM_INSIGHTS_ENABLED=false` unless LLM output has been tested end-to-end and failure states are product-safe.
+
+Production worker environment requirements:
+
+- `DATABASE_PROVIDER=postgres`
+- `DATABASE_URL` points to Supabase production
+- `POSTGRES_SCHEMA_AUTO_INIT=false` after migrations are formalized
+- `OBJECT_STORAGE_PROVIDER=s3`
+- R2 endpoint, bucket, access key, secret key, region, path-style setting
+- `BENCHMARK_PROVIDER=object_storage`
+- benchmark manifest and prefix keys
+- embedded workers disabled in Vercel
+- worker concurrency starts at `1`
+- worker heartbeat stale threshold configured
+
+Worker health must be visible in Admin Ops before any paid user is allowed to create an analysis.
+
+### Vercel Production Checklist
+
+Set production env vars in Vercel, not in the repo:
+
+- `APP_URL`
+- `DATABASE_PROVIDER=postgres`
+- `DATABASE_URL`
+- `INVARIANCE_EMBEDDED_WORKERS=false`
+- `OBJECT_STORAGE_PROVIDER`
+- `OBJECT_STORAGE_BUCKET`
+- `OBJECT_STORAGE_ENDPOINT`
+- `OBJECT_STORAGE_ACCESS_KEY_ID`
+- `OBJECT_STORAGE_SECRET_ACCESS_KEY`
+- `OBJECT_STORAGE_FORCE_PATH_STYLE=true`
+- `BENCHMARK_PROVIDER=object_storage`
+- `BENCHMARK_MANIFEST_OBJECT_KEY`
+- `BENCHMARK_OBJECT_PREFIX`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `STRIPE_PRICE_INDIVIDUAL`
+- `STRIPE_PRICE_PRO`
+- `EMAIL_PROVIDER`
+- `EMAIL_FROM`
+- email provider API key
+- `ADMIN_EMAILS`
+- session/auth secrets
+- upload limits and rate-limit settings
+
+Vercel deployment gates:
+
+1. Production build passes.
+2. `/api/health` does not call SQLite when `DATABASE_PROVIDER=postgres`.
+3. Admin health shows Postgres, R2, queue, benchmark, Stripe config, email config, and worker heartbeat.
+4. Uploads write to R2 and analysis jobs appear in Supabase.
+5. Workers process jobs from Supabase, not local SQLite.
+6. Report page renders without provider errors.
+7. Export job completes and writes to R2.
+8. Share link shows redacted report projection only.
+
+### Stripe Production Hardening Checklist
+
+Stripe must be configured in both code and dashboard.
+
+Internal app requirements:
+
+- server creates Checkout sessions only from allowlisted plan ids
+- Checkout session sets both session metadata and `subscription_data.metadata`
+- webhook route verifies Stripe signature with `STRIPE_WEBHOOK_SECRET`
+- webhook event ids are persisted for idempotency
+- price id maps to canonical internal plan id
+- missing live price ids degrade/fail production health
+- account entitlements update from webhook, not return URL
+- admin subscription overrides are visible and audited
+- failed-payment state does not delete evidence and does not silently preserve paid export rights forever
+
+Stripe Dashboard steps:
+
+1. Create live products:
+   - `Invariance Individual` at `$39/month`
+   - `Invariance Pro` at `$99/month`
+   - `Research Desk` as quoted/manual invoice product, not self-serve by default
+2. Copy live price ids into Vercel:
+   - `STRIPE_PRICE_INDIVIDUAL`
+   - `STRIPE_PRICE_PRO`
+3. Create a live webhook endpoint:
+   - URL: `https://YOUR_DOMAIN/api/webhooks/stripe`
+   - Events:
+     - `checkout.session.completed`
+     - `customer.subscription.created`
+     - `customer.subscription.updated`
+     - `customer.subscription.deleted`
+     - `invoice.payment_succeeded`
+     - `invoice.payment_failed`
+4. Copy the endpoint signing secret to `STRIPE_WEBHOOK_SECRET`.
+5. Configure Customer Portal:
+   - allow payment method update
+   - allow cancellation
+   - allow Individual to Pro upgrade
+   - define downgrade/cancel behavior
+   - add business terms/support links
+6. Configure receipt and invoice settings:
+   - business name
+   - support email
+   - statement descriptor
+   - invoice footer
+   - tax/VAT behavior if applicable
+7. Run test-mode flow first:
+   - new checkout
+   - duplicate webhook replay
+   - upgrade
+   - cancellation
+   - failed payment
+8. Run live-mode smoke test with an internal/admin account before exposing paid CTAs.
+
+Stripe launch rule: if a webhook fails, the user may see a pending billing state, but the system must not grant or revoke paid rights based only on a client redirect.
+
+### First-100 User Operating Rhythm
+
+Daily during first launch:
+
+- check admin health
+- check failed jobs
+- check stale workers
+- check uploads rejected by parser
+- check export failures
+- check Stripe webhook failures
+- check share access anomalies
+- review Research Desk requests
+
+Weekly during first launch:
+
+- run or verify benchmark library update
+- review top missing-evidence patterns
+- review which diagnostics users try to unlock
+- review free-to-paid conversion blockers
+- review report shares and recipient behavior
+- review support tickets for misleading copy or unclear diagnostic language
+- review cost/runtime per analysis
+
+Launch success for first 100 users:
+
+- no cross-tenant data incident
+- no paid user unable to export because of infrastructure misconfiguration
+- no report share exposes private raw artifacts
+- no production route calls local SQLite when `DATABASE_PROVIDER=postgres`
+- no benchmark comparison silently uses stale local files
+- no Stripe webhook mismatch leaves users on the wrong plan
+- no analysis job disappears without admin-visible state
+- at least one user shares a report externally
+- at least one user requests Research Desk from an explicit evidence limitation
+
 ### Phase 9: First-Client Beta Protocol
 
 Repo ownership:

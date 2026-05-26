@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Iterable, Iterator
+from collections import deque
 
 import pandas as pd
 
@@ -64,6 +65,10 @@ def _is_present(value: object) -> bool:
 
 def research_panel_path(root: str | Path, exchange: str, symbol: str, timeframe: str = "1m") -> Path:
     return Path(root) / "canonical" / exchange / symbol / f"timeframe={timeframe}" / "research_panel.parquet"
+
+
+def volatile_materialized_panel_path(root: str | Path, exchange: str, timeframe: str = "1m") -> Path:
+    return Path(root) / "canonical" / exchange / "_volatile_active" / f"timeframe={timeframe}" / "research_panel.parquet"
 
 
 def load_research_panels(
@@ -277,6 +282,14 @@ def build_streaming_research_panel_feed_from_config(config: dict[str, object]) -
         membership_path = config.get("membership_path")
         if not membership_path:
             raise DataError("Volatile research panel config requires membership_path")
+        materialized_path = Path(str(config.get("materialized_path") or volatile_materialized_panel_path(root, exchange, timeframe)))
+        if materialized_path.exists():
+            return MaterializedResearchPanelStreamingFeed(
+                path=materialized_path,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                chunksize=chunksize,
+            )
         membership = _volatile_membership(
             exchange=exchange,
             membership_path=str(membership_path),
@@ -402,9 +415,16 @@ class ResearchPanelStreamingFeed:
         self._end_ts = end_ts
         self._row_limit_per_symbol = row_limit_per_symbol
         self._chunksize = chunksize
-        self._membership_intervals = _membership_intervals(membership) if membership is not None else None
+        self._membership = _dedupe_volatile_membership(membership) if membership is not None else None
+        self._membership_intervals = _membership_intervals(self._membership) if self._membership is not None else None
+        self._membership_schedule: dict[pd.Timestamp, set[str]] = {}
+        self._rebalance_ts: list[pd.Timestamp] = []
+        self._membership_cursor = 0
+        self._active_symbols: set[str] = set()
+        self._required_symbols: set[str] = set()
         self._iter_by_symbol: dict[str, Iterator[Bar]] = {}
         self._buf_by_symbol: dict[str, Bar] = {}
+        self._symbols_to_advance: list[str] = []
         self._next_ts: pd.Timestamp | None = None
         self.reset()
 
@@ -415,6 +435,12 @@ class ResearchPanelStreamingFeed:
         ensure_pyarrow_parquet()
         self._iter_by_symbol = {}
         self._buf_by_symbol = {}
+        self._symbols_to_advance = []
+        self._membership_cursor = 0
+        self._active_symbols = set()
+        if self._membership is not None:
+            self._reset_volatile_schedule()
+            return
         missing: list[Path] = []
         for symbol in self._symbols:
             path = research_panel_path(self._root, self._exchange, symbol, self._timeframe)
@@ -429,6 +455,7 @@ class ResearchPanelStreamingFeed:
                 row_limit_per_symbol=self._row_limit_per_symbol,
                 chunksize=self._chunksize,
                 membership_intervals=self._membership_intervals,
+                required_symbols=self._required_symbols,
             )
             self._iter_by_symbol[symbol] = iterator
             try:
@@ -439,12 +466,112 @@ class ResearchPanelStreamingFeed:
             raise DataError(f"Missing research panel(s); first missing: {missing[0]}")
         self._next_ts = self._compute_next_ts()
 
+    def set_required_symbols(self, symbols: Iterable[str]) -> None:
+        """Keep inactive volatile symbols flowing while positions/orders need bars.
+
+        Volatile research panels are otherwise emitted only while the historical
+        membership row says the symbol is active. Open positions and live orders
+        still need causal bars for fills, exits, and mark-to-market, so the
+        engine updates this set after each event loop iteration.
+        """
+        self._required_symbols.clear()
+        self._required_symbols.update(str(symbol) for symbol in symbols)
+        if self._membership is not None:
+            self._drop_unneeded_volatile_symbols()
+
+    def _build_membership_schedule(self) -> None:
+        if self._membership is None or self._membership.empty:
+            self._membership_schedule = {}
+            self._rebalance_ts = []
+            return
+        membership = self._membership
+        if self._start_ts is not None:
+            before = membership[membership["ts"].le(self._start_ts)]
+            anchor_ts = before["ts"].max() if not before.empty else None
+            mask = membership["ts"].ge(self._start_ts)
+            if anchor_ts is not None and pd.notna(anchor_ts):
+                mask |= membership["ts"].eq(anchor_ts)
+            membership = membership.loc[mask]
+        if self._end_ts is not None:
+            membership = membership[membership["ts"].lt(self._end_ts)]
+        if membership.empty:
+            self._membership_schedule = {}
+            self._rebalance_ts = []
+            return
+        schedule: dict[pd.Timestamp, set[str]] = {}
+        for ts, group in membership.groupby("ts", sort=True):
+            schedule[pd.Timestamp(ts)] = set(group["symbol"].astype(str))
+        self._membership_schedule = schedule
+        self._rebalance_ts = sorted(schedule)
+
+    def _reset_volatile_schedule(self) -> None:
+        self._build_membership_schedule()
+        if not self._rebalance_ts:
+            self._next_ts = None
+            return
+        anchor = self._start_ts if self._start_ts is not None else self._rebalance_ts[0]
+        if anchor < self._rebalance_ts[0]:
+            anchor = self._rebalance_ts[0]
+        self._refresh_membership_until(anchor)
+        self._next_ts = self._compute_next_ts()
+
+    def _ensure_symbol_iterator(self, symbol: str, *, start_ts: pd.Timestamp) -> None:
+        if symbol in self._iter_by_symbol:
+            return
+        path = research_panel_path(self._root, self._exchange, symbol, self._timeframe)
+        if not path.exists():
+            raise DataError(f"Missing research panel for volatile symbol {symbol}: {path}")
+        iterator = _iter_research_panel_bars(
+            path=path,
+            expected_symbol=symbol,
+            start_ts=start_ts,
+            end_ts=self._end_ts,
+            row_limit_per_symbol=self._row_limit_per_symbol,
+            chunksize=self._chunksize,
+            membership_intervals=None,
+            required_symbols=None,
+        )
+        self._iter_by_symbol[symbol] = iterator
+        try:
+            self._buf_by_symbol[symbol] = next(iterator)
+        except StopIteration:
+            self._iter_by_symbol.pop(symbol, None)
+
+    def _refresh_membership_until(self, ts: pd.Timestamp) -> None:
+        while self._membership_cursor < len(self._rebalance_ts) and self._rebalance_ts[self._membership_cursor] <= ts:
+            rebalance_ts = self._rebalance_ts[self._membership_cursor]
+            self._active_symbols = set(self._membership_schedule.get(rebalance_ts, set()))
+            for symbol in sorted(self._active_symbols | self._required_symbols):
+                self._ensure_symbol_iterator(symbol, start_ts=rebalance_ts)
+            self._membership_cursor += 1
+        self._drop_unneeded_volatile_symbols()
+
+    def _drop_unneeded_volatile_symbols(self) -> None:
+        if self._membership is None:
+            return
+        keep = self._active_symbols | self._required_symbols
+        for symbol in list(self._iter_by_symbol):
+            if symbol in keep:
+                continue
+            self._iter_by_symbol.pop(symbol, None)
+            self._buf_by_symbol.pop(symbol, None)
+            if symbol in self._symbols_to_advance:
+                self._symbols_to_advance = [item for item in self._symbols_to_advance if item != symbol]
+
+    def _next_rebalance_ts(self) -> pd.Timestamp | None:
+        if self._membership_cursor >= len(self._rebalance_ts):
+            return None
+        return self._rebalance_ts[self._membership_cursor]
+
     def _compute_next_ts(self) -> pd.Timestamp | None:
         if not self._buf_by_symbol:
             return None
         return min(bar.ts for bar in self._buf_by_symbol.values())
 
     def next(self) -> list[Bar] | None:
+        self._advance_pending_symbols()
+        if self._membership is not None:
+            return self._next_volatile()
         if self._next_ts is None:
             return None
         current_ts = self._next_ts
@@ -456,15 +583,158 @@ class ResearchPanelStreamingFeed:
                 continue
             bars.append(bar)
             symbols_to_advance.append(symbol)
-        for symbol in symbols_to_advance:
-            iterator = self._iter_by_symbol[symbol]
+        self._symbols_to_advance = symbols_to_advance
+        self._next_ts = self._compute_next_ts()
+        return bars
+
+    def _next_volatile(self) -> list[Bar] | None:
+        while True:
+            buffered_ts = self._compute_next_ts()
+            rebalance_ts = self._next_rebalance_ts()
+            if buffered_ts is None and rebalance_ts is None:
+                self._next_ts = None
+                return None
+            if buffered_ts is None:
+                self._refresh_membership_until(rebalance_ts)  # type: ignore[arg-type]
+                continue
+            if rebalance_ts is not None and rebalance_ts <= buffered_ts:
+                self._refresh_membership_until(rebalance_ts)
+                continue
+            current_ts = buffered_ts
+            self._refresh_membership_until(current_ts)
+            break
+
+        visible_symbols = self._active_symbols | self._required_symbols
+        bars: list[Bar] = []
+        symbols_to_advance: list[str] = []
+        for symbol in sorted(visible_symbols):
+            bar = self._buf_by_symbol.get(symbol)
+            if bar is None or bar.ts != current_ts:
+                continue
+            bar.extra["volatile_active"] = symbol in self._active_symbols
+            bar.extra["universe_active"] = symbol in self._active_symbols
+            bars.append(bar)
+            symbols_to_advance.append(symbol)
+        self._symbols_to_advance = symbols_to_advance
+        self._next_ts = self._compute_next_ts()
+        return bars
+
+    def _advance_pending_symbols(self) -> None:
+        if not self._symbols_to_advance:
+            return
+        for symbol in self._symbols_to_advance:
+            iterator = self._iter_by_symbol.get(symbol)
+            if iterator is None:
+                continue
             try:
                 self._buf_by_symbol[symbol] = next(iterator)
             except StopIteration:
                 self._buf_by_symbol.pop(symbol, None)
                 self._iter_by_symbol.pop(symbol, None)
+        self._symbols_to_advance = []
+        if self._membership is not None:
+            self._drop_unneeded_volatile_symbols()
         self._next_ts = self._compute_next_ts()
+
+
+class MaterializedResearchPanelStreamingFeed:
+    """Streaming feed for a pre-materialized ts/symbol sorted research panel."""
+
+    def __init__(
+        self,
+        *,
+        path: str | Path,
+        start_ts: pd.Timestamp | None = None,
+        end_ts: pd.Timestamp | None = None,
+        chunksize: int = 50_000,
+    ) -> None:
+        if chunksize <= 0:
+            raise DataError("Materialized research panel chunksize must be positive")
+        self._path = Path(path)
+        self._start_ts = start_ts
+        self._end_ts = end_ts
+        self._chunksize = chunksize
+        self._batch_iter: Iterator[Any] | None = None
+        self._groups: deque[tuple[pd.Timestamp, list[Bar]]] = deque()
+        self._carry = pd.DataFrame()
+        self._symbols: set[str] = set()
+        self._finished = False
+        self.reset()
+
+    def symbols(self) -> list[str]:
+        return sorted(self._symbols)
+
+    def reset(self) -> None:
+        import pyarrow.parquet as pq
+
+        if not self._path.exists():
+            raise DataError(f"Materialized volatile research panel missing: {self._path}")
+        parquet_file = pq.ParquetFile(self._path)
+        available_columns = set(parquet_file.schema_arrow.names)
+        missing = set(BAR_COLUMNS) - available_columns
+        if missing:
+            raise DataError(f"Materialized research panel missing columns {sorted(missing)} at {self._path}")
+        read_columns = [col for col in STREAM_COLUMNS if col in available_columns]
+        self._batch_iter = parquet_file.iter_batches(batch_size=self._chunksize, columns=read_columns)
+        self._groups = deque()
+        self._carry = pd.DataFrame()
+        self._symbols = set()
+        self._finished = False
+
+    def next(self) -> list[Bar] | None:
+        while not self._groups and not self._finished:
+            self._load_next_batch()
+        if not self._groups:
+            return None
+        _, bars = self._groups.popleft()
         return bars
+
+    def _load_next_batch(self) -> None:
+        if self._batch_iter is None:
+            self._finished = True
+            return
+        try:
+            batch = next(self._batch_iter)
+        except StopIteration:
+            self._finished = True
+            if not self._carry.empty:
+                self._enqueue_frame(self._carry, hold_last=False)
+                self._carry = pd.DataFrame()
+            return
+        frame = batch.to_pandas()
+        if not self._carry.empty:
+            frame = pd.concat([self._carry, frame], ignore_index=True)
+            self._carry = pd.DataFrame()
+        if frame.empty:
+            return
+        frame["ts"] = pd.to_datetime(frame["ts"], utc=True)
+        if self._start_ts is not None:
+            frame = frame[frame["ts"].ge(self._start_ts)]
+        if self._end_ts is not None:
+            frame = frame[frame["ts"].lt(self._end_ts)]
+        if frame.empty:
+            return
+        self._enqueue_frame(frame, hold_last=True)
+
+    def _enqueue_frame(self, frame: pd.DataFrame, *, hold_last: bool) -> None:
+        if hold_last:
+            last_ts = frame["ts"].iloc[-1]
+            emit = frame[frame["ts"].ne(last_ts)]
+            self._carry = frame[frame["ts"].eq(last_ts)].copy()
+        else:
+            emit = frame
+        if emit.empty:
+            return
+        for ts, group in emit.groupby("ts", sort=False):
+            bars: list[Bar] = []
+            for row in group.itertuples(index=False):
+                payload = row._asdict()
+                bar = _row_to_bar(payload, expected_symbol=str(payload.get("symbol")), path=self._path, last_ts=None)
+                bar.extra.setdefault("volatile_active", True)
+                bar.extra.setdefault("universe_active", True)
+                bars.append(bar)
+                self._symbols.add(bar.symbol)
+            self._groups.append((pd.Timestamp(ts), bars))
 
 
 def _iter_research_panel_bars(
@@ -476,6 +746,7 @@ def _iter_research_panel_bars(
     row_limit_per_symbol: int | None,
     chunksize: int,
     membership_intervals: pd.DataFrame | None,
+    required_symbols: set[str] | None = None,
 ) -> Iterator[Bar]:
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -509,6 +780,10 @@ def _iter_research_panel_bars(
         for row in frame.itertuples(index=False):
             payload = row._asdict()
             bar = _row_to_bar(payload, expected_symbol=expected_symbol, path=path, last_ts=last_ts)
+            if intervals is not None and not bool(bar.extra.get("volatile_active", False)):
+                if required_symbols is None or expected_symbol not in required_symbols:
+                    last_ts = bar.ts
+                    continue
             yield bar
             emitted += 1
             last_ts = bar.ts

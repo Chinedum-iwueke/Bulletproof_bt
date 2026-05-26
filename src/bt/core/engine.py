@@ -6,7 +6,7 @@ from dataclasses import replace
 import csv
 from typing import Any, Mapping
 
-from bt.core.enums import OrderState, OrderType, Side
+from bt.core.enums import OrderState, OrderType, PositionState, Side
 from bt.core.reason_codes import FORCED_LIQUIDATION_END_OF_RUN, FORCED_LIQUIDATION_MARGIN
 from bt.core.types import Order
 from bt.data.feed import HistoricalDataFeed
@@ -90,6 +90,20 @@ class BacktestEngine:
         self._audit = audit_manager
         state_enabled, state_profile = _state_feature_options(config)
         self._state_layer = OnlineStateFeatureLayer(enabled=state_enabled, profile=state_profile)
+
+    def _sync_datafeed_required_symbols(self, open_orders: list[Order]) -> None:
+        setter = getattr(self._datafeed, "set_required_symbols", None)
+        if not callable(setter):
+            return
+        required = {
+            order.symbol
+            for order in open_orders
+            if order.state not in {OrderState.FILLED, OrderState.CANCELLED, OrderState.REJECTED}
+        }
+        for symbol, position in self._portfolio.position_book.all_positions().items():
+            if position.state in {PositionState.OPEN, PositionState.OPENING, PositionState.REDUCING}:
+                required.add(symbol)
+        setter(required)
 
     def _positions_context(self) -> dict[str, dict[str, Any]]:
         positions_ctx: dict[str, dict[str, Any]] = {}
@@ -568,6 +582,7 @@ class BacktestEngine:
                     forced_liquidated = True
 
                 if forced_liquidated:
+                    self._sync_datafeed_required_symbols(open_orders)
                     handle.flush()
                     continue
 
@@ -583,6 +598,7 @@ class BacktestEngine:
                     ]
                 )
                 handle.flush()
+                self._sync_datafeed_required_symbols(open_orders)
 
                 if self._audit is not None and self._audit.enabled:
                     self._audit.mark_layer_executed("position_audit")

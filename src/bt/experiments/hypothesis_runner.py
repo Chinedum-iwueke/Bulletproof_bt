@@ -3,14 +3,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
+import pandas as pd
 import yaml
 
 from bt.api import run_backtest
 from bt.analytics.segment_rollups import build_run_segment_rollups
+from bt.analytics.l7_h1_evaluation import write_l7_h1_evaluation_artifacts, write_signal_feature_artifact
 from bt.config import load_yaml
 from bt.hypotheses.contract import HypothesisContract
 from bt.hypotheses.exceptions import MissingRequiredTierError
@@ -20,6 +23,10 @@ from bt.logging.run_contract import validate_run_artifacts
 from bt.logging.run_manifest import write_run_manifest
 from bt.logging.summary import write_summary_txt
 from bt.metrics.per_symbol import write_per_symbol_metrics
+from bt.analysis.ev_by_bucket import run_structural_bucket_analysis
+
+
+DEFAULT_VOLATILE_RESEARCH_PANEL_CHUNKSIZE = 50_000
 
 
 def resolve_phase_tiers(contract: HypothesisContract, phase: str) -> tuple[str, ...]:
@@ -152,11 +159,63 @@ def build_runtime_override(contract: HypothesisContract, spec: dict[str, Any], t
     }
 
 
+def _research_panel_universe_from_overrides(override_paths: list[str] | None) -> str | None:
+    for raw_path in override_paths or []:
+        path = Path(raw_path)
+        if not path.exists():
+            continue
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            continue
+        if data.get("dataset_kind") != "research_panel":
+            continue
+        universe = data.get("universe")
+        return str(universe) if universe is not None else None
+    return None
+
+
+def _volatile_research_panel_chunksize() -> int:
+    raw = os.environ.get("BT_RESEARCH_VOLATILE_CHUNKSIZE")
+    if raw is None:
+        return DEFAULT_VOLATILE_RESEARCH_PANEL_CHUNKSIZE
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("BT_RESEARCH_VOLATILE_CHUNKSIZE must be an integer") from exc
+    if value <= 0:
+        raise ValueError("BT_RESEARCH_VOLATILE_CHUNKSIZE must be positive")
+    return value
+
+
+def apply_runtime_data_memory_controls(runtime_override: dict[str, Any], override_paths: list[str] | None) -> None:
+    """Apply late data-loader controls that are safe and semantics-neutral.
+
+    Volatile research-panel streaming keeps one paused iterator per historical
+    membership symbol. A large parquet batch size causes every paused iterator
+    to retain a large DataFrame, which can multiply into tens of GB per worker.
+    Reducing the batch size changes only IO granularity; it does not alter bar
+    order, membership gating, fills, or no-lookahead behavior.
+    """
+    if _research_panel_universe_from_overrides(override_paths) != "volatile":
+        return
+    data = runtime_override.setdefault("data", {})
+    if not isinstance(data, dict):
+        raise ValueError("runtime override data section must be a mapping")
+    data["chunksize"] = _volatile_research_panel_chunksize()
+
+
 
 
 def _postprocess_run_artifacts(run_dir: Path, *, data_path: str) -> None:
     validate_run_artifacts(run_dir)
     write_per_symbol_metrics(run_dir)
+    write_signal_feature_artifact(run_dir)
 
     config_path = run_dir / "config_used.yaml"
     try:
@@ -176,6 +235,17 @@ def _postprocess_run_artifacts(run_dir: Path, *, data_path: str) -> None:
         if isinstance(strategy_name, str):
             hypothesis_id = strategy_name
     try:
+        trades_path = run_dir / "trades.csv"
+        if trades_path.exists():
+            try:
+                trades_df = pd.read_csv(trades_path)
+            except pd.errors.EmptyDataError:
+                trades_df = pd.DataFrame()
+            if not trades_df.empty:
+                run_structural_bucket_analysis(trades_df, run_dir, min_trades=10)
+                if str(hypothesis_id).upper() == "L7-H1":
+                    tier = identity.get("tier") if isinstance(identity, dict) else None
+                    write_l7_h1_evaluation_artifacts(run_dir, tier=str(tier) if tier is not None else None)
         write_summary_txt(run_dir)
         write_run_manifest(run_dir, config=config, data_path=data_path)
         build_run_segment_rollups(run_dir, hypothesis_id=hypothesis_id)
@@ -215,6 +285,7 @@ def execute_hypothesis_variant(
     resolved_override_paths = list(override_paths or [])
     if local_config:
         resolved_override_paths.append(local_config)
+    apply_runtime_data_memory_controls(runtime_override, resolved_override_paths)
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8") as tmp:
         yaml.safe_dump(runtime_override, tmp, sort_keys=True)

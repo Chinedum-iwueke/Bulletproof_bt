@@ -11,6 +11,7 @@ from bt.research_data.jobs.backfill import backfill, backfill_stable
 from bt.research_data.jobs.build_panel import build_panels
 from bt.research_data.jobs.build_universe import build_volatile_universe
 from bt.research_data.jobs.coverage import build_coverage, write_coverage_dashboard
+from bt.research_data.jobs.materialize import materialize_volatile_panel
 from bt.research_data.jobs.validate import validate_all
 from bt.research_data.live import aggregate_liquidations, collect_liquidations
 
@@ -52,6 +53,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--exchange", default=DEFAULT_EXCHANGE)
     p.add_argument("--symbols", required=True, type=_csv)
     p.add_argument("--timeframe", default=DEFAULT_TIMEFRAME)
+
+    p = sub.add_parser("materialize-volatile-panel")
+    p.add_argument("--exchange", default=DEFAULT_EXCHANGE)
+    p.add_argument("--timeframe", default=DEFAULT_TIMEFRAME)
+    p.add_argument("--membership-path", default=None)
+    p.add_argument("--start", default=None)
+    p.add_argument("--end", default="now")
+    p.add_argument("--row-group-size", type=int, default=120_000)
 
     p = sub.add_parser("validate")
     p.add_argument("--exchange", default="all")
@@ -116,6 +125,16 @@ def main(argv: list[str] | None = None) -> None:
         )
     elif args.command == "build-panel":
         build_panels(args.exchange, args.symbols, args.timeframe)
+    elif args.command == "materialize-volatile-panel":
+        path = materialize_volatile_panel(
+            args.exchange,
+            args.timeframe,
+            membership_path=args.membership_path,
+            start=args.start,
+            end=args.end,
+            row_group_size=args.row_group_size,
+        )
+        print(str(path))
     elif args.command == "validate":
         report = validate_all("all" if args.all else args.exchange)
         print(report.to_string(index=False))

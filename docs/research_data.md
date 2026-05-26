@@ -158,6 +158,18 @@ python -m bt.research_data.cli build-panel \
   --timeframe 1m
 ```
 
+Materialize the active volatile fast-path panel after rebuilding volatile
+membership and symbol panels:
+
+```bash
+python -m bt.research_data.cli materialize-volatile-panel \
+  --exchange binance \
+  --timeframe 1m \
+  --membership-path research_data/manifests/volatile_universe_membership.parquet \
+  --start 2025-01-01 \
+  --end now
+```
+
 Validate coverage and causal source timestamps:
 
 ```bash
@@ -253,6 +265,25 @@ The volatile universe is rebuilt historically from all available Binance USDT pe
 
 This avoids using today's listed symbols or future candles to create past baskets.
 
+For fast backtests, the active volatile rows can be materialized into:
+
+```text
+research_data/canonical/<exchange>/_volatile_active/timeframe=1m/research_panel.parquet
+```
+
+This file is derived from `volatile_universe_membership.parquet`; it does not
+rerank symbols. A symbol is active for bars where
+`rebalance_ts <= bar_ts < next_rebalance_ts`. The materialized file stores only
+those active rows, sorted by `ts, symbol`, and marks them with
+`volatile_active=true` and `universe_active=true`. The research panel loader
+automatically uses this file for volatile backtests when it exists, otherwise it
+falls back to the slower membership-aware streaming path.
+
+The bootstrap/update helper scripts refresh the materialized volatile panel
+after rebuilding volatile membership and canonical panels. If you run the steps
+manually, run `materialize-volatile-panel` after `build-volatile-universe` and
+`build-panel`.
+
 ## Fetching Subsystem
 
 The `bt.research_data.fetching` package provides resumable historical and incremental fetching:
@@ -287,6 +318,9 @@ Example cron schedule:
 
 # build panels hourly
 5 * * * * cd /path/to/bulletproof_bt && python -m bt.research_data.cli build-panel --exchange binance --symbols BTCUSDT,ETHUSDT,SOLUSDT --timeframe 1m
+
+# refresh volatile fast-path after weekly/monthly volatile universe rebuilds
+20 3 * * 0 cd /path/to/bulletproof_bt && python -m bt.research_data.cli materialize-volatile-panel --exchange binance --timeframe 1m --membership-path research_data/manifests/volatile_universe_membership.parquet --start 2025-01-01 --end now
 
 # validate daily
 30 2 * * * cd /path/to/bulletproof_bt && python -m bt.research_data.cli validate --all

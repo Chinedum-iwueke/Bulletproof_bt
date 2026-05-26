@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--name", required=True)
     parser.add_argument("--priority", type=int, default=80)
     parser.add_argument("--max-workers", type=int, default=6)
+    parser.add_argument("--volatile-max-workers", type=int, default=None)
     parser.add_argument("--phase", default="tier2")
     parser.add_argument("--queue-name", default="approved_backtests")
     parser.add_argument("--config", default="configs/engine.yaml")
@@ -69,6 +70,7 @@ def main() -> int:
         "name": args.name,
         "phase": args.phase,
         "max_workers": args.max_workers,
+        "volatile_max_workers": args.volatile_max_workers,
         "config": args.config,
         "local_config": args.local_config,
         "data_mode": args.data_mode,

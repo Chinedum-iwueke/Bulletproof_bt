@@ -55,6 +55,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hypothesis", required=True, help="Path to hypothesis YAML.")
     parser.add_argument("--name", required=True, help="Experiment name prefix.")
     parser.add_argument("--max-workers", type=int, default=6)
+    parser.add_argument(
+        "--volatile-max-workers",
+        type=int,
+        default=None,
+        help="Optional worker cap for volatile research-panel runs; defaults to min(max-workers, 4).",
+    )
 
     parser.add_argument("--phase", default="tier2")
     parser.add_argument("--config", default="configs/engine.yaml")
@@ -290,6 +296,16 @@ def split_dataset_workers(max_workers: int) -> tuple[int, int]:
     stable_workers = max(1, max_workers // 2)
     volatile_workers = max(1, max_workers - stable_workers)
     return stable_workers, volatile_workers
+
+
+def resolve_volatile_workers(max_workers: int, volatile_max_workers: int | None, *, data_kind: str) -> int:
+    if volatile_max_workers is not None:
+        if volatile_max_workers <= 0:
+            raise ValueError("--volatile-max-workers must be positive when provided")
+        return min(max_workers, volatile_max_workers)
+    if data_kind == "research_panel":
+        return min(max_workers, 4)
+    return max_workers
 
 
 def run_post_analysis(
@@ -723,6 +739,11 @@ def main() -> int:
         if not args.skip_run:
             if args.parallel_datasets:
                 stable_workers, volatile_workers = split_dataset_workers(args.max_workers)
+                volatile_workers = resolve_volatile_workers(
+                    volatile_workers,
+                    args.volatile_max_workers,
+                    data_kind=args.data_kind,
+                )
                 print(
                     "[3/8] Running stable and volatile backtests concurrently "
                     f"(stable_workers={stable_workers}, volatile_workers={volatile_workers})"
@@ -798,6 +819,11 @@ def main() -> int:
                         future.result()
                 print("[4/8] Stable and volatile backtests completed")
             else:
+                volatile_workers = resolve_volatile_workers(
+                    args.max_workers,
+                    args.volatile_max_workers,
+                    data_kind=args.data_kind,
+                )
                 print("[3/8] Running stable backtest")
                 run_backtest(
                     experiment_root=stable_root,
@@ -831,7 +857,7 @@ def main() -> int:
                     capture_logs=capture_command_logs,
                 )
 
-                print("[4/8] Running volatile backtest")
+                print(f"[4/8] Running volatile backtest (workers={volatile_workers})")
                 run_backtest(
                     experiment_root=volatile_root,
                     manifest_path=volatile_manifest,
@@ -845,7 +871,7 @@ def main() -> int:
                     timeframe=args.timeframe,
                     stable_manifest=args.stable_manifest,
                     membership_path=args.membership_path,
-                    max_workers=args.max_workers,
+                    max_workers=volatile_workers,
                     max_workers_auto=args.max_workers_auto,
                     reserve_ram_gb=args.reserve_ram_gb,
                     max_ram_per_worker_gb=args.max_ram_per_worker_gb,

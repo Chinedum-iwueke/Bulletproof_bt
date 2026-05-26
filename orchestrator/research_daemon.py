@@ -119,6 +119,7 @@ def merge_payload_with_defaults(payload: dict[str, Any], config: dict[str, Any],
         "name": payload.get("name"),
         "phase": payload.get("phase", config.get("default_phase", "tier2")),
         "max_workers": payload.get("max_workers", cli_max_workers if cli_max_workers is not None else config.get("default_max_workers", 6)),
+        "volatile_max_workers": payload.get("volatile_max_workers", config.get("volatile_max_workers")),
         "config": payload.get("config", config.get("default_config", "configs/engine.yaml")),
         "local_config": payload.get("local_config", config.get("default_local_config", "configs/local/engine.lab.yaml")),
         "data_mode": data_mode,
@@ -204,6 +205,8 @@ def build_pipeline_command(db_path: Path, merged_payload: dict[str, Any]) -> lis
         "--research-db",
         str(db_path),
     ]
+    if merged_payload.get("volatile_max_workers") is not None:
+        cmd.extend(["--volatile-max-workers", str(merged_payload["volatile_max_workers"])])
     if bool(merged_payload.get("max_workers_auto")):
         cmd.append("--max-workers-auto")
     if merged_payload.get("max_ram_per_worker_gb") is not None:
