@@ -3305,6 +3305,143 @@ Definition of done:
 - first-client smoke test can run from upload through share link
 - failure states are visible, retryable, or intentionally terminal
 
+## Approach A Launch Wedge Refinement: Prop Challenge Truth Room
+
+Office Hours conclusion: the first wedge should become narrower, sharper, and more painful. The broad promise remains Strategy Truth Room, but the launch offer should overdeliver on the simplest artifact users already have: trade history. The first monopoly attempt is not "validate every strategy artifact." It is:
+
+> Upload a trade CSV or exchange/broker export. Get a brutally accurate prop-firm feasibility and strategy survivability verdict.
+
+This is the smallest market with urgent, repeated demand:
+
+- traders trying to pass funded-account evaluations
+- traders deciding whether a strategy is challenge-ready
+- prop-firm educators/sellers who need proof that their claims survive realistic rules
+- strategy sellers who want a shareable validation memo for a simple trade-history artifact
+
+### Launch Positioning
+
+Primary line:
+
+> Find out if this strategy can survive a real prop-firm evaluation before you pay for one.
+
+Supporting line:
+
+> Upload trades. Declare the challenge rules. Invariance reconstructs the evaluation path, exposes the first failure mode, and produces a shareable validation memo with limitations.
+
+Avoid broad first-launch positioning such as:
+
+- full strategy operating system
+- universal quant research terminal
+- fully automated institutional due diligence for every artifact type
+- regime/parameter claims from incomplete uploads
+
+Those remain full-ambition directions, not the opening wedge.
+
+### Narrowest Launch Artifact Contract
+
+Launch self-serve should strongly prefer:
+
+1. **Trade CSV**
+   Required columns: open/close timestamp where available, realized PnL, symbol where available, side where available, size/quantity where available, fees if available.
+
+2. **Exchange or broker export**
+   Parsed into the same normalized trade ledger. If format is unknown, intake should say so and route to Research Desk rather than pretending support.
+
+3. **Optional equity curve**
+   Improves drawdown timing and path reconstruction when trade-level balance is incomplete.
+
+4. **Optional prop challenge rules**
+   Account size, profit target, max daily loss, max total drawdown, minimum/maximum days, trailing/static drawdown type, payout/evaluation window.
+
+Do not market self-serve launch as requiring OHLCV, parameter sweeps, strategy configs, multi-asset regime definitions, or broker microstructure packets. Those artifacts may enrich context, but they should not be required for the first wedge and should not create overclaiming.
+
+### What The Product Must Become 100x Better At
+
+The proprietary wedge is not a secret indicator. It is an evidence-grade evaluation reconstruction and falsification layer that does the boring hard thing better than spreadsheet calculators, prop-firm dashboards, and generic backtest reports.
+
+The launch product should be materially better at:
+
+- reconstructing the prop evaluation path from imperfect trade evidence
+- identifying the exact first breach rule, date, trade index, account state, and loss path
+- distinguishing daily loss breach from total drawdown breach
+- showing whether target was reached before breach across rolling candidate windows
+- showing how many windows pass, fail, or remain unresolved
+- explaining target progress without mixing dollars, percent, and rule thresholds incorrectly
+- showing fee/slippage perturbation impact on challenge viability
+- showing edge concentration: how much of the result comes from the largest few trades
+- showing Monte Carlo survival under shuffled trade order and stressed costs
+- producing a report that a trader can send to a coach, buyer, partner, or allocator
+
+This is the "quantum improvement" target: not more charts, but a clinical, auditable answer to "Would this trade history have survived the rules I actually face?"
+
+### Launch Scope To Keep
+
+Keep these self-serve workspaces for Approach A launch:
+
+- Overview: verdict, evidence sufficiency, credibility score, claim truth state
+- Prop Evaluation: challenge readiness, first breach, target progress, rolling windows, rule table
+- Execution: costs, slippage, fee sensitivity, net-edge erosion
+- Distribution: payoff profile, edge concentration, rare-trade dependency
+- Monte Carlo: survival envelope, sequence risk, drawdown breach probability, target-before-breach probability
+- Ruin: capital survivability and loss-streak interpretation
+- Assumption Ledger: visible constraints and rescue evidence
+- Validation Report: share/export-ready memo
+- Research Desk Request: escalation for unavailable/ambiguous evidence
+- Library: historical runs and report retrieval
+
+### Launch Scope To Defer Or Route To Research Desk
+
+Do not sell these as automated self-serve launch diagnostics:
+
+- true parameter stability
+- multi-asset regime attribution
+- broker-level microstructure simulation
+- strategy reconstruction from only a config/report
+- portfolio-level exposure attribution across symbols
+- independent validation memo without reviewer involvement
+
+Always offer Research Desk when users need those outcomes.
+
+### First Launch Pricing Fit
+
+The simpler wedge supports the current lower pricing:
+
+- Free: limited analyses/month, no export, enough preview to show value
+- Individual: `$39/mo`, exports, core diagnostics, prop rule evaluation, limited shares
+- Pro: `$99/mo`, richer upload capacity, saved profiles, more shares, Research Desk request eligibility
+- Research Desk: from `$1,000`, human/agent-assisted validation memo and reviewer addenda
+
+Do not reintroduce Team at launch. Team belongs after the product proves repeated sharing, buyer review, educator workflows, or desk-level use.
+
+### Product Kill Criteria
+
+Approach A is not launch-ready if a user can upload a trade CSV and still see:
+
+- a prop target marked pass while final profit is negative
+- target-before-breach windows that actually breached first
+- benchmark disabled when the user selected a valid platform benchmark and production data exists
+- Research Desk request component without an obvious packet creation button
+- export/report copy that hides limitations or overstates unavailable diagnostics
+
+These are not polish issues. They break trust in the product's core claim.
+
+### Go-To-War Plan
+
+1. Own "prop challenge truth" first.
+   The first pages, examples, docs, and report screenshots should show concrete prop-firm feasibility, not an abstract strategy OS.
+
+2. Publish examples users recognize.
+   Use simple trade CSVs, MT5/TradingView/exchange exports, and challenge rule presets. Show exactly what first breach and rolling-window feasibility look like.
+
+3. Make the report the viral artifact.
+   A trader should be able to share a report that says: "This strategy fails the 10% drawdown rule before it reaches the 8% target in X of Y windows."
+
+4. Keep the honesty contract visible.
+   If the upload cannot support regime, parameter, broker, or portfolio claims, say so and route to Research Desk.
+
+5. Learn from every rejected or escalated upload.
+   Missing fields, unsupported broker formats, and Research Desk requests become the roadmap for the next parser and diagnostic upgrade.
+
 ## Production Deployment Plan For First 100 Users
 
 This section defines the practical launch architecture for the first real users. The goal is not enterprise scale yet. The goal is a boring, defensible production setup that protects user evidence, runs analyses reliably, charges correctly, and avoids amateur contradictions such as local-only paths in production, missing database tables, unsigned webhooks, broken exports, or diagnostics that depend on unavailable workers.

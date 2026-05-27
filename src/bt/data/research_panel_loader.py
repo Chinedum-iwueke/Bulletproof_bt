@@ -658,6 +658,11 @@ class MaterializedResearchPanelStreamingFeed:
         self._groups: deque[tuple[pd.Timestamp, list[Bar]]] = deque()
         self._carry = pd.DataFrame()
         self._symbols: set[str] = set()
+        self._required_symbols: set[str] = set()
+        self._required_iter_by_symbol: dict[str, Iterator[Bar]] = {}
+        self._required_buf_by_symbol: dict[str, Bar] = {}
+        self._required_symbols_to_advance: list[str] = []
+        self._last_emitted_ts: pd.Timestamp | None = None
         self._finished = False
         self.reset()
 
@@ -679,15 +684,98 @@ class MaterializedResearchPanelStreamingFeed:
         self._groups = deque()
         self._carry = pd.DataFrame()
         self._symbols = set()
+        self._required_iter_by_symbol = {}
+        self._required_buf_by_symbol = {}
+        self._required_symbols_to_advance = []
+        self._last_emitted_ts = None
         self._finished = False
 
+    def set_required_symbols(self, symbols: Iterable[str]) -> None:
+        """Keep inactive volatile symbols visible while positions/orders need bars."""
+        self._required_symbols = {str(symbol) for symbol in symbols}
+        self._drop_unneeded_required_symbols()
+        start_ts = self._last_emitted_ts or self._start_ts
+        for symbol in sorted(self._required_symbols):
+            self._ensure_required_symbol_iterator(symbol, start_ts=start_ts)
+
     def next(self) -> list[Bar] | None:
+        self._advance_required_symbols()
         while not self._groups and not self._finished:
             self._load_next_batch()
         if not self._groups:
             return None
-        _, bars = self._groups.popleft()
-        return bars
+        current_ts, bars = self._groups.popleft()
+        by_symbol = {bar.symbol: bar for bar in bars}
+        required_to_advance: list[str] = []
+        for symbol in sorted(self._required_symbols):
+            bar = self._required_buf_by_symbol.get(symbol)
+            while bar is not None and bar.ts < current_ts:
+                self._advance_one_required_symbol(symbol)
+                bar = self._required_buf_by_symbol.get(symbol)
+            if bar is None or bar.ts != current_ts or symbol in by_symbol:
+                continue
+            bar.extra["volatile_active"] = False
+            bar.extra["universe_active"] = False
+            by_symbol[symbol] = bar
+            required_to_advance.append(symbol)
+        self._required_symbols_to_advance = required_to_advance
+        self._last_emitted_ts = current_ts
+        return [by_symbol[symbol] for symbol in sorted(by_symbol)]
+
+    def _materialized_context(self) -> tuple[Path, str, str]:
+        timeframe_dir = self._path.parent
+        symbol_dir = timeframe_dir.parent
+        exchange_dir = symbol_dir.parent
+        canonical_dir = exchange_dir.parent
+        if canonical_dir.name != "canonical":
+            raise DataError(f"Cannot infer research_data root from materialized path: {self._path}")
+        timeframe = timeframe_dir.name.removeprefix("timeframe=")
+        return canonical_dir.parent, exchange_dir.name, timeframe
+
+    def _ensure_required_symbol_iterator(self, symbol: str, *, start_ts: pd.Timestamp | None) -> None:
+        if symbol in self._required_iter_by_symbol:
+            return
+        root, exchange, timeframe = self._materialized_context()
+        path = research_panel_path(root, exchange, symbol, timeframe)
+        if not path.exists():
+            return
+        iterator = _iter_research_panel_bars(
+            path=path,
+            expected_symbol=symbol,
+            start_ts=start_ts,
+            end_ts=self._end_ts,
+            row_limit_per_symbol=None,
+            chunksize=self._chunksize,
+            membership_intervals=None,
+            required_symbols=None,
+        )
+        self._required_iter_by_symbol[symbol] = iterator
+        self._advance_one_required_symbol(symbol)
+
+    def _advance_one_required_symbol(self, symbol: str) -> None:
+        iterator = self._required_iter_by_symbol.get(symbol)
+        if iterator is None:
+            return
+        try:
+            self._required_buf_by_symbol[symbol] = next(iterator)
+        except StopIteration:
+            self._required_iter_by_symbol.pop(symbol, None)
+            self._required_buf_by_symbol.pop(symbol, None)
+
+    def _advance_required_symbols(self) -> None:
+        if not self._required_symbols_to_advance:
+            return
+        for symbol in self._required_symbols_to_advance:
+            self._advance_one_required_symbol(symbol)
+        self._required_symbols_to_advance = []
+        self._drop_unneeded_required_symbols()
+
+    def _drop_unneeded_required_symbols(self) -> None:
+        for symbol in list(self._required_iter_by_symbol):
+            if symbol in self._required_symbols:
+                continue
+            self._required_iter_by_symbol.pop(symbol, None)
+            self._required_buf_by_symbol.pop(symbol, None)
 
     def _load_next_batch(self) -> None:
         if self._batch_iter is None:

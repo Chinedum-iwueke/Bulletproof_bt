@@ -220,6 +220,55 @@ def test_volatile_streaming_feed_prefers_materialized_panel(tmp_path) -> None:
     assert first[0].extra["universe_active"] is True
 
 
+def test_materialized_volatile_feed_keeps_required_inactive_symbols(tmp_path) -> None:
+    root = tmp_path / "research_data"
+    _panel(root, "BTCUSDT", [1.0, 2.0, 3.0])
+    _panel(root, "ETHUSDT", [4.0, 5.0, 6.0])
+    membership = pd.DataFrame(
+        {
+            "ts": [
+                pd.Timestamp("2021-01-01 00:00", tz="UTC"),
+                pd.Timestamp("2021-01-01 00:01", tz="UTC"),
+            ],
+            "exchange": ["binance", "binance"],
+            "symbol": ["BTCUSDT", "ETHUSDT"],
+            "universe": ["volatile_data_1m_canonical", "volatile_data_1m_canonical"],
+        }
+    )
+    membership_path = root / "manifests" / "volatile_universe_membership.parquet"
+    membership_path.parent.mkdir(parents=True, exist_ok=True)
+    membership.to_parquet(membership_path, index=False)
+    materialize_volatile_panel(
+        "binance",
+        "1m",
+        membership_path=membership_path,
+        start="2021-01-01T00:00:00Z",
+        end="2021-01-01T00:03:00Z",
+        store=ResearchDataStore(root),
+    )
+    feed = build_streaming_research_panel_feed_from_config(
+        {
+            "dataset_kind": "research_panel",
+            "exchange": "binance",
+            "universe": "volatile",
+            "membership_path": str(membership_path),
+            "root": str(root),
+            "timeframe": "1m",
+        }
+    )
+
+    first = feed.next()
+    assert first is not None
+    assert [bar.symbol for bar in first] == ["BTCUSDT"]
+    feed.set_required_symbols(["BTCUSDT"])
+
+    second = feed.next()
+    assert second is not None
+    assert [bar.symbol for bar in second] == ["BTCUSDT", "ETHUSDT"]
+    active_by_symbol = {bar.symbol: bar.extra["volatile_active"] for bar in second}
+    assert active_by_symbol == {"BTCUSDT": False, "ETHUSDT": True}
+
+
 def test_strategy_cannot_access_inactive_symbols(tmp_path) -> None:
     root = tmp_path / "research_data"
     _panel(root, "BTCUSDT", [1.0, 2.0])
